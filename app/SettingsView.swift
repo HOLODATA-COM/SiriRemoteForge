@@ -9,6 +9,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
+    @StateObject private var device = DeviceInfo()
 
     private enum Tab: String, CaseIterable { case tuning = "Tuning", layout = "Layout" }
     @State private var tab: Tab = .tuning
@@ -21,6 +22,7 @@ struct SettingsView: View {
             switch tab {
             case .tuning:
                 Form {
+                    deviceSection
                     cursorSection
                     accelerationSection
                     clickSection
@@ -49,6 +51,11 @@ struct SettingsView: View {
         .frame(width: tab == .layout ? 900 : 452)
         .frame(minHeight: 480, idealHeight: 900, maxHeight: .infinity)
         .animation(.easeInOut(duration: 0.2), value: tab)
+        .onAppear { device.start() }
+        .onDisappear { device.stop() }
+        // The remote can connect/disconnect while the window is open; refresh so battery and the
+        // interface map do not go stale.
+        .onChange(of: model.connected) { _ in device.refresh() }
     }
 
     // MARK: - Tab switcher
@@ -99,9 +106,128 @@ struct SettingsView: View {
             Text(model.connected ? "Connected" : "Waiting")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+            if model.connected, let pct = device.battery {
+                Divider().frame(height: 9)
+                Image(systemName: batterySymbol(pct))
+                    .font(.system(size: 11))
+                    .foregroundStyle(batteryTint(pct))
+                Text("\(pct)%")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 10).padding(.vertical, 5)
         .background(Capsule().fill(.quaternary))
+        .animation(.easeInOut(duration: 0.2), value: device.battery)
+    }
+
+    private func batterySymbol(_ pct: Int) -> String {
+        switch pct {
+        case ..<13:  return "battery.0percent"
+        case ..<38:  return "battery.25percent"
+        case ..<63:  return "battery.50percent"
+        case ..<88:  return "battery.75percent"
+        default:     return "battery.100percent"
+        }
+    }
+
+    private func batteryTint(_ pct: Int) -> Color {
+        pct < 20 ? .red : (pct < 40 ? .orange : .secondary)
+    }
+
+    // MARK: - Device
+
+    private var deviceSection: some View {
+        Section {
+            if model.connected {
+                if let pct = device.battery {
+                    LabeledContent {
+                        HStack(spacing: 6) {
+                            Image(systemName: batterySymbol(pct)).foregroundStyle(batteryTint(pct))
+                            Text("\(pct)%").monospacedDigit()
+                        }
+                    } label: { rowLabel("Battery", "bolt.fill") }
+                }
+                if let fw = device.firmware {
+                    LabeledContent {
+                        Text(fw).monospacedDigit().foregroundStyle(.secondary)
+                    } label: { rowLabel("Firmware", "cpu") }
+                }
+                if let addr = device.address {
+                    LabeledContent {
+                        Text(addr)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    } label: { rowLabel("Bluetooth address", "dot.radiowaves.left.and.right") }
+                }
+                if let name = device.name {
+                    LabeledContent {
+                        Text(name)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    } label: { rowLabel("Serial", "number") }
+                }
+                if let vid = device.vendorID, let pid = device.productID {
+                    LabeledContent {
+                        Text("\(vid) / \(pid)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    } label: { rowLabel("Vendor / Product", "tag") }
+                }
+                if !device.interfaces.isEmpty {
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(device.interfaces) { i in
+                                HStack(spacing: 8) {
+                                    Text(i.usageDescription)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 92, alignment: .leading)
+                                    Text(i.label).font(.system(size: 11))
+                                    Spacer()
+                                    Text("in \(i.maxInput) · feat \(i.maxFeature)")
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
+                        .padding(.top, 4)
+                    } label: {
+                        rowLabel("HID interfaces (\(device.interfaces.count))", "list.bullet.indent")
+                    }
+                }
+            } else {
+                Text("Remote not connected")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            HStack {
+                Text("Device")
+                Spacer()
+                Button {
+                    device.refresh()
+                } label: {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+                .disabled(device.refreshing)
+                .help("Refresh device information")
+            }
+        } footer: {
+            Text(device.updatedAt == nil
+                 ? "The remote's microphone is not readable on macOS — see docs/mic-reverse-engineering.md"
+                 : "Battery and firmware come from the system Bluetooth stack. The microphone is not readable on macOS.")
+                .font(.system(size: 11))
+        }
     }
 
     // MARK: - Sections

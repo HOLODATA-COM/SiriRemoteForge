@@ -13,6 +13,8 @@ SWIFT_FILES=(
     "MenuBarManager.swift"
     "RemoteDetector.swift"
     "RemoteInputHandler.swift"
+    "GATTDiagnostics.swift"
+    "NativePushToTalk.swift"
     "CursorController.swift"
     "MediaController.swift"
     "MediaKeyInterceptor.swift"
@@ -22,6 +24,7 @@ SWIFT_FILES=(
     # --- Settings UI (SwiftUI) ---
     "TuneSettings.swift"
     "SettingsModel.swift"
+    "DeviceInfo.swift"
     "SettingsView.swift"
     "SettingsWindow.swift"
     "RemoteView.swift"
@@ -81,6 +84,7 @@ swiftc \
     -framework AudioToolbox \
     -framework Carbon \
     -framework AppKit \
+    -framework CoreBluetooth \
     -framework SwiftUI \
     -framework MultitouchSupport
 
