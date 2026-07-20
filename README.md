@@ -29,7 +29,7 @@ or a native settings app.
   (`.double`), and **hold-to-repeat** (auto-repeats a keystroke while held).
 - **Extras:** power button dims all displays *instead of sleeping or locking the Mac* (macOS's own
   power-button hotkey is suppressed for the remote only — your Mac's physical power button is
-  untouched), and any touch restores them;
+  untouched), and any touch restores them; a HUD confirms the remote connecting and disconnecting;
   shake the cursor to flash a "find my pointer" highlight; animated macOS **Spaces** switching.
 - **Two ways to configure:** hand-edit `~/.config/siriremote/config.jsonc` (hot-reloads on save), or
   use the built-in **Settings** app — a Tuning tab (sliders) and a Layout tab (a drawn remote + an

@@ -2,8 +2,9 @@
 //  LayerHUD.swift
 //  HyperVibe
 //
-//  A clean, BTT-style heads-up overlay shown briefly when a sticky LAYER is toggled on or off, so
-//  there's clear on-screen confirmation. A light (dark-mode-aware) squircle card with CONTINUOUS
+//  A clean, BTT-style heads-up overlay shown briefly to confirm a state change on screen — a sticky
+//  LAYER toggling on/off, and the remote connecting or dropping. A light (dark-mode-aware) squircle
+//  card with CONTINUOUS
 //  (Apple-style) rounded corners, a soft shadow that follows the rounded shape, a large SF Symbol,
 //  and the layer name + on/off. Borderless + click-through; fades in/out. All UI runs on main.
 //
@@ -45,6 +46,19 @@ final class LayerHUD {
     /// A layer turned OFF (back to base): dimmed tint, slashed-layers icon.
     func showOff(_ layerName: String) {
         show(symbol: "square.stack.3d.up.slash.fill", title: layerName, subtitle: "Layer off",
+             tint: .secondaryLabelColor)
+    }
+
+    /// The remote connected: filled remote, green — matching the green dot in Settings.
+    func showRemoteConnected() {
+        show(symbol: "appletvremote.gen4.fill", title: "Siri Remote", subtitle: "Connected",
+             tint: .systemGreen)
+    }
+
+    /// The remote dropped: same subject, outline + dimmed, so the state reads at a glance without
+    /// changing what the icon depicts. (There is no `appletvremote.gen4.slash` symbol to use.)
+    func showRemoteDisconnected() {
+        show(symbol: "appletvremote.gen4", title: "Siri Remote", subtitle: "Disconnected",
              tint: .secondaryLabelColor)
     }
 

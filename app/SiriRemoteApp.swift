@@ -21,6 +21,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var touchHandler: TouchHandler?
     private var cursorHighlighter: CursorHighlighter?
     private var layerHUD: LayerHUD?
+    /// Last connection state the HUD reflected — nil until the first callback, so the initial
+    /// connect still announces itself. Guards against one physical connect showing several cards.
+    private var lastConnectedState: Bool?
     private var gattDiagnostics: GATTDiagnostics?
     /// Mirror of the tune flag — the shake→highlight path is gated on this (see `applyTune`).
     private var findCursorEnabled = true
@@ -75,6 +78,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             layerHUD = hud
             hud.showOn("L1")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { hud.showOff("L1") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { exit(0) }
+            return
+        }
+
+        // Headless visual QC: `--test-connect-hud` shows the connect/disconnect HUDs so they can be
+        // screenshotted, then exits — without seizing the remote or wiring up the rest of the app.
+        if CommandLine.arguments.contains("--test-connect-hud") {
+            NSApp.setActivationPolicy(.accessory)
+            let hud = LayerHUD()
+            layerHUD = hud
+            hud.showRemoteConnected()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { hud.showRemoteDisconnected() }
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { exit(0) }
             return
         }
@@ -217,9 +232,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Start remote detection
         remoteDetector = RemoteDetector { [weak self] device in
             DispatchQueue.main.async {
-                self?.remoteInputHandler?.setRemoteDevice(device)
-                self?.menuBarManager.updateConnectionStatus(connected: device != nil)
-                self?.settingsModel?.connected = (device != nil)
+                guard let self = self else { return }
+                let connected = (device != nil)
+                self.remoteInputHandler?.setRemoteDevice(device)
+                self.menuBarManager.updateConnectionStatus(connected: connected)
+                self.settingsModel?.connected = connected
+
+                // HUD only on an actual transition. The remote publishes several HID interfaces and
+                // this callback can run more than once per physical connect, which would otherwise
+                // stack up identical "Connected" cards.
+                if self.lastConnectedState != connected {
+                    self.lastConnectedState = connected
+                    connected ? self.layerHUD?.showRemoteConnected()
+                              : self.layerHUD?.showRemoteDisconnected()
+                }
             }
         }
         remoteDetector?.startDetection()
