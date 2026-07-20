@@ -1,0 +1,18 @@
+# Build artifacts
+app/HyperVibe
+app/HyperVibe.app/
+app/HyperVibe.icns
+app/HyperVibe.iconset/
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
