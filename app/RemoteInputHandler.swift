@@ -911,7 +911,12 @@ class RemoteInputHandler {
         case (0x0C, 0x224): return "back"         // AC Back
         case (0x0C, 0x40): return "menu"          // Menu
         case (0x0C, 0x30): return "power"         // Power
-        case (0x0C, 0x20): return "mute"          // Mute (some remotes)
+        // 0xE2 is the Consumer Page's standard Mute usage and what the 3rd-gen Siri Remote actually
+        // sends; only 0x20 was mapped, so this button was <unmapped> and every `button.mute`
+        // binding silently did nothing while the native mute still fired — which looks like the
+        // button "working" until you try to bind a .double/.hold variant to it.
+        case (0x0C, 0xE2): return "mute"          // Mute (HID Consumer Page standard)
+        case (0x0C, 0x20): return "mute"          // Mute (some other remotes)
         
         // Button Page (0x09)
         case (0x09, 0x01): return "select"        // Button 1

@@ -428,7 +428,16 @@ class TouchHandler {
             // Freeze during the physical click, or during a press-onset window — but only while the
             // finger stays still. Clear finger movement cancels a stray freeze immediately, so the
             // cursor never feels stuck.
-            if cursorController.isClickActive || (pressFreezeFrames > 0 && fingerStill) {
+            //
+            // An active DRAG is exempt: holding select past clickThreshold starts a drag
+            // (RemoteInputHandler.handleSelectButton) whose whole purpose is to move the pointer
+            // with the button down. `isClickActive` stays true for the entire hold, so without this
+            // exemption the freeze swallowed every drag frame and press-and-drag did nothing at all
+            // — the drag was started, mouseDown/mouseUp were posted, but the pointer never moved.
+            // The freeze still applies for the first clickThreshold of the hold, which is the part
+            // that actually needs to be steady.
+            let frozenByClick = cursorController.isClickActive && !cursorController.isDragging
+            if frozenByClick || (pressFreezeFrames > 0 && fingerStill) {
                 if pressFreezeFrames > 0 { pressFreezeFrames -= 1 }
                 lastTouchPosition = currentPos
                 lastTouchCount = activeTouchCount
