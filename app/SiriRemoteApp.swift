@@ -339,6 +339,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func cleanup() {
+        // Flush a debounced tune write instead of letting it die with the process. config.jsonc is
+        // the single source of truth and tuning re-seeds from it at launch, so a slider moved within
+        // 0.4s of quitting was genuinely lost — it applied live, looked saved, and reverted on the
+        // next start.
+        if let pending = tunePersistWork, !pending.isCancelled {
+            pending.cancel()
+            tunePersistWork = nil
+            persistTuneToConfig()
+        }
+
         if CommandLine.arguments.contains("--native-ptt") {
             NativePushToTalk.setEnabled(false)
         }

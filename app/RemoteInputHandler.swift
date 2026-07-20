@@ -125,6 +125,11 @@ class RemoteInputHandler {
     private var isSelectPressed = false
     private var selectPressTime: UInt64 = 0
     private var isDragging = false
+    /// Deferred work owned by the CURRENT select press, so a stale closure from a previous press
+    /// cannot act on this one. Both are cancelled the moment that press ends / a new one starts —
+    /// the same pattern as `pendingSingle`, and as `Brightness.rampGeneration`.
+    private var dragStartWork: DispatchWorkItem?
+    private var clickActiveClearWork: DispatchWorkItem?
     private let clickThreshold: Double = 0.25
     
     // Prevent double-processing with MediaKeyInterceptor
@@ -476,6 +481,25 @@ class RemoteInputHandler {
         // Volume keys are left to the remote's native BT/AVRCP absolute-volume path so they
         // control system volume in every app (we no longer arm the revert guard to undo it).
 
+        let pressed = (intValue == 1)
+
+        // Stamp WHICH button the remote just sent, before any early return below.
+        //
+        // This is attribution, not dispatch. MediaKeyInterceptor uses it to tell "this system media
+        // key came from our remote" apart from the Mac's own keys, and it consumes the native key
+        // only when the button is attributed AND bound. Every `return` below suppresses our
+        // *action* — but macOS still emits the native media key, and if we did not stamp, the tap
+        // would let that native key through. The suppressing paths would then be strictly worse
+        // than no suppression at all: our binding silently skipped, the native behaviour fired.
+        //
+        // Concretely, with playPause bound: clipping it while reaching for Power would toggle the
+        // player (the exact event the input guard exists to swallow), and the first press after
+        // every reconnect would do the same.
+        if pressed {
+            RemoteInputHandler.lastProcessedButton = buttonName
+            RemoteInputHandler.lastProcessedTime = mach_absolute_time()
+        }
+
         // First key-down after connection: skip so the connect handshake doesn't fire an action.
         if intValue == 1 && isFirstPressAfterConnection {
             isFirstPressAfterConnection = false
@@ -493,14 +517,6 @@ class RemoteInputHandler {
         if buttonName == "select" {
             handleSelectButton(pressed: intValue == 1)
             return
-        }
-
-        let pressed = (intValue == 1)
-
-        // Debounce only on press — release just closes an existing hold.
-        if pressed {
-            RemoteInputHandler.lastProcessedButton = buttonName
-            RemoteInputHandler.lastProcessedTime = mach_absolute_time()
         }
 
         // Config-driven only, with long-press discrimination.
@@ -807,18 +823,36 @@ class RemoteInputHandler {
             isDragging = false
             selectPressTime = mach_absolute_time()
             cursorController.isClickActive = true
-            
-            // Start drag after threshold
-            DispatchQueue.main.asyncAfter(deadline: .now() + clickThreshold) { [weak self] in
+
+            // A pending clear from the PREVIOUS release would otherwise land 0.1s into this press
+            // and drop isClickActive while the button is physically down — which opens the
+            // press-freeze (so a resting finger drifts the cursor mid-click) and defeats the
+            // "don't tap while the physical click is active" guard on the touch side.
+            clickActiveClearWork?.cancel()
+            clickActiveClearWork = nil
+
+            // Start drag after threshold. Held in a cancellable item so it belongs to THIS press:
+            // checking `isSelectPressed` alone is not enough, because a quick click-then-press
+            // (release at 0.10s, press again at 0.20s) leaves the first press's closure to fire at
+            // 0.25s and start a drag 0.05s into the second press — breaking double-click and
+            // micro-dragging whatever is under the cursor.
+            let work = DispatchWorkItem { [weak self] in
                 guard let self = self, self.isSelectPressed && !self.isDragging else { return }
+                self.dragStartWork = nil
                 print("🔘 Select button: Drag started")
                 self.isDragging = true
                 self.cursorController.isDragging = true
                 self.cursorController.mouseDown()
             }
+            dragStartWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + clickThreshold, execute: work)
         } else if !pressed && isSelectPressed {
             isSelectPressed = false
-            
+
+            // This press is over — its drag must not start after the fact.
+            dragStartWork?.cancel()
+            dragStartWork = nil
+
             if isDragging {
                 print("🔘 Select button: Drag ended")
                 cursorController.isDragging = false
@@ -828,10 +862,14 @@ class RemoteInputHandler {
                 cursorController.performClick()
             }
             isDragging = false
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.cursorController.isClickActive = false
+
+            let clear = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                self.clickActiveClearWork = nil
+                self.cursorController.isClickActive = false
             }
+            clickActiveClearWork = clear
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: clear)
         }
     }
     

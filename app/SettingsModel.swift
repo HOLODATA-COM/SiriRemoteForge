@@ -20,6 +20,13 @@ final class SettingsModel: ObservableObject {
     /// Live connection status shown in the window header.
     @Published var connected: Bool = false
 
+    /// Remote battery/firmware/interfaces. Owned here rather than by the SwiftUI view so the
+    /// window controller can start and stop the polling: the settings window is cached with
+    /// `isReleasedWhenClosed = false`, so closing it only orders it out and SwiftUI's
+    /// `.onDisappear` never runs — a view-owned poller would keep spawning `system_profiler`
+    /// forever with the window shut.
+    let device = DeviceInfo()
+
     /// The live parsed config (modes / bindings / appProfiles), refreshed on hot-reload.
     /// Read-only for the "Layout" tab. Set by AppDelegate at load and on every config reload.
     @Published var config: Config?

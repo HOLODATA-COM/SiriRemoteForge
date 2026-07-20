@@ -59,13 +59,20 @@ class MediaKeyInterceptor {
         // notification is not always delivered to our callback. When that happens the interception
         // silently stops and the power button starts locking the Mac again. Poll cheaply and
         // re-arm, so a disabled tap self-heals instead of degrading until the next relaunch.
-        healthTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        let health = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self = self, let tap = self.eventTap else { return }
             if !CGEvent.tapIsEnabled(tap: tap) {
                 rmDebug("⚠️ MediaKeyInterceptor: tap found disabled — re-enabling")
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
         }
+        // .common, not the default mode: during run-loop tracking (an open menu-bar menu, a slider
+        // drag, a window resize) a default-mode timer does not fire, while the tap's own source and
+        // the HID devices keep running. That is precisely when this backstop is needed — a tap
+        // disabled during tracking would otherwise stay dead until tracking ended, and a Power press
+        // in that window reaches loginwindow and locks the Mac.
+        RunLoop.main.add(health, forMode: .common)
+        healthTimer = health
         
         // Re-enable tap after sleep/wake (system often disables taps during sleep).
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(

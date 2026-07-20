@@ -11,8 +11,13 @@ import SwiftUI
 final class SettingsWindowController {
     private var window: NSWindow?
     private let model: SettingsModel
+    private var closeObserver: NSObjectProtocol?
 
     init(model: SettingsModel) { self.model = model }
+
+    deinit {
+        if let obs = closeObserver { NotificationCenter.default.removeObserver(obs) }
+    }
 
     func show() {
         if window == nil {
@@ -35,8 +40,19 @@ final class SettingsWindowController {
                 win.setContentSize(NSSize(width: win.frame.width, height: vis.height - 40))
                 win.center()
             }
+            // Stop the device polling when the window closes. The window is cached
+            // (`isReleasedWhenClosed = false`), so closing only orders it out and SwiftUI's
+            // `.onDisappear` does not run — without this the 60s `system_profiler` poll would keep
+            // going for the rest of the app's uptime with nothing on screen to show it.
+            closeObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: win, queue: .main
+            ) { [weak self] _ in
+                self?.model.device.stop()
+            }
+
             window = win
         }
+        model.device.start()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }

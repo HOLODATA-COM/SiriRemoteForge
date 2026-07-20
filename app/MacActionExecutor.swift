@@ -149,9 +149,27 @@ enum Shell {
 }
 
 enum AppleScriptRunner {
+    /// Spawns `osascript` instead of running `NSAppleScript` in-process, and does not wait for it.
+    ///
+    /// Actions execute on the main thread, which is also where the CGEventTap's run-loop source and
+    /// every HID callback are serviced. `NSAppleScript.executeAndReturnError` is synchronous, and an
+    /// Apple event to a busy or slow app can block for seconds — long enough for macOS to disable
+    /// the tap with `tapDisabledByTimeout`. While it is disabled the remote's Power button reaches
+    /// loginwindow and sleeps the Mac, which is the exact failure this app suppresses. Spawning is
+    /// a little slower per call but never blocks the thread that must stay responsive.
+    /// (`NSAppleScript` is not thread-safe, so moving it to a background queue is not the fix.)
     static func run(_ source: String) {
-        var err: NSDictionary?
-        NSAppleScript(source: source)?.executeAndReturnError(&err)
-        if let err = err { NSLog("[siriRemote] applescript failed: \(err)") }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", source]
+        let errPipe = Pipe()
+        p.standardError = errPipe
+        p.terminationHandler = { proc in
+            guard proc.terminationStatus != 0 else { return }
+            let msg = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
+                             encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            NSLog("[siriRemote] applescript failed (exit \(proc.terminationStatus)): \(msg)")
+        }
+        do { try p.run() } catch { NSLog("[siriRemote] applescript spawn failed: \(error)") }
     }
 }

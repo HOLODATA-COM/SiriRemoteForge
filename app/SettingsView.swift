@@ -9,7 +9,13 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
-    @StateObject private var device = DeviceInfo()
+    /// Owned by the model (see `SettingsModel.device`) so the window controller drives its polling.
+    @ObservedObject var device: DeviceInfo
+
+    init(model: SettingsModel) {
+        self.model = model
+        self.device = model.device
+    }
 
     /// Mirrors the real SMAppService registration — never assume the toggle succeeded.
     @State private var launchAtLogin = LaunchAtLogin.state.isOn
@@ -56,8 +62,14 @@ struct SettingsView: View {
         .frame(width: tab == .layout ? 900 : 452)
         .frame(minHeight: 480, idealHeight: 900, maxHeight: .infinity)
         .animation(.easeInOut(duration: 0.2), value: tab)
-        .onAppear { device.start() }
-        .onDisappear { device.stop() }
+        // Polling start/stop lives in SettingsWindowController — `.onDisappear` never fires for
+        // this window (it is cached and only ordered out). Refresh on appear so reopening shows
+        // current values immediately, and re-read the login-item registration, which the user may
+        // have changed in System Settings → Login Items while the window was closed.
+        .onAppear {
+            device.refresh()
+            launchAtLogin = LaunchAtLogin.state.isOn
+        }
         // The remote can connect/disconnect while the window is open; refresh so battery and the
         // interface map do not go stale.
         .onChange(of: model.connected) { _ in device.refresh() }

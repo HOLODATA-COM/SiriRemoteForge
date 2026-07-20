@@ -54,7 +54,11 @@ class MediaController {
         )
         let sessionTap: CGEventTapLocation = .cgSessionEventTap
         keyDown?.cgEvent?.post(tap: sessionTap)
-        usleep(50000)
-        keyUp?.cgEvent?.post(tap: sessionTap)
+        // Schedule the key-up rather than usleep()ing for it. This runs on the main thread, which
+        // also services the CGEventTap and every HID callback — blocking it for 50ms per press adds
+        // up and is exactly the kind of stall that gets the tap disabled.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            keyUp?.cgEvent?.post(tap: sessionTap)
+        }
     }
 }
