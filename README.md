@@ -105,7 +105,8 @@ instant you touch the trackpad. `create_app_bundle.sh` prefers a stable local se
 ## Configuration — `~/.config/siriremote/config.jsonc`
 
 JSONC (JSON + `//` comments). A default is written on first run. **Saving hot-reloads it live.**
-Three top-level keys: `settings`, `appProfiles`, `modes`.
+Three top-level keys: `settings`, `appProfiles`, `modes`. A complete, working example to crib from
+lives in [`examples/config.jsonc`](examples/config.jsonc).
 
 ```jsonc
 {
