@@ -7,6 +7,7 @@
 
 import AppKit
 import ApplicationServices
+import CoreBluetooth
 import CoreGraphics
 import Darwin
 
@@ -20,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var touchHandler: TouchHandler?
     private var cursorHighlighter: CursorHighlighter?
     private var layerHUD: LayerHUD?
+    private var gattDiagnostics: GATTDiagnostics?
     /// Mirror of the tune flag — the shake→highlight path is gated on this (see `applyTune`).
     private var findCursorEnabled = true
 
@@ -69,6 +71,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             hud.showOn("L1")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { hud.showOff("L1") }
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { exit(0) }
+            return
+        }
+
+        // Read-only CoreBluetooth inventory. Keep this path headless and separate from the normal
+        // IOHID detector so it cannot seize the remote while GATT services are being mapped.
+        if let idx = CommandLine.arguments.firstIndex(of: "--dump-gatt"),
+           idx + 1 < CommandLine.arguments.count {
+            NSApp.setActivationPolicy(.accessory)
+            let diagnostic = GATTDiagnostics(targetName: CommandLine.arguments[idx + 1])
+            gattDiagnostics = diagnostic
+            diagnostic.start()
             return
         }
 
@@ -205,6 +218,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         remoteDetector?.startDetection()
+
+        if CommandLine.arguments.contains("--native-ptt") {
+            // Let all seven IOHID raw-report callbacks attach before the Apple driver starts its
+            // native push-to-talk path. The continuously running process then captures any audio.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                NativePushToTalk.setEnabled(true)
+            }
+        }
+
+        if CommandLine.arguments.contains("--direct-ptt") {
+            // Wait for all seven virtual interfaces to enumerate, then hold the remote's hidden
+            // one-byte PTT Feature report for a bounded 20-second capture window. The ambient audio
+            // test can run unattended; cleanup also sends the release byte if the app exits early.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.remoteInputHandler?.setDirectPushToTalk(true)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 22.0) { [weak self] in
+                self?.remoteInputHandler?.setDirectPushToTalk(false)
+            }
+        }
         
         // Request Input Monitoring so media key tap works in both CLI and .app
         if #available(macOS 10.15, *) {
@@ -301,6 +334,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func cleanup() {
+        if CommandLine.arguments.contains("--native-ptt") {
+            NativePushToTalk.setEnabled(false)
+        }
+        if CommandLine.arguments.contains("--direct-ptt") {
+            remoteInputHandler?.setDirectPushToTalk(false)
+        }
         touchHandler?.stop()
         remoteDetector?.stopDetection()
         mediaKeyInterceptor?.stop()
@@ -324,6 +363,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return Double(nanos) / 1_000_000_000.0
     }
     
+
     private func handleInterceptedMediaKey(_ keyType: MediaKeyInterceptor.MediaKeyType) -> Bool {
         let buttonName: String
         switch keyType {

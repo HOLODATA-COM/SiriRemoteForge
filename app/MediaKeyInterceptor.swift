@@ -13,9 +13,12 @@ class MediaKeyInterceptor {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var wakeObserver: NSObjectProtocol?
+    /// Polls that the tap is still enabled — see the comment where it is created.
+    private var healthTimer: Timer?
+
     
     var onMediaKey: ((MediaKeyType) -> Bool)?
-    
+
     enum MediaKeyType {
         case playPause, next, previous, volumeUp, volumeDown, mute
     }
@@ -36,15 +39,32 @@ class MediaKeyInterceptor {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
+            // Never fail silently: without this tap the remote's power button reaches loginwindow
+            // and sleeps/locks the Mac, which looks like a random bug rather than a missing
+            // permission. tapCreate returns nil when the process is not trusted for Accessibility.
+            rmDebug("❌ MediaKeyInterceptor: CGEvent.tapCreate FAILED — check Accessibility permission")
             return
         }
-        
+
         eventTap = tap
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        
+
         if let source = runLoopSource {
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
             CGEvent.tapEnable(tap: tap, enable: true)
+            rmDebug("✅ MediaKeyInterceptor: event tap installed and enabled")
+        }
+
+        // The system can disable a tap at any time (slow callback, sleep/wake, user input) and the
+        // notification is not always delivered to our callback. When that happens the interception
+        // silently stops and the power button starts locking the Mac again. Poll cheaply and
+        // re-arm, so a disabled tap self-heals instead of degrading until the next relaunch.
+        healthTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self = self, let tap = self.eventTap else { return }
+            if !CGEvent.tapIsEnabled(tap: tap) {
+                rmDebug("⚠️ MediaKeyInterceptor: tap found disabled — re-enabling")
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
         }
         
         // Re-enable tap after sleep/wake (system often disables taps during sleep).
@@ -58,6 +78,8 @@ class MediaKeyInterceptor {
     }
     
     func stop() {
+        healthTimer?.invalidate()
+        healthTimer = nil
         if let obs = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
             wakeObserver = nil
@@ -80,7 +102,9 @@ class MediaKeyInterceptor {
     
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // Re-enable tap when system disables it (timeout or user input); then consume the event.
+        // Logging here is safe: this branch is rare, unlike the per-event hot path below.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            rmDebug("🩺 TAP DISABLED by \(type == .tapDisabledByTimeout ? "timeout" : "userInput") — re-enabling")
             reenableTap()
             return nil
         }
@@ -89,12 +113,21 @@ class MediaKeyInterceptor {
         guard type.rawValue == 14 else {
             return Unmanaged.passRetained(event)
         }
+
+        // Discard our own synthesized brightness keys before doing any expensive work. A dim posts
+        // 32 of these from the main thread, which is also where this tap's run-loop source lives;
+        // converting each one to an NSEvent here starved the tap and let power events slip through
+        // to loginwindow. This integer read is cheap enough to keep the callback fast.
+        if event.getIntegerValueField(.eventSourceUserData) == Brightness.syntheticEventMarker {
+            return Unmanaged.passRetained(event)
+        }
         
         // Get NSEvent to parse the media key
         guard let nsEvent = NSEvent(cgEvent: event) else {
             return Unmanaged.passRetained(event)
         }
-        
+
+
         // Check subtype 8 = media key event
         guard nsEvent.subtype.rawValue == 8 else {
             return Unmanaged.passRetained(event)

@@ -11,6 +11,18 @@ import Foundation
 import Carbon.HIToolbox
 import AppKit
 
+/// Per-interface metadata retained for the lifetime of an IOHID raw-report callback.
+/// A distinct context is required because the callback's `sender` is an opaque pointer and macOS
+/// rewrites several different Siri Remote GATT reports to the same HID report id (0xFF).
+private final class MicReportCaptureContext {
+    let label: String
+
+    init(interfaceNumber: Int, locationID: Int, usagePage: Int, usage: Int) {
+        label = String(format: "interface=%d location=0x%X usage=0x%X/0x%X",
+                       interfaceNumber, locationID, usagePage, usage)
+    }
+}
+
 class RemoteInputHandler {
     private let cursorController: CursorController
     private weak var menuBarManager: MenuBarManager?
@@ -22,6 +34,23 @@ class RemoteInputHandler {
     //     voice data when the Siri button is held. Buffers must outlive the callback registration.
     private let captureMic = CommandLine.arguments.contains("--capture-mic")
     private var reportBuffers: [UnsafeMutablePointer<UInt8>] = []
+    private var reportCaptureContexts: [MicReportCaptureContext] = []
+
+    // --- Mic reverse-engineering diagnostics (off by default) ---
+    //  --dump-reports : enumerate every HID element (input/output/feature) with its report id, type,
+    //                   size and usage — mapping the remote's whole control surface — and GetReport
+    //                   each feature report. Read /tmp/hypervibe.log for `🔎` lines.
+    //  --activate-mic : register the raw-report capture (like --capture-mic), then write the `0xAF`
+    //                   "enable input" byte to report 0xFF on every virtual interface that exposes
+    //                   that Feature report. Gen-3 firmware has Feature (not Output) enable reports.
+    //                   The Linux implementation identifies wire report 0xFA as 99-byte Opus;
+    //                   macOS splits the GATT reports into interfaces and rewrites them to id 0xFF.
+    //  --direct-ptt   : re-arm those Feature reports, then send the Apple driver's hidden one-byte
+    //                   report 0x99 for a bounded, automatically released PTT trial.
+    private let dumpReports = CommandLine.arguments.contains("--dump-reports")
+    private let activateMic = CommandLine.arguments.contains("--activate-mic")
+    private let nativePushToTalk = CommandLine.arguments.contains("--native-ptt")
+    private let directPushToTalk = CommandLine.arguments.contains("--direct-ptt")
 
     /// Config engine (SiriRemoteCore). Buttons are routed through it; unbound buttons do nothing.
     var controller: Controller?
@@ -102,6 +131,29 @@ class RemoteInputHandler {
     static var lastProcessedButton: String?
     static var lastProcessedTime: UInt64 = 0
 
+    // MARK: - Input guard (power button)
+
+    /// The Power button sits right next to the glass, so pressing it almost always brushes the
+    /// trackpad — which instantly undid the dim it had just triggered (a touch restores brightness)
+    /// and could nudge the cursor. While this deadline is in the future, incidental remote input is
+    /// ignored for *actions*: touches don't move the cursor, click, or restore brightness, and other
+    /// buttons don't dispatch their bindings. Events are still read and tracked, so state stays
+    /// consistent — only the misfiring is suppressed.
+    private static var inputGuardDeadlineNanos: UInt64 = 0
+
+    /// Seconds of quiet after a Power press. Long enough to cover the release plus a clumsy grip.
+    static let inputGuardDuration: Double = 1.0
+
+    static var isInputGuarded: Bool {
+        DispatchTime.now().uptimeNanoseconds < inputGuardDeadlineNanos
+    }
+
+    static func armInputGuard(_ seconds: Double = inputGuardDuration) {
+        inputGuardDeadlineNanos =
+            DispatchTime.now().uptimeNanoseconds + UInt64(seconds * 1_000_000_000)
+    }
+
+
     /// Last observed pressed/released state per button. The Siri Remote mirrors each logical
     /// button across multiple HID interfaces (6 seized here), so every physical press/release
     /// fires the callback N times. This collapses dup events to a single state transition.
@@ -127,22 +179,57 @@ class RemoteInputHandler {
         
         guard !devices.contains(where: { $0 == device }) else { return }
         
-        // Seize device to prevent system from handling events
-        let openResult = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeSeizeDevice))
+        let usagePage = IOHIDDeviceGetProperty(
+            device, kIOHIDPrimaryUsagePageKey as CFString
+        ) as? Int ?? -1
+        let usage = IOHIDDeviceGetProperty(
+            device, kIOHIDPrimaryUsageKey as CFString
+        ) as? Int ?? -1
+
+        // Normal operation seizes every remote interface to prevent duplicate system handling. The
+        // direct-PTT diagnostic is narrower: seize only the audio interface whose raw reports we
+        // need, and leave the management/button siblings non-exclusive while report 0x99 is tested.
+        let shouldSeize = !directPushToTalk || (usagePage == 0x0C && usage == 0x04)
+        let openOptions = IOOptionBits(
+            shouldSeize ? kIOHIDOptionsTypeSeizeDevice : kIOHIDOptionsTypeNone
+        )
+        let openResult = IOHIDDeviceOpen(device, openOptions)
 
         if openResult == kIOReturnSuccess {
-            rmDebug(String(format: "🔒 SEIZED HID device (vendor=0x%X product=0x%X)",
+            rmDebug(String(format: "%@ HID device usage=0x%X/0x%X (vendor=0x%X product=0x%X)",
+                  shouldSeize ? "🔒 SEIZED" : "🔓 OPENED non-exclusive",
+                  usagePage,
+                  usage,
                   IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? Int ?? 0,
                   IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int ?? 0))
             IOHIDDeviceRegisterInputValueCallback(device, inputValueCallback, Unmanaged.passUnretained(self).toOpaque())
-            if captureMic { registerReportCapture(device) }
+            if captureMic || activateMic || nativePushToTalk || directPushToTalk {
+                registerReportCapture(device)
+            }
+            if dumpReports { dumpHIDReports(device) }
+            if activateMic {
+                // Give macOS a moment to finish HOGP setup / notification subscribe before writing.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    self?.sendMicActivation(device)
+                }
+            }
             IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
             devices.append(device)
             isFirstPressAfterConnection = true
         } else {
-            rmDebug(String(format: "⚠️ FAILED to seize HID device (IOReturn=0x%X) — opening unseized", openResult))
+            rmDebug(String(format: "⚠️ FAILED to %@ HID device usage=0x%X/0x%X (IOReturn=0x%X) — retrying non-exclusive",
+                           shouldSeize ? "seize" : "open", usagePage, usage, openResult))
             if IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone)) == kIOReturnSuccess {
                 IOHIDDeviceRegisterInputValueCallback(device, inputValueCallback, Unmanaged.passUnretained(self).toOpaque())
+                if captureMic || activateMic || nativePushToTalk || directPushToTalk {
+                    registerReportCapture(device)
+                }
+                if dumpReports { dumpHIDReports(device) }
+                if activateMic {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                        self?.sendMicActivation(device)
+                    }
+                }
                 IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
                 devices.append(device)
                 isFirstPressAfterConnection = true
@@ -156,10 +243,191 @@ class RemoteInputHandler {
         let bufLen = 512
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufLen)
         buf.initialize(repeating: 0, count: bufLen)
+        let captureContext = MicReportCaptureContext(
+            interfaceNumber: IOHIDDeviceGetProperty(device, "bInterfaceNumber" as CFString) as? Int ?? -1,
+            locationID: IOHIDDeviceGetProperty(device, kIOHIDLocationIDKey as CFString) as? Int ?? -1,
+            usagePage: IOHIDDeviceGetProperty(device, kIOHIDPrimaryUsagePageKey as CFString) as? Int ?? -1,
+            usage: IOHIDDeviceGetProperty(device, kIOHIDPrimaryUsageKey as CFString) as? Int ?? -1
+        )
         reportBuffers.append(buf)
+        reportCaptureContexts.append(captureContext)
         IOHIDDeviceRegisterInputReportCallback(device, buf, bufLen, inputReportCallback,
-                                               Unmanaged.passUnretained(self).toOpaque())
-        rmDebug("🎤 mic-capture: raw report callback registered")
+                                               Unmanaged.passUnretained(captureContext).toOpaque())
+        rmDebug("🎤 mic-capture: raw report callback registered \(captureContext.label)")
+    }
+
+    // MARK: - Mic reverse-engineering diagnostics
+
+    private func hidElementTypeName(_ t: IOHIDElementType) -> String {
+        if t == kIOHIDElementTypeOutput     { return "output" }
+        if t == kIOHIDElementTypeFeature    { return "feature" }
+        if t == kIOHIDElementTypeCollection { return "collection" }
+        return "input"
+    }
+
+    /// Byte length of each report, keyed "type:reportID", summed from element bit sizes.
+    private func reportByteLengths(_ device: IOHIDDevice) -> [String: Int] {
+        var bits: [String: Int] = [:]
+        if let els = IOHIDDeviceCopyMatchingElements(device, nil, IOOptionBits(kIOHIDOptionsTypeNone)) as? [IOHIDElement] {
+            for el in els {
+                let key = "\(hidElementTypeName(IOHIDElementGetType(el))):\(IOHIDElementGetReportID(el))"
+                bits[key, default: 0] += Int(IOHIDElementGetReportSize(el)) * Int(IOHIDElementGetReportCount(el))
+            }
+        }
+        return bits.mapValues { ($0 + 7) / 8 }
+    }
+
+    /// `--dump-reports`: enumerate every HID element on this interface and GetReport each feature
+    /// report id, logging the full control surface to /tmp/hypervibe.log (`🔎` lines).
+    private func dumpHIDReports(_ device: IOHIDDevice) {
+        let pup = IOHIDDeviceGetProperty(device, kIOHIDPrimaryUsagePageKey as CFString) as? Int ?? -1
+        let pu  = IOHIDDeviceGetProperty(device, kIOHIDPrimaryUsageKey as CFString) as? Int ?? -1
+        let interfaceNumber = IOHIDDeviceGetProperty(device, "bInterfaceNumber" as CFString) as? Int ?? -1
+        let locationID = IOHIDDeviceGetProperty(device, kIOHIDLocationIDKey as CFString) as? Int ?? -1
+        let maxIn  = IOHIDDeviceGetProperty(device, kIOHIDMaxInputReportSizeKey as CFString) as? Int ?? -1
+        let maxOut = IOHIDDeviceGetProperty(device, kIOHIDMaxOutputReportSizeKey as CFString) as? Int ?? -1
+        let maxFeat = IOHIDDeviceGetProperty(device, kIOHIDMaxFeatureReportSizeKey as CFString) as? Int ?? -1
+        rmDebug(String(format: "🔎 interface=%d location=0x%X primaryUsagePage=0x%X usage=0x%X maxIn=%d maxOut=%d maxFeat=%d",
+                       interfaceNumber, locationID, pup, pu, maxIn, maxOut, maxFeat))
+
+        var featureIDs = Set<Int>()
+        var outputIDs  = Set<Int>()
+        if let els = IOHIDDeviceCopyMatchingElements(device, nil, IOOptionBits(kIOHIDOptionsTypeNone)) as? [IOHIDElement] {
+            for el in els {
+                let t = IOHIDElementGetType(el)
+                let rid = Int(IOHIDElementGetReportID(el))
+                if t == kIOHIDElementTypeFeature { featureIDs.insert(rid) }
+                if t == kIOHIDElementTypeOutput  { outputIDs.insert(rid) }
+                rmDebug(String(format: "🔎 el %@ reportID=%d usagePage=0x%X usage=0x%X sizeBits=%d count=%d",
+                               hidElementTypeName(t), rid,
+                               IOHIDElementGetUsagePage(el), IOHIDElementGetUsage(el),
+                               IOHIDElementGetReportSize(el), IOHIDElementGetReportCount(el)))
+            }
+        }
+        let lens = reportByteLengths(device)
+        rmDebug("🔎 report byte-lengths: \(lens.sorted{ $0.key < $1.key }.map{ "\($0.key)=\($0.value)" }.joined(separator: " "))")
+        rmDebug("🔎 outputIDs=\(outputIDs.sorted()) featureIDs=\(featureIDs.sorted())")
+
+        // GetReport every feature report id we saw (plus a few common ones) so we can see current state.
+        let probeIDs = Set(featureIDs).union([0, 1, 2, 3, 4, 5, 0xAF]).sorted()
+        for id in probeIDs {
+            let cap = 256
+            let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: cap)
+            defer { buf.deallocate() }
+            var len: CFIndex = cap
+            let r = IOHIDDeviceGetReport(device, kIOHIDReportTypeFeature, CFIndex(id), buf, &len)
+            if r == kIOReturnSuccess {
+                let hex = (0..<min(Int(len), 48)).map { String(format: "%02x", buf[$0]) }.joined(separator: " ")
+                rmDebug(String(format: "🔎 GetReport FEATURE id=%d len=%ld: %@", id, len, hex))
+            } else {
+                rmDebug(String(format: "🔎 GetReport FEATURE id=%d → 0x%X", id, r))
+            }
+        }
+    }
+
+    private func ioReturnName(_ value: IOReturn) -> String {
+        switch value {
+        case kIOReturnSuccess:       return "success"
+        case kIOReturnError:         return "general error"
+        case kIOReturnNotFound:      return "not found"
+        case kIOReturnUnsupported:   return "unsupported"
+        case kIOReturnNotWritable:   return "not writable"
+        case kIOReturnNotOpen:       return "not open"
+        case kIOReturnNotPermitted:  return "not permitted"
+        case kIOReturnBadArgument:   return "bad argument"
+        default:                     return "unknown"
+        }
+    }
+
+    /// `--activate-mic`: write the enable byte to Feature report 0xFF on every virtual interface that
+    /// actually declares it. IORegistry confirms that macOS splits the remote's same-UUID GATT Report
+    /// characteristics into numbered IOHID interfaces and rewrites the individual reports to 0xFF.
+    ///
+    /// The current Linux gen-3 implementation reads each Report Reference descriptor and establishes
+    /// that this firmware exposes no Output reports: it writes 0xAF to every writable Feature report,
+    /// then receives microphone input as wire report 0xFA with a 99-byte Opus payload. The earlier
+    /// macOS probe covered only five of seven virtual interfaces; diagnostic matching now includes
+    /// the two usage-page-0x20 interfaces so this pass covers the complete report surface.
+    private func sendMicActivation(_ device: IOHIDDevice) {
+        let pup = IOHIDDeviceGetProperty(device, kIOHIDPrimaryUsagePageKey as CFString) as? Int ?? -1
+        let pu = IOHIDDeviceGetProperty(device, kIOHIDPrimaryUsageKey as CFString) as? Int ?? -1
+        let interfaceNumber = IOHIDDeviceGetProperty(device, "bInterfaceNumber" as CFString) as? Int ?? -1
+        let locationID = IOHIDDeviceGetProperty(device, kIOHIDLocationIDKey as CFString) as? Int ?? -1
+
+        let elements = IOHIDDeviceCopyMatchingElements(device, nil, IOOptionBits(kIOHIDOptionsTypeNone)) as? [IOHIDElement] ?? []
+        let hasFeatureFF = elements.contains {
+            IOHIDElementGetType($0) == kIOHIDElementTypeFeature && IOHIDElementGetReportID($0) == 0xFF
+        }
+        guard hasFeatureFF else {
+            rmDebug(String(format: "🎬 activate-mic: skip interface=%d location=0x%X usage=0x%X/0x%X (no Feature 0xFF)",
+                           interfaceNumber, locationID, pup, pu))
+            return
+        }
+
+        rmDebug(String(format: "🎬 activate-mic: FEATURE target interface=%d location=0x%X usage=0x%X/0x%X",
+                       interfaceNumber, locationID, pup, pu))
+        var enable: [UInt8] = [0xAF]
+        let result = IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, 0xFF, &enable, enable.count)
+        rmDebug(String(format: "🎬 SetReport FEATURE id=0xFF bytes=[AF] → 0x%X (%@)%@",
+                       result, ioReturnName(result), result == kIOReturnSuccess ? " ✅" : ""))
+    }
+
+    /// `--direct-ptt`: exercise the hidden one-byte Feature report used by
+    /// AppleEmbeddedBluetoothDeviceManagement for product IDs 0x314/0x315. Unlike
+    /// `NativePushToTalk`, this sends the report through the already-open IOHID device, which lets
+    /// us distinguish a blocked registry-property path from a blocked HID report path. Restrict the
+    /// write to the management interface (usage page 0xFF00, usage 0x0B); all other interfaces are
+    /// capture-only. Calling this with `false` sends the matching release byte.
+    func setDirectPushToTalk(_ enabled: Bool) {
+        if enabled {
+            rmDebug("🗣 direct-ptt: re-arming all \(devices.count) interfaces before PTT")
+            for device in devices {
+                sendMicActivation(device)
+            }
+        }
+
+        let targets = devices.filter { device in
+            let usagePage = IOHIDDeviceGetProperty(
+                device, kIOHIDPrimaryUsagePageKey as CFString
+            ) as? Int ?? -1
+            let usage = IOHIDDeviceGetProperty(
+                device, kIOHIDPrimaryUsageKey as CFString
+            ) as? Int ?? -1
+            return usagePage == 0xFF00 && usage == 0x0B
+        }
+
+        guard !targets.isEmpty else {
+            rmDebug("🗣 direct-ptt: management interface 0xFF00/0x0B not found")
+            return
+        }
+
+        for device in targets {
+            let interfaceNumber = IOHIDDeviceGetProperty(
+                device, "bInterfaceNumber" as CFString
+            ) as? Int ?? -1
+            let locationID = IOHIDDeviceGetProperty(
+                device, kIOHIDLocationIDKey as CFString
+            ) as? Int ?? -1
+            var payload: [UInt8] = [enabled ? 1 : 0]
+            let result = payload.withUnsafeMutableBufferPointer { buffer in
+                IOHIDDeviceSetReport(
+                    device,
+                    kIOHIDReportTypeFeature,
+                    0x99,
+                    buffer.baseAddress!,
+                    buffer.count
+                )
+            }
+            rmDebug(String(
+                format: "🗣 direct-ptt: FEATURE id=0x99 bytes=[%02X] interface=%d location=0x%X → 0x%X (%@)%@",
+                enabled ? 1 : 0,
+                interfaceNumber,
+                locationID,
+                result,
+                ioReturnName(result),
+                result == kIOReturnSuccess ? " ✅" : ""
+            ))
+        }
     }
 
     func handleInputValue(_ value: IOHIDValue) {
@@ -182,11 +450,28 @@ class RemoteInputHandler {
         }
         buttonState[buttonName] = isPressed
 
+        // The remote can sleep between initial enumeration and a later Siri press. Re-send the
+        // gen-3 enable byte at the physical start of every diagnostic trial so a stale activation
+        // cannot explain an otherwise empty voice stream.
+        if activateMic && buttonName == "siri" && isPressed {
+            rmDebug("🎬 activate-mic: Siri down — re-arming all \(devices.count) interfaces")
+            for device in devices {
+                sendMicActivation(device)
+            }
+        }
+
+        // Pressing Power opens the input guard FIRST, so the rest of this press — and anything the
+        // hand brushes on the way — cannot undo the dim it is about to trigger.
+        if isPressed && buttonName == "power" {
+            RemoteInputHandler.armInputGuard()
+        }
+
         // Any real button press restores brightness — so after button.power dims all displays to
         // minimum (brightness action), pressing anything brings the backlight back to max. The
         // guard only restores when currently at/near minimum, so normal-brightness presses are a
-        // no-op here. Press only, never release.
-        if isPressed { Brightness.restoreIfDimmed() }
+        // no-op here. Press only, never release. Skipped inside the input guard, which is the whole
+        // point of it: Power itself must not restore, and neither may an accidental brush.
+        if isPressed && !RemoteInputHandler.isInputGuarded { Brightness.restoreIfDimmed() }
 
         // Volume keys are left to the remote's native BT/AVRCP absolute-volume path so they
         // control system volume in every app (we no longer arm the revert guard to undo it).
@@ -194,6 +479,13 @@ class RemoteInputHandler {
         // First key-down after connection: skip so the connect handshake doesn't fire an action.
         if intValue == 1 && isFirstPressAfterConnection {
             isFirstPressAfterConnection = false
+            return
+        }
+
+        // Inside the Power input guard, other buttons are read and tracked but must not fire their
+        // bindings — a button clipped while reaching for Power should do nothing. Power itself is
+        // exempt so its own press/release still work normally.
+        if buttonName != "power" && RemoteInputHandler.isInputGuarded {
             return
         }
 
@@ -666,10 +958,13 @@ private func inputReportCallback(context: UnsafeMutableRawPointer?, result: IORe
                                  sender: UnsafeMutableRawPointer?, type: IOHIDReportType,
                                  reportID: UInt32, report: UnsafeMutablePointer<UInt8>,
                                  reportLength: CFIndex) {
-    guard reportLength > 6 else { return }   // skip small button reports
+    guard let context else { return }
+    let captureContext = Unmanaged<MicReportCaptureContext>.fromOpaque(context).takeUnretainedValue()
     let n = Int(reportLength)
     let hex = (0..<min(n, 40)).map { String(format: "%02x", report[$0]) }.joined(separator: " ")
-    rmDebug(String(format: "🎤 report id=%u len=%ld: %@%@", reportID, reportLength, hex, n > 40 ? " …" : ""))
+    rmDebug(String(format: "🎤 raw %@ type=%d id=%u len=%ld result=0x%X: %@%@",
+                   captureContext.label, type.rawValue, reportID, reportLength, result,
+                   hex, n > 40 ? " …" : ""))
 }
 
 private func inputValueCallback(context: UnsafeMutableRawPointer?, result: IOReturn, sender: UnsafeMutableRawPointer?, value: IOHIDValue) {

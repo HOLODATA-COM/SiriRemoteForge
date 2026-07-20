@@ -20,6 +20,18 @@ import AppKit
 enum Brightness {
     private static var isDimmed = false
 
+    /// Stamped into every brightness key we synthesize so `MediaKeyInterceptor`'s tap can discard
+    /// them with a single integer read, before the (comparatively expensive) `NSEvent(cgEvent:)`
+    /// conversion.
+    ///
+    /// Why this matters: a dim is 16 key taps (32 events) posted from the main thread, and the tap's
+    /// run-loop source lives on that same main thread — so every synthesized event came straight
+    /// back into our own callback. A dim and a restore overlapping doubled that to ~64 callbacks
+    /// while the main thread was still generating them, starving the tap. A starved tap stops
+    /// seeing events, so the remote's power-button events reached loginwindow and slept the Mac.
+    /// That is what made the lock intermittent rather than consistent.
+    static let syntheticEventMarker: Int64 = 0x53524D42  // 'SRMB'
+
     // MARK: - Read current brightness (DisplayServices, dlsym'd — no linker flag)
 
     private typealias GetFn = @convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Float>) -> Int32
@@ -41,16 +53,27 @@ enum Brightness {
     private static let brightnessDown: Int32 = 3   // NX_KEYTYPE_BRIGHTNESS_DOWN
     private static let notches = 16                // full brightness range in key steps
 
+    /// Bumped whenever a new ramp starts, so an in-flight ramp in the opposite direction stops
+    /// instead of interleaving with it. A dim and a restore running at once both doubled the
+    /// main-thread event load and left the final brightness anywhere between the two.
+    private static var rampGeneration = 0
+
     /// Dim every display to minimum (Power button). Marks us dimmed for the restore guard.
     static func dimToMin() {
         isDimmed = true
-        DispatchQueue.main.async { rampKey(brightnessDown, remaining: notches) }
+        DispatchQueue.main.async {
+            rampGeneration += 1
+            rampKey(brightnessDown, remaining: notches, generation: rampGeneration)
+        }
     }
 
     /// Raise every display back to maximum (one notch at a time) and clear the dimmed flag.
     static func restoreToMax() {
         isDimmed = false
-        DispatchQueue.main.async { rampKey(brightnessUp, remaining: notches) }
+        DispatchQueue.main.async {
+            rampGeneration += 1
+            rampKey(brightnessUp, remaining: notches, generation: rampGeneration)
+        }
     }
 
     /// If the displays are currently at/near minimum brightness — either because WE dimmed them
@@ -68,11 +91,12 @@ enum Brightness {
 
     /// Tap the key once per notch, spaced out on the main runloop — rapid-fire system events get
     /// coalesced/dropped, and NSEvent creation must be on the main thread.
-    private static func rampKey(_ keyCode: Int32, remaining: Int) {
-        guard remaining > 0 else { return }
+    private static func rampKey(_ keyCode: Int32, remaining: Int, generation: Int) {
+        // A newer ramp supersedes this one — stop rather than fight it.
+        guard generation == rampGeneration, remaining > 0 else { return }
         tapAuxKey(keyCode)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.012) {
-            rampKey(keyCode, remaining: remaining - 1)
+            rampKey(keyCode, remaining: remaining - 1, generation: generation)
         }
     }
 
@@ -90,6 +114,9 @@ enum Brightness {
             modifierFlags: NSEvent.ModifierFlags(rawValue: down ? 0xa00 : 0xb00),
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0, context: nil,
             subtype: 8, data1: data1, data2: -1) else { return }
-        ev.cgEvent?.post(tap: .cghidEventTap)
+        guard let cg = ev.cgEvent else { return }
+        // Mark it as ours so our own event tap can skip it cheaply — see `syntheticEventMarker`.
+        cg.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
+        cg.post(tap: .cghidEventTap)
     }
 }

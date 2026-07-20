@@ -314,6 +314,18 @@ class TouchHandler {
         lastTouchTime = mach_absolute_time()
         countFrame(timestamp: timestamp)
 
+        // The Power button is right beside the glass, so pressing it nearly always brushes the
+        // trackpad. Inside the guard that brush must not move the cursor, tap, swipe, or restore
+        // the brightness the press just dimmed. Frames are still counted above (wake/rate tracking
+        // stays accurate); only the gesture handling is skipped. Dropping `lastTouchPosition` makes
+        // whatever the finger is doing when the guard expires start as a fresh, clean touch instead
+        // of jumping the cursor by the distance it drifted while suppressed.
+        if RemoteInputHandler.isInputGuarded {
+            lastTouchPosition = nil
+            lastTouchCount = 0
+            return
+        }
+
         guard count > 0, let touchPtr = touches else {
             // Touch ended
             handleTouchEnd()

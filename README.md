@@ -27,7 +27,9 @@ or a native settings app.
   different things in different apps. An on-screen HUD confirms the switch.
 - **Multi-stage long-press** (`.hold` / `.hold2` / `.hold3`, release-to-select), **double-tap**
   (`.double`), and **hold-to-repeat** (auto-repeats a keystroke while held).
-- **Extras:** power button dims all displays (instead of sleeping) and any touch restores them;
+- **Extras:** power button dims all displays *instead of sleeping or locking the Mac* (macOS's own
+  power-button hotkey is suppressed for the remote only — your Mac's physical power button is
+  untouched), and any touch restores them;
   shake the cursor to flash a "find my pointer" highlight; animated macOS **Spaces** switching.
 - **Two ways to configure:** hand-edit `~/.config/siriremote/config.jsonc` (hot-reloads on save), or
   use the built-in **Settings** app — a Tuning tab (sliders) and a Layout tab (a drawn remote + an
@@ -44,7 +46,7 @@ Remote ──BLE──▶ ① Input (native)  ──▶ ② Gesture recog ──
                                                      (hot reload)
 ```
 
-The project has two halves:
+The shipping app has two halves, plus an isolated microphone-driver experiment:
 
 - **`SiriRemoteCore/`** — a pure-Swift, dependency-free, unit-tested engine (a SwiftPM package). It
   owns the config model (JSONC parsing, the `Action` enum, per-app modes + `inherits` resolution,
@@ -56,6 +58,9 @@ The project has two halves:
   recognizes gestures, watches the frontmost app, and executes actions with CGEvent / media-key /
   AppleScript / shell. It also hosts the SwiftUI **Settings** window. The core package is compiled
   straight into this binary (no separate library).
+- **`driverkit/`** — a separate HIDDriverKit microphone-replacement proof of concept and activation
+  host. Build/sign scripts do not install or activate it, and the shipping app's signing is
+  unchanged.
 
 ---
 
@@ -99,6 +104,42 @@ The bundle is signed **without** the hardened runtime on purpose — under the h
 private MultitouchSupport touch callback trips code-signing enforcement and the app is killed the
 instant you touch the trackpad. `create_app_bundle.sh` prefers a stable local self-signed identity
 (`siriRemote Local Signing`) if present, so permissions survive rebuilds; otherwise it ad-hoc signs.
+
+### Required system setting if you bind the Power button
+
+**Only needed if you map `button.power`.** Skip this otherwise.
+
+macOS translates the remote's Power button into the *system* power-button hotkey. `loginwindow`
+acts on that (`PBSleepsMachine`) and sleeps/locks the Mac — **in addition to** running whatever you
+bound, so a Power binding would dim your screen *and* lock it. Turn that behaviour off:
+
+```sh
+sudo defaults write /Library/Preferences/com.apple.loginwindow PowerButtonSleepsSystem -bool false
+```
+
+It takes effect immediately (loginwindow re-reads the pref on every press). To undo, write `true`.
+
+**What this changes:** your Mac's own physical power button no longer sleeps the machine on a short
+press. Touch ID, holding it for the force-shutdown dialog, closing the lid, and the Apple menu's
+Sleep all keep working.
+
+**Getting sleep back on the remote** — bind a long press, which the app *can* control:
+
+```jsonc
+"button.power":      { "action": "brightness", "value": 0.0 },          // tap → dim
+"button.power.hold": { "action": "shell", "command": "pmset sleepnow" } // hold ≥ holdThreshold → sleep
+```
+
+> **Why not just intercept the event?** It was tried thoroughly and it cannot work. Measured
+> directly: with a `CGEventTap` consuming **all 33** of the power events it saw, and with all seven
+> of the remote's HID interfaces seized, `loginwindow` still received the button and slept the Mac.
+> It reaches loginwindow by a path userspace cannot intercept, so the preference above is the only
+> real lever. Short presses *appeared* to work only because loginwindow debounces them at 350 ms —
+> which is also why long presses failed every time. See `HANDOFF.md` for the full evidence.
+
+Pressing Power also opens a **1-second input guard**: the button sits right next to the glass, so
+the press almost always brushes the trackpad, which used to instantly undo the dim it had just
+triggered. During the guard, touches and other buttons are still read but do not fire actions.
 
 ---
 
@@ -190,6 +231,11 @@ back to `config.jsonc` (debounced).
 
 ## The Settings app
 
+- **Device** — live status for the paired remote: **battery %**, firmware revision, Bluetooth
+  address, serial, vendor/product, and an expandable map of the seven HID interfaces macOS exposes.
+  Battery also appears in the window header pill (`● Connected · 🔋 100%`) and turns orange/red as it
+  drops. Battery/firmware come from the system Bluetooth stack (`system_profiler`, ~0.15 s, polled
+  off the main thread); the interface map comes straight from `IOHIDManager`.
 - **Tuning** — grouped sliders for cursor feel, acceleration, click, circular scroll, and button
   timing, each applying live.
 - **Layout** — "what every button does": a drawn aluminum remote on the left (click a button to jump
@@ -207,13 +253,20 @@ SiriRemoteForge/
 ├── SiriRemoteCore/        # pure engine (SwiftPM package) — config model, resolution, write-back, tests
 │   ├── Sources/SiriRemoteCore/
 │   └── Tests/SiriRemoteCoreTests/     # `swift test`  (config round-trip, resolution, layers, …)
-└── app/                   # native macOS app (swiftc)
+├── app/                   # native macOS app (swiftc)
     ├── *.swift            # HID, MultitouchSupport, gesture recog, executors, SwiftUI settings
     ├── build.sh           # canonical build (compiles the app + ../SiriRemoteCore into one binary)
     ├── create_app_bundle.sh
     ├── tools/make_app_icon.swift
     ├── SiriRemote-Bridging-Header.h / MultitouchSupport.h
     └── HyperVibe.entitlements
+└── driverkit/             # isolated Siri Remote microphone DEXT proof of concept
+    ├── SiriRemoteMicDriver.xcodeproj
+    ├── SiriRemoteMicDriver/
+    ├── Host/               # separate OSSystemExtensionRequest host
+    ├── build-driver.sh    # unsigned DEXT build only
+    ├── build-host.sh      # embeds DEXT; does not launch or activate
+    └── sign-host-development.sh
 ```
 
 The app target is named `HyperVibe` internally (historical, from the fork below); the product is
@@ -224,9 +277,43 @@ The app target is named `HyperVibe` internally (historical, from the fork below)
 ```sh
 cd SiriRemoteCore && swift test     # unit tests for the engine
 cd app && ./build.sh                # build the app
+cd driverkit && ./build-host.sh     # build-only DEXT + host check
 ```
 
 Debug logging goes to `/tmp/hypervibe.log` (HID events, device selection, executed actions).
+
+Current development state and continuation notes live in [`HANDOFF.md`](HANDOFF.md). The microphone
+interoperability investigation has its own evidence log and next-step plan in
+[`docs/mic-reverse-engineering.md`](docs/mic-reverse-engineering.md). The microphone code is
+diagnostic and opt-in; microphone audio is not yet available as an input device.
+
+Current microphone diagnostics (development only) are:
+
+- `--dump-reports` — inventory IOHID reports and readable Feature values;
+- `--activate-mic` — capture every remote interface and send the gen-3 `0xAF` input-enable byte;
+- `--dump-gatt <remote-name>` — read-only CoreBluetooth inventory (currently blocked because macOS
+  owns the connected HID service);
+- `--native-ptt` — exercise AppleBluetoothRemote's native `PushToTalk` property (currently returns
+  `kIOReturnUnsupported` on the tested product `0x0315`);
+- `--direct-ptt` — perform a bounded 20-second test of the driver's hidden Feature report `0x99`,
+  with automatic `[00]` release (the tested remote returns `kIOReturnError`).
+
+These flags are intentionally absent from normal launch. Exact results, timestamps, driver evidence,
+and the remaining below-IOHID options are recorded in the microphone living document above.
+
+The agreed microphone scope uses only this Mac, its built-in Bluetooth controller, and the currently
+paired remote. A separate host, Linux VM, external Bluetooth adapter, second remote, and pairing
+changes are out of scope. The remaining native PoC is in [`driverkit/`](driverkit/README.md): it
+builds and development-signs successfully. A real host launch was killed by AMFI before `main` with
+`Code=-413` (`No matching profile found`), so no activation request ran. Eligible profiles are
+required for both the DEXT's DriverKit/HID entitlements and the host's System Extension install
+entitlement; administrator permission alone does not replace them. An authorized automatic-
+provisioning attempt reached Apple and confirmed that the current Personal development team cannot
+issue the required DriverKit HID capabilities. Building and signing have no runtime effect.
+
+Development invariant: a diagnostic instance temporarily replaces the normal app; it does not run
+alongside it. After every diagnostic, stop the flagged process and restore exactly one no-argument
+`HyperVibe.app` instance so remote control remains available.
 
 ## Hardware notes (3rd-gen Siri Remote)
 

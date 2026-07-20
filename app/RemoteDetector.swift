@@ -60,12 +60,31 @@ class RemoteDetector {
         // The Siri Remote A1513 exposes 3 HID interfaces (consumer, game controls, vendor),
         // and the singular variant with vendor-only matching does not enumerate them on
         // recent macOS BLE HID stacks.
-        let matchingDicts: [[String: Any]] = [
+        var matchingDicts: [[String: Any]] = [
             [kIOHIDVendorIDKey: appleVendorID, kIOHIDPrimaryUsagePageKey: 0x0C],   // Consumer Page
             [kIOHIDVendorIDKey: appleVendorID, kIOHIDPrimaryUsagePageKey: 0x0D],   // Digitizer / Game Controls
             [kIOHIDVendorIDKey: appleVendorID, kIOHIDPrimaryUsagePageKey: 0xFF00], // Apple vendor-defined
             [kIOHIDVendorIDKey: appleVendorID, kIOHIDPrimaryUsagePageKey: 0x01],   // Generic Desktop (kept for keyboards/trackpads)
         ]
+        // Gen-3 exposes two additional HID-over-GATT report characteristics as usage-page 0x20
+        // interfaces (AppleEmbeddedBluetoothInfrared / AppleEmbeddedBluetoothRadio). They are not
+        // needed for normal button/cursor operation, so only seize them during microphone/report
+        // diagnostics. The gen-3 protocol requires the 0xAF input-enable byte on every writable
+        // non-Input report; omitting these interfaces made the first activation probe incomplete.
+        //
+        // Seizing them in normal mode was tried as a way to stop macOS seeing the Power button and
+        // did NOT work — loginwindow still received it — so it is not worth occupying the IR/radio
+        // interfaces. The power-button sleep is handled by the loginwindow preference instead.
+        if CommandLine.arguments.contains("--dump-reports") ||
+           CommandLine.arguments.contains("--capture-mic") ||
+           CommandLine.arguments.contains("--activate-mic") ||
+           CommandLine.arguments.contains("--native-ptt") ||
+           CommandLine.arguments.contains("--direct-ptt") {
+            matchingDicts.append([
+                kIOHIDVendorIDKey: appleVendorID,
+                kIOHIDPrimaryUsagePageKey: 0x20,
+            ])
+        }
         IOHIDManagerSetDeviceMatchingMultiple(manager, matchingDicts as CFArray)
 
         IOHIDManagerRegisterDeviceMatchingCallback(manager, deviceAddedCallback, Unmanaged.passUnretained(self).toOpaque())
