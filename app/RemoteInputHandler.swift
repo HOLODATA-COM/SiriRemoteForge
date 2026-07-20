@@ -16,6 +16,13 @@ class RemoteInputHandler {
     private weak var menuBarManager: MenuBarManager?
     private var devices: [IOHIDDevice] = []
 
+    // --- Mic/voice capture diagnostic (enabled with `--capture-mic`). The 3rd-gen remote streams
+    //     its microphone as large HID input reports (the button interface is 3 bytes; there's a
+    //     separate interface with a 209-byte input report). This logs raw reports so we can see the
+    //     voice data when the Siri button is held. Buffers must outlive the callback registration.
+    private let captureMic = CommandLine.arguments.contains("--capture-mic")
+    private var reportBuffers: [UnsafeMutablePointer<UInt8>] = []
+
     /// Config engine (SiriRemoteCore). Buttons are routed through it; unbound buttons do nothing.
     var controller: Controller?
 
@@ -128,6 +135,7 @@ class RemoteInputHandler {
                   IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? Int ?? 0,
                   IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int ?? 0))
             IOHIDDeviceRegisterInputValueCallback(device, inputValueCallback, Unmanaged.passUnretained(self).toOpaque())
+            if captureMic { registerReportCapture(device) }
             IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
             devices.append(device)
             isFirstPressAfterConnection = true
@@ -142,6 +150,18 @@ class RemoteInputHandler {
         }
     }
     
+    /// Register a raw input-report callback (voice-capture diagnostic). The buffer must outlive the
+    /// registration, so it's retained in `reportBuffers`.
+    private func registerReportCapture(_ device: IOHIDDevice) {
+        let bufLen = 512
+        let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufLen)
+        buf.initialize(repeating: 0, count: bufLen)
+        reportBuffers.append(buf)
+        IOHIDDeviceRegisterInputReportCallback(device, buf, bufLen, inputReportCallback,
+                                               Unmanaged.passUnretained(self).toOpaque())
+        rmDebug("🎤 mic-capture: raw report callback registered")
+    }
+
     func handleInputValue(_ value: IOHIDValue) {
         let element = IOHIDValueGetElement(value)
         let usagePage = IOHIDElementGetUsagePage(element)
@@ -640,6 +660,18 @@ class RemoteInputHandler {
 }
 
 // C callback
+/// Raw HID input-report callback (mic/voice capture). Logs report id, length, and the leading bytes
+/// so we can see the remote's large voice reports when the Siri button is held.
+private func inputReportCallback(context: UnsafeMutableRawPointer?, result: IOReturn,
+                                 sender: UnsafeMutableRawPointer?, type: IOHIDReportType,
+                                 reportID: UInt32, report: UnsafeMutablePointer<UInt8>,
+                                 reportLength: CFIndex) {
+    guard reportLength > 6 else { return }   // skip small button reports
+    let n = Int(reportLength)
+    let hex = (0..<min(n, 40)).map { String(format: "%02x", report[$0]) }.joined(separator: " ")
+    rmDebug(String(format: "🎤 report id=%u len=%ld: %@%@", reportID, reportLength, hex, n > 40 ? " …" : ""))
+}
+
 private func inputValueCallback(context: UnsafeMutableRawPointer?, result: IOReturn, sender: UnsafeMutableRawPointer?, value: IOHIDValue) {
     guard let context = context else { return }
     Unmanaged<RemoteInputHandler>.fromOpaque(context).takeUnretainedValue().handleInputValue(value)
