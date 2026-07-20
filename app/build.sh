@@ -24,6 +24,7 @@ SWIFT_FILES=(
     # --- Settings UI (SwiftUI) ---
     "TuneSettings.swift"
     "SettingsModel.swift"
+    "LaunchAtLogin.swift"
     "DeviceInfo.swift"
     "SettingsView.swift"
     "SettingsWindow.swift"

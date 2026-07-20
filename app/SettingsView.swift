@@ -11,6 +11,10 @@ struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     @StateObject private var device = DeviceInfo()
 
+    /// Mirrors the real SMAppService registration — never assume the toggle succeeded.
+    @State private var launchAtLogin = LaunchAtLogin.state.isOn
+    @State private var launchAtLoginError: String?
+
     private enum Tab: String, CaseIterable { case tuning = "Tuning", layout = "Layout" }
     @State private var tab: Tab = .tuning
 
@@ -28,6 +32,7 @@ struct SettingsView: View {
                     clickSection
                     circularSection
                     buttonsSection
+                    startupSection
                     footerSection
                 }
                 .formStyle(.grouped)
@@ -347,6 +352,36 @@ struct SettingsView: View {
             Text("Circle a finger on the pad's outer ring to scroll — like a click wheel.")
         }
         .animation(.easeInOut(duration: 0.22), value: model.tune.circularEnabled)
+    }
+
+    private var startupSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { launchAtLogin },
+                set: { wanted in
+                    do {
+                        try LaunchAtLogin.setEnabled(wanted)
+                        launchAtLoginError = nil
+                    } catch {
+                        launchAtLoginError = error.localizedDescription
+                    }
+                    // Always re-read the real registration rather than trusting `wanted`, so the
+                    // switch cannot sit in a position macOS did not actually accept.
+                    launchAtLogin = LaunchAtLogin.state.isOn
+                }
+            )) {
+                rowLabel("Start at login", "arrow.up.forward.app")
+            }
+            .disabled(LaunchAtLogin.state == .unavailable)
+        } header: {
+            Text("Startup")
+        } footer: {
+            Text(launchAtLoginError.map { "Couldn't change it: \($0)" }
+                 ?? LaunchAtLogin.note
+                 ?? "Runs HyperVibe automatically after you log in. Also listed under System Settings → General → Login Items.")
+                .font(.system(size: 11))
+                .foregroundStyle(launchAtLoginError == nil ? Color.secondary : Color.red)
+        }
     }
 
     private var footerSection: some View {

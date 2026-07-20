@@ -39,6 +39,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🚀 HyperVibe starting...")
 
+        // `--enable-login-item` / `--disable-login-item`: apply and exit, before anything is wired
+        // up or the remote is seized. Registration has to come from the app bundle itself, so this
+        // is the only way to script it.
+        LaunchAtLogin.handleCommandLineIfNeeded()
+
         // Headless self-QC: `--snapshot-layout <path>` renders the Layout settings view to a PNG
         // and exits, without seizing the remote or opening a window.
         if let idx = CommandLine.arguments.firstIndex(of: "--snapshot-layout"),

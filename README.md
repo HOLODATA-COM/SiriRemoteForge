@@ -237,7 +237,13 @@ back to `config.jsonc` (debounced).
   drops. Battery/firmware come from the system Bluetooth stack (`system_profiler`, ~0.15 s, polled
   off the main thread); the interface map comes straight from `IOHIDManager`.
 - **Tuning** — grouped sliders for cursor feel, acceleration, click, circular scroll, and button
-  timing, each applying live.
+  timing, each applying live. Ends with **Startup → Start at login**, which registers the app with
+  `SMAppService` (macOS 13+). Registration is by bundle, so it follows `HyperVibe.app` and survives
+  rebuilds in place; it also appears under **System Settings → General → Login Items**, so it can be
+  turned off there even when the app isn't running. The toggle always re-reads the real
+  registration, so it can't sit in a position macOS didn't accept — if macOS wants approval, the
+  footer says so. Scriptable with `open HyperVibe.app --args --enable-login-item` (or
+  `--disable-login-item`).
 - **Layout** — "what every button does": a drawn aluminum remote on the left (click a button to jump
   to its mapping; the selected input stays highlighted), an **app hub** to pick the mode, an
   **Editing: base / layer** selector (the layer × app grid), and a grouped input→action list with
