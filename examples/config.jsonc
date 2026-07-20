@@ -59,6 +59,17 @@
       // Top-right Power button → dim all displays to minimum; any button/touch restores to max
       // (Brightness.restoreIfDimmed). The Mac stays awake and remote-controllable (not display sleep).
       "button.power": { "action": "brightness", "value": 0.0 },
+      // Hold Power past holdThreshold (0.5s) and release → actually sleep the Mac.
+      // NOTE: binding button.power at all requires turning off macOS's own power-button sleep, or
+      // it will ALSO lock the Mac on every press. See "Required system setting if you bind the
+      // Power button" in README.md — one `defaults write`, reversible.
+      "button.power.hold": { "action": "shell", "command": "pmset sleepnow" },
+      // Play/Pause. The tap MUST stay bound whenever any variant below is bound: binding a
+      // .double/.hold stage makes the app own this button and suppress the native media key, so
+      // without this line a short press would do nothing at all.
+      "button.playPause":       { "action": "media", "key": "playpause" },
+      // Hold Play/Pause past holdThreshold2 (1.0s) and release → open Apple Music.
+      "button.playPause.hold2": { "action": "launch", "app": "Music" },
       // TV button (to the right of Back) → toggle LAYER L1. TAP once to switch to L1 (sticky, stays
       // until you tap again); tap again to switch back. (Holding it + pressing other keys = momentary
       // L1.) An on-screen HUD confirms the switch. Add L1-specific bindings in the "L1" mode below.
