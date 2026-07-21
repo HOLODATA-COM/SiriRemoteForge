@@ -37,15 +37,21 @@ final class LayerHUD {
 
     // MARK: - Public API
 
-    /// A layer turned ON (sticky): accent tint, filled-layers icon.
+    // Layer switching always answers the same question — WHICH LAYER IS ACTIVE NOW — rather than
+    // announcing that something was turned off. The base state is a layer too: leaving L1 does not
+    // mean "no layer", it means the base layer is active again. Naming the destination keeps the
+    // two cards symmetric and matches how the keys actually behave.
+
+    /// Switched INTO a named layer (sticky).
     func showOn(_ layerName: String) {
-        show(symbol: "square.stack.3d.up.fill", title: layerName, subtitle: "Layer on",
+        show(symbol: "square.stack.3d.up.fill", title: layerName, subtitle: "Layer active",
              tint: .controlAccentColor)
     }
 
-    /// A layer turned OFF (back to base): dimmed tint, slashed-layers icon.
+    /// Switched back to the base layer. Same subject, outline + dimmed rather than a slash: a slash
+    /// would read as "layers are off", which is exactly the wrong idea.
     func showOff(_ layerName: String) {
-        show(symbol: "square.stack.3d.up.slash.fill", title: layerName, subtitle: "Layer off",
+        show(symbol: "square.stack.3d.up", title: "Base", subtitle: "Layer active",
              tint: .secondaryLabelColor)
     }
 

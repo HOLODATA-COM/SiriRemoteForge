@@ -655,12 +655,12 @@ class RemoteInputHandler {
             } else if stickyLayer == name {
                 stickyLayer = nil; stickyButton = nil   // tap while sticky-on → toggle OFF
                 controller.popLayer()
-                onLayerToggle?(false, name)          // HUD: layer off
+                onLayerToggle?(false, name)          // HUD: back to the base layer
                 print("🔘 \(tapKey) → layer '\(name)' (toggle off)")
             } else {
                 stickyLayer = name; stickyButton = buttonName   // bare tap → toggle ON (sticky)
                 controller.pushLayer(name)
-                onLayerToggle?(true, name)           // HUD: layer on
+                onLayerToggle?(true, name)           // HUD: this layer is now active
                 print("🔘 \(tapKey) → layer '\(name)' (toggle on)")
             }
             layerButton = nil
