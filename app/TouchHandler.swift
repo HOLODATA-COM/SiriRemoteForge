@@ -320,7 +320,12 @@ class TouchHandler {
         // stays accurate); only the gesture handling is skipped. Dropping `lastTouchPosition` makes
         // whatever the finger is doing when the guard expires start as a fresh, clean touch instead
         // of jumping the cursor by the distance it drifted while suppressed.
-        if RemoteInputHandler.isInputGuarded {
+        // Two separate guards, both of which mute the trackpad but for different reasons:
+        //   • isInputGuarded  — Power was pressed; suppresses other inputs' actions too.
+        //   • isTouchGuarded  — a click-ring/centre button was pressed, and those are pressed
+        //     THROUGH the glass, so the same press also arrives here as a touch. Only the trackpad
+        //     is muted; every other button keeps working.
+        if RemoteInputHandler.isInputGuarded || RemoteInputHandler.isTouchGuarded {
             lastTouchPosition = nil
             lastTouchCount = 0
             return
@@ -402,9 +407,26 @@ class TouchHandler {
                 let radians = circularDetector.feed(x: Double(currentPos.x), y: Double(currentPos.y))
                 if radians != 0 { circularActive = true; didScroll = true }
                 if circularActive {
-                    // Position-follow: total scroll tracks total rotation exactly (never faster),
-                    // but eased each frame so jittery circling still scrolls smoothly.
-                    rotationTotal += Double(radians)
+                    // Velocity-based gain, the same idea as the cursor's pointer acceleration:
+                    // circle slowly and the wheel stays slow and precise, circle fast and it covers
+                    // ground. Without this the wheel was strictly 1:1 with rotation, so reaching the
+                    // bottom of a long page meant many full turns.
+                    //
+                    // `radians` is per-frame rotation, so |radians| IS the angular speed in the
+                    // units this curve is expressed in. The gain scales the increment before it is
+                    // accumulated, which keeps the easing below unchanged — the wheel still follows
+                    // a position target, it is just a gained one.
+                    let omega = abs(CGFloat(radians))
+                    var t = smoothstep(omega,
+                                       CGFloat(circularConfig.accelLowSpeed),
+                                       CGFloat(circularConfig.accelHighSpeed))
+                    // Bend the ramp. smoothstep alone is symmetric; a wheel wants a long flat
+                    // precise stretch before it climbs, which is what an exponent > 1 gives.
+                    let curve = CGFloat(circularConfig.accelCurve)
+                    if curve != 1, t > 0 { t = pow(t, curve) }
+                    let gain = CGFloat(circularConfig.accelMin)
+                        + (CGFloat(circularConfig.accelMax) - CGFloat(circularConfig.accelMin)) * t
+                    rotationTotal += Double(radians) * Double(gain)
                     let target = rotationTotal * circularConfig.pixelsPerRadian
                     let step = (target - scrollEmitted) * circularConfig.scrollEase
                     scrollEmitted += step

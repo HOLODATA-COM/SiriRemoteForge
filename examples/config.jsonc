@@ -34,8 +34,18 @@
       "enabled": true,
       "minRadius": 0.35,         // only touches this far from center count as the outer ring
       "startThreshold": 0.1,     // radians (~5.7°) of rotation before scrolling starts (was 0.35 ≈ 20°, too much)
-      "pixelsPerRadian": 107,    // scroll pixels per radian of rotation (speed) — slowed ~1/3 from 160
+      "pixelsPerRadian": 75,     // scroll pixels per radian of rotation (speed) — lower = slower
       "scrollEase": 0.3,         // scroll smoothing (smaller = smoother / laggier)
+      // Velocity gain — the wheel's pointer acceleration. Circle slowly = precise, fast = reach.
+      // Speeds are RADIANS PER FRAME (pad runs ~33-60Hz): slow circle ~0.01, quick spin ~0.07.
+      // Set accelMin = accelMax = 1 for the old strictly-1:1 behaviour.
+      "accelMin": 1.0,           // gain at/below accelLowSpeed  (lower = finer slow control)
+      "accelMax": 2.5,           // gain at/above accelHighSpeed (higher = more reach per turn)
+      "accelLowSpeed": 0.010,    // rad/frame below which gain = accelMin
+      "accelHighSpeed": 0.070,   // rad/frame above which gain = accelMax
+      "accelCurve": 2.0,         // bends the ramp: 1 = plain smoothstep (symmetric),
+                                 // >1 = stays precise longer then climbs steeply,
+                                 // <1 = reaches full speed sooner
       "invert": true             // flip if it scrolls the wrong way (was false; circling felt reversed)
     }
   },

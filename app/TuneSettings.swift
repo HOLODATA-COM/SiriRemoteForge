@@ -29,6 +29,12 @@ struct TuneSettings: Codable, Equatable {
     var circularPixelsPerRadian: Double
     var circularScrollEase: Double
     var circularInvert: Bool
+    // Velocity gain for the wheel — see CircularScrollConfig for units (radians per frame).
+    var circularAccelMin: Double
+    var circularAccelMax: Double
+    var circularAccelLowSpeed: Double
+    var circularAccelHighSpeed: Double
+    var circularAccelCurve: Double
 
     static let `default` = TuneSettings(
         cursorSpeed: 0.6, cursorDeadzone: 0.006, accelMin: 0.4, accelMax: 2.6,
@@ -36,8 +42,11 @@ struct TuneSettings: Codable, Equatable {
         holdThreshold: 0.5, holdThreshold2: 1.0, holdThreshold3: 1.6,
         doubleTapWindow: 0.3, spacesModeWindow: 5.0, findCursorEnabled: true,
         circularEnabled: true,
-        circularMinRadius: 0.35, circularStartThreshold: 0.35, circularPixelsPerRadian: 107,
-        circularScrollEase: 0.3, circularInvert: false)
+        circularMinRadius: 0.35, circularStartThreshold: 0.35, circularPixelsPerRadian: 75,
+        circularScrollEase: 0.3, circularInvert: false,
+        circularAccelMin: 1.0, circularAccelMax: 2.5,
+        circularAccelLowSpeed: 0.010, circularAccelHighSpeed: 0.070,
+        circularAccelCurve: 1.0)
 
     /// Seed from the config file's settings block (used on first run only).
     init(seed s: Config.Settings) {
@@ -61,6 +70,11 @@ struct TuneSettings: Codable, Equatable {
         circularPixelsPerRadian = s.circularScroll.pixelsPerRadian
         circularScrollEase = s.circularScroll.scrollEase
         circularInvert = s.circularScroll.invert
+        circularAccelMin = s.circularScroll.accelMin
+        circularAccelMax = s.circularScroll.accelMax
+        circularAccelLowSpeed = s.circularScroll.accelLowSpeed
+        circularAccelHighSpeed = s.circularScroll.accelHighSpeed
+        circularAccelCurve = s.circularScroll.accelCurve
     }
 
     init(cursorSpeed: Double, cursorDeadzone: Double, accelMin: Double, accelMax: Double,
@@ -69,7 +83,10 @@ struct TuneSettings: Codable, Equatable {
          doubleTapWindow: Double,
          spacesModeWindow: Double, findCursorEnabled: Bool, circularEnabled: Bool,
          circularMinRadius: Double, circularStartThreshold: Double, circularPixelsPerRadian: Double,
-         circularScrollEase: Double, circularInvert: Bool) {
+         circularScrollEase: Double, circularInvert: Bool,
+         circularAccelMin: Double, circularAccelMax: Double,
+         circularAccelLowSpeed: Double, circularAccelHighSpeed: Double,
+         circularAccelCurve: Double) {
         self.cursorSpeed = cursorSpeed
         self.cursorDeadzone = cursorDeadzone
         self.accelMin = accelMin
@@ -90,6 +107,11 @@ struct TuneSettings: Codable, Equatable {
         self.circularPixelsPerRadian = circularPixelsPerRadian
         self.circularScrollEase = circularScrollEase
         self.circularInvert = circularInvert
+        self.circularAccelMin = circularAccelMin
+        self.circularAccelMax = circularAccelMax
+        self.circularAccelLowSpeed = circularAccelLowSpeed
+        self.circularAccelHighSpeed = circularAccelHighSpeed
+        self.circularAccelCurve = circularAccelCurve
     }
 
     /// The SiriRemoteCore circular-scroll config this maps to.
@@ -100,6 +122,11 @@ struct TuneSettings: Codable, Equatable {
             startThreshold: circularStartThreshold,
             pixelsPerRadian: circularPixelsPerRadian,
             scrollEase: circularScrollEase,
-            invert: circularInvert)
+            invert: circularInvert,
+            accelMin: circularAccelMin,
+            accelMax: circularAccelMax,
+            accelLowSpeed: circularAccelLowSpeed,
+            accelHighSpeed: circularAccelHighSpeed,
+            accelCurve: circularAccelCurve)
     }
 }

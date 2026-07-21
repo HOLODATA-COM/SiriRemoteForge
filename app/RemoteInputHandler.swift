@@ -158,6 +158,32 @@ class RemoteInputHandler {
             DispatchTime.now().uptimeNanoseconds + UInt64(seconds * 1_000_000_000)
     }
 
+    // MARK: - Touch guard (click-ring / centre)
+
+    /// The click-ring directions and the centre button are pressed THROUGH the glass, so every one
+    /// of them also lands as a touch: the cursor jumps, or the press is read as a swipe, and the two
+    /// interpretations fight. This suppresses only the trackpad for a moment — unlike
+    /// `inputGuardDeadlineNanos`, other buttons keep working normally.
+    ///
+    /// Kept shorter than `clickThreshold` (0.25s) on purpose: press-and-hold-to-drag has to still
+    /// start on time, so the guard must have expired before the drag begins.
+    private static var touchGuardDeadlineNanos: UInt64 = 0
+
+    static var touchGuardDuration: Double = 0.2
+
+    static var isTouchGuarded: Bool {
+        DispatchTime.now().uptimeNanoseconds < touchGuardDeadlineNanos
+    }
+
+    static func armTouchGuard(_ seconds: Double = touchGuardDuration) {
+        touchGuardDeadlineNanos =
+            DispatchTime.now().uptimeNanoseconds + UInt64(seconds * 1_000_000_000)
+    }
+
+    /// Buttons that are physically part of the touch surface.
+    private static let onGlassButtons: Set<String> =
+        ["ringUp", "ringDown", "ringLeft", "ringRight", "select"]
+
 
     /// Last observed pressed/released state per button. The Siri Remote mirrors each logical
     /// button across multiple HID interfaces (6 seized here), so every physical press/release
@@ -469,6 +495,12 @@ class RemoteInputHandler {
         // hand brushes on the way — cannot undo the dim it is about to trigger.
         if isPressed && buttonName == "power" {
             RemoteInputHandler.armInputGuard()
+        }
+
+        // Ring/centre presses come through the glass, so each one also arrives as a touch. Mute the
+        // trackpad briefly so the press is not simultaneously read as a cursor move or a swipe.
+        if isPressed && RemoteInputHandler.onGlassButtons.contains(buttonName) {
+            RemoteInputHandler.armTouchGuard()
         }
 
         // Any real button press restores brightness — so after button.power dims all displays to

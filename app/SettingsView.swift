@@ -354,6 +354,32 @@ struct SettingsView: View {
                        value: $model.tune.circularScrollEase, range: 0.1...0.6,
                        minIcon: "tortoise.fill", maxIcon: "hare.fill",
                        display: { String(format: "%.2f", $0) })
+
+                // Velocity gain — shown as a curve, because four numbers do not tell you what the
+                // wheel will feel like, and the shape does.
+                VStack(alignment: .leading, spacing: 10) {
+                    rowLabel("Speed response", "chart.xyaxis.line")
+                    AccelCurveView(accelMin: model.tune.circularAccelMin,
+                                   accelMax: model.tune.circularAccelMax,
+                                   lowSpeed: model.tune.circularAccelLowSpeed,
+                                   highSpeed: model.tune.circularAccelHighSpeed,
+                                   curve: model.tune.circularAccelCurve)
+                }
+                .padding(.vertical, 2)
+
+                slider(icon: "tortoise.fill", title: "Slow gain",
+                       value: $model.tune.circularAccelMin, range: 0.1...1.5,
+                       minIcon: "minus", maxIcon: "plus",
+                       display: { String(format: "%.2f×", $0) })
+                slider(icon: "hare.fill", title: "Fast gain",
+                       value: $model.tune.circularAccelMax, range: 1.0...5.0,
+                       minIcon: "minus", maxIcon: "plus",
+                       display: { String(format: "%.2f×", $0) })
+                slider(icon: "point.topleft.down.curvedto.point.bottomright.up", title: "Curve shape",
+                       value: $model.tune.circularAccelCurve, range: 0.4...4.0,
+                       minIcon: "arrow.up.right", maxIcon: "arrow.turn.up.right",
+                       display: { String(format: "%.1f", $0) })
+
                 Toggle(isOn: $model.tune.circularInvert) {
                     rowLabel("Reverse direction", "arrow.left.arrow.right")
                 }

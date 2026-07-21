@@ -19,24 +19,61 @@ public struct CircularScrollConfig: Equatable {
     /// Flip scroll direction (set on hardware once we see which way feels right).
     public var invert: Bool
 
+    // MARK: - Velocity gain (the wheel's pointer acceleration)
+    //
+    // Without these the wheel is strictly 1:1 with rotation, so a long page takes many full turns.
+    // The gain multiplies each frame's rotation before it is accumulated, so circling slowly stays
+    // precise and circling fast covers ground — the same idea, and the same smoothstep curve, as
+    // the cursor's `accel*` settings.
+    //
+    // Units are radians of rotation PER FRAME (the remote's pad runs ~33–60 Hz over BLE), so the
+    // speeds are small: a slow deliberate circle is ~0.01, a quick spin ~0.07. Set
+    // `accelMin == accelMax == 1` to get the old strictly-1:1 behaviour back.
+
+    /// Gain at or below `accelLowSpeed` — slow, deliberate circling. Lower = finer control.
+    public var accelMin: Double
+    /// Gain at or above `accelHighSpeed` — a quick spin. Higher = more reach per turn.
+    public var accelMax: Double
+    /// Rotation speed (rad/frame) below which the gain is `accelMin`.
+    public var accelLowSpeed: Double
+    /// Rotation speed (rad/frame) above which the gain caps at `accelMax`.
+    public var accelHighSpeed: Double
+    /// Shapes the transition between `accelMin` and `accelMax`. The raw smoothstep ramp is
+    /// symmetric — it speeds up and settles at mirrored rates — but a wheel usually wants an
+    /// ASYMMETRIC curve: a long, flat, precise low-speed region, then a sharper climb. This is the
+    /// exponent applied to the 0…1 ramp, which bends it without moving the endpoints:
+    ///   1.0  straight smoothstep (symmetric)
+    ///   >1   gain stays near `accelMin` longer, then climbs steeply → more precision range
+    ///   <1   gain leaves `accelMin` immediately → reach sooner, less fine control
+    public var accelCurve: Double
+
     public init(enabled: Bool, minRadius: Double, startThreshold: Double,
-                pixelsPerRadian: Double, scrollEase: Double, invert: Bool) {
+                pixelsPerRadian: Double, scrollEase: Double, invert: Bool,
+                accelMin: Double = 1.0, accelMax: Double = 2.5,
+                accelLowSpeed: Double = 0.010, accelHighSpeed: Double = 0.070,
+                accelCurve: Double = 1.0) {
         self.enabled = enabled
         self.minRadius = minRadius
         self.startThreshold = startThreshold
         self.pixelsPerRadian = pixelsPerRadian
         self.scrollEase = scrollEase
         self.invert = invert
+        self.accelMin = accelMin
+        self.accelMax = accelMax
+        self.accelLowSpeed = accelLowSpeed
+        self.accelHighSpeed = accelHighSpeed
+        self.accelCurve = accelCurve
     }
 
     public static let `default` = CircularScrollConfig(
-        enabled: true, minRadius: 0.35, startThreshold: 0.35, pixelsPerRadian: 107,
+        enabled: true, minRadius: 0.35, startThreshold: 0.35, pixelsPerRadian: 75,
         scrollEase: 0.3, invert: false)
 }
 
 extension CircularScrollConfig: Decodable {
     private enum K: String, CodingKey {
         case enabled, minRadius, startThreshold, pixelsPerRadian, scrollEase, invert
+        case accelMin, accelMax, accelLowSpeed, accelHighSpeed, accelCurve
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
@@ -47,6 +84,11 @@ extension CircularScrollConfig: Decodable {
         pixelsPerRadian = try c.decodeIfPresent(Double.self, forKey: .pixelsPerRadian) ?? d.pixelsPerRadian
         scrollEase      = try c.decodeIfPresent(Double.self, forKey: .scrollEase)      ?? d.scrollEase
         invert          = try c.decodeIfPresent(Bool.self,   forKey: .invert)          ?? d.invert
+        accelMin        = try c.decodeIfPresent(Double.self, forKey: .accelMin)        ?? d.accelMin
+        accelMax        = try c.decodeIfPresent(Double.self, forKey: .accelMax)        ?? d.accelMax
+        accelLowSpeed   = try c.decodeIfPresent(Double.self, forKey: .accelLowSpeed)   ?? d.accelLowSpeed
+        accelHighSpeed  = try c.decodeIfPresent(Double.self, forKey: .accelHighSpeed)  ?? d.accelHighSpeed
+        accelCurve      = try c.decodeIfPresent(Double.self, forKey: .accelCurve)      ?? d.accelCurve
     }
 }
 
@@ -59,6 +101,11 @@ extension CircularScrollConfig: Encodable {
         try c.encode(pixelsPerRadian, forKey: .pixelsPerRadian)
         try c.encode(scrollEase, forKey: .scrollEase)
         try c.encode(invert, forKey: .invert)
+        try c.encode(accelMin, forKey: .accelMin)
+        try c.encode(accelMax, forKey: .accelMax)
+        try c.encode(accelLowSpeed, forKey: .accelLowSpeed)
+        try c.encode(accelHighSpeed, forKey: .accelHighSpeed)
+        try c.encode(accelCurve, forKey: .accelCurve)
     }
 }
 

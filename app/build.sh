@@ -26,6 +26,7 @@ SWIFT_FILES=(
     "SettingsModel.swift"
     "LaunchAtLogin.swift"
     "DeviceInfo.swift"
+    "AccelCurveView.swift"
     "SettingsView.swift"
     "SettingsWindow.swift"
     "RemoteView.swift"
