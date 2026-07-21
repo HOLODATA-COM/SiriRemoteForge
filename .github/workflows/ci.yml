@@ -15,7 +15,7 @@ jobs:
     name: Core engine (SwiftPM tests)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Show toolchain
         run: swift --version
       - name: Build
@@ -27,7 +27,7 @@ jobs:
     name: App (compiles and links)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The app is compiled straight with swiftc (no Xcode project) and links the private
       # MultitouchSupport framework, which ships with macOS — so this only proves it builds.
       # It cannot RUN here: seizing the remote needs real hardware and Accessibility permission.
