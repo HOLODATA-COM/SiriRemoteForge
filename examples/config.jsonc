@@ -165,8 +165,17 @@
       "ring.up.double":   { "action": "keystroke", "keys": "cmd+shift+t" }
     },
     // L1: the LAYER toggled by the TV button (see button.tv above). Its bindings live as "L1.<key>"
-    // in the app modes (global = default; per-app overrides in each app's mode). This mode itself is
-    // just a marker so the layer exists; keep it (inherits global for pass-through of unbound keys).
+    // in the app modes (global = default; per-app overrides in each app's mode).
+    //
+    // A layer is a MODIFIER, not a separate keyboard. A key the layer says nothing about keeps
+    // doing whatever it does unlayered, IN THE CURRENT APP — holding the layer never deadens a
+    // bound key. Resolution order for key K while layer L is held:
+    //   1. "L.K" in the current app's mode chain   — this app, in this layer
+    //   2. "K" among mode "L"'s OWN bindings       — any app, in this layer
+    //   3. "K" in the current app's mode chain     — this app, without the layer
+    // Put app-agnostic layer bindings directly in this mode; they are step 2.
+    // (Step 2 does not follow this mode's `inherits`, or global's base binding would shadow the
+    // current app's at step 3.)
     "L1": {
       "inherits": "global"
     }

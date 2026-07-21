@@ -12,7 +12,8 @@ public final class Controller {
     /// a key `K` resolves PER-APP first — the layer-namespaced key `"<layer>.K"` looked up in the
     /// active app mode's `inherits` chain — so the same layer can do different things in different
     /// apps (e.g. `L1.ring.left` = switch tab in a terminal mode, something else in a browser mode).
-    /// It then falls back to the standalone layer mode `<layer>` for app-agnostic layer bindings.
+    /// It then falls back to the standalone layer mode `<layer>` for app-agnostic layer bindings,
+    /// and finally to the key's UNLAYERED binding in the current app — see `site`.
     private var activeLayer: String?
 
     public init(engine: MappingEngine, executor: ActionExecutor) {
@@ -34,18 +35,49 @@ public final class Controller {
     /// The layer mode currently overriding resolution, or nil when resolving against the app mode.
     public var currentLayer: String? { activeLayer }
 
-    /// Resolve `key`. With no layer active: the active app mode. With a layer active: first the
-    /// per-app namespaced key `"<layer>.<key>"` in the active app mode's chain (so a layer composes
-    /// with the app), then the standalone layer mode (app-agnostic layer bindings).
-    private func resolve(_ key: String) -> Action? {
-        guard let layer = activeLayer else { return engine.resolve(key) }
-        return engine.resolve("\(layer).\(key)") ?? engine.resolve(key, in: layer)
+    /// A resolved binding together with the presentation of that SAME binding. Kept as one value so
+    /// the label and icon can never come from a different binding that merely shares the key.
+    private struct Site {
+        let action: Action
+        let presentation: Config.Presentation?
     }
 
-    /// Display overrides for `key`, resolved through the same layer/app chain as `resolve`.
+    /// Resolve `key`, most specific first:
+    ///
+    ///   1. `"<layer>.<key>"` in the active app mode's chain — this app, in this layer.
+    ///   2. `key` among the layer mode's OWN bindings — any app, in this layer.
+    ///   3. `key` in the active app mode's chain — this app, WITHOUT the layer.
+    ///
+    /// Step 3 is the point: a layer is a modifier, not a separate keyboard. A key the layer says
+    /// nothing about keeps doing whatever it does unlayered, IN THE CURRENT APP — holding the layer
+    /// must never turn a bound key into a dead one. Before this existed, holding L1 in a terminal
+    /// left the Back button dead, because `global` binds nothing there and the terminal's own
+    /// `repeatKey` was never consulted.
+    ///
+    /// Step 2 deliberately does NOT walk the layer mode's inherits chain. Layer modes are declared
+    /// as `"L1": { "inherits": "global" }`, so walking it would answer with GLOBAL's base binding
+    /// and shadow step 3's app-specific one — the exact bug described above.
+    private func site(_ key: String) -> Site? {
+        guard let layer = activeLayer else {
+            guard let action = engine.resolve(key) else { return nil }
+            return Site(action: action, presentation: engine.resolvePresentation(key))
+        }
+        let namespaced = "\(layer).\(key)"
+        if let action = engine.resolve(namespaced) {
+            return Site(action: action, presentation: engine.resolvePresentation(namespaced))
+        }
+        if let action = engine.resolveOwn(key, in: layer) {
+            return Site(action: action, presentation: engine.resolveOwnPresentation(key, in: layer))
+        }
+        guard let action = engine.resolve(key) else { return nil }
+        return Site(action: action, presentation: engine.resolvePresentation(key))
+    }
+
+    private func resolve(_ key: String) -> Action? { site(key)?.action }
+
+    /// Display overrides for `key`, taken from the very binding `resolve` would fire.
     public func resolvedPresentation(for key: String) -> Config.Presentation? {
-        guard let layer = activeLayer else { return engine.resolvePresentation(key) }
-        return engine.resolvePresentation("\(layer).\(key)") ?? engine.resolvePresentation(key, in: layer)
+        site(key)?.presentation
     }
 
     /// Resolve and dispatch. Returns `true` if a binding matched (action dispatched or mode

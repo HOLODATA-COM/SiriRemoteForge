@@ -25,6 +25,22 @@ public final class MappingEngine {
         return nil
     }
 
+    /// Look up `eventKey` in exactly ONE mode, WITHOUT walking its inherits chain.
+    ///
+    /// Layer resolution needs this. A layer mode is usually declared as `"L1": { "inherits":
+    /// "global" }`, so walking its chain would answer with `global`'s base binding for any key the
+    /// layer does not define — shadowing the CURRENT app's base binding, which is what an unbound
+    /// layer key should actually fall through to. See `Controller.site`.
+    public func resolveOwn(_ eventKey: String, in modeName: String) -> Action? {
+        config.modes[modeName]?.bindings[eventKey]
+    }
+
+    /// Presentation declared by exactly ONE mode, without walking its inherits chain — the
+    /// presentation counterpart of `resolveOwn`.
+    public func resolveOwnPresentation(_ eventKey: String, in modeName: String) -> Config.Presentation? {
+        config.modes[modeName]?.presentation[eventKey]
+    }
+
     /// Presentation for `eventKey`, resolved along the SAME inherits chain as `resolve` so the
     /// label/icon always belong to the binding that would actually fire.
     public func resolvePresentation(_ eventKey: String) -> Config.Presentation? {

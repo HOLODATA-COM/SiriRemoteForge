@@ -175,4 +175,76 @@ final class ControllerTests: XCTestCase {
         c.reload(config: try ConfigLoader.load(cfg2))
         XCTAssertFalse(c.handle(InputEvent(key: "button.tv")))   // no longer bound
     }
+
+    // MARK: - A layer is a modifier, not a separate keyboard
+
+    // A key the layer says nothing about must keep doing what it does UNLAYERED, in the CURRENT
+    // app. Holding a layer must never turn a bound key into a dead one.
+    private let layerFallbackCfg = """
+    { "settings": { "defaultMode": "global" },
+      "appProfiles": { "dev.warp.Warp-Stable": "terminal", "default": "global" },
+      "modes": {
+        "global":   { "ring.up":    { "action": "keystroke", "keys": "up" },
+                      "L1.ring.up": { "action": "keystroke", "keys": "cmd+up" },
+                      "ring.left":  { "action": "keystroke", "keys": "left",
+                                      "label": "Left" } },
+        "terminal": { "inherits": "global",
+                      "button.menu": { "action": "repeatKey", "keys": "delete",
+                                       "delay": 0.3, "interval": 0.045 },
+                      "ring.left":   { "action": "keystroke", "keys": "cmd+shift+left",
+                                       "label": "Prev Tab" } },
+        "L1":       { "inherits": "global",
+                      "button.siri": { "action": "keystroke", "keys": "f1" } }
+      } }
+    """
+
+    private func layerFallbackController() throws -> Controller {
+        try makeController(layerFallbackCfg, SpyExecutor())
+    }
+
+    func testLayerFallsBackToCurrentAppsBaseBinding() throws {
+        let c = try layerFallbackController()
+        c.frontmostAppChanged(bundleID: "dev.warp.Warp-Stable")
+        let repeatDelete = Action.repeatKey(keys: "delete", delay: 0.3, interval: 0.045)
+        XCTAssertEqual(c.resolvedAction(for: "button.menu"), repeatDelete)
+        // L1 says nothing about this key. "global" binds nothing there either, so before the
+        // fallback existed the Back button went DEAD while the layer was held.
+        c.pushLayer("L1")
+        XCTAssertEqual(c.resolvedAction(for: "button.menu"), repeatDelete)
+        XCTAssertTrue(c.hasBinding(for: "button.menu"))
+    }
+
+    func testLayerModeInheritsDoesNotShadowTheAppsBaseBinding() throws {
+        let c = try layerFallbackController()
+        c.frontmostAppChanged(bundleID: "dev.warp.Warp-Stable")
+        c.pushLayer("L1")
+        // "L1" declares `"inherits": "global"`. Walking that chain would answer with GLOBAL's
+        // plain "left" and shadow the terminal's own tab switch. It must not.
+        XCTAssertEqual(c.resolvedAction(for: "ring.left"), .keystroke(keys: "cmd+shift+left"))
+    }
+
+    func testNamespacedLayerBindingStillWinsOverTheFallback() throws {
+        let c = try layerFallbackController()
+        c.pushLayer("L1")
+        XCTAssertEqual(c.resolvedAction(for: "ring.up"), .keystroke(keys: "cmd+up"))
+        c.popLayer()
+        XCTAssertEqual(c.resolvedAction(for: "ring.up"), .keystroke(keys: "up"))
+    }
+
+    func testLayerModesOwnBindingBeatsTheFallback() throws {
+        let c = try layerFallbackController()
+        c.frontmostAppChanged(bundleID: "dev.warp.Warp-Stable")
+        c.pushLayer("L1")
+        // Bound only inside the "L1" mode itself → an app-agnostic layer binding.
+        XCTAssertEqual(c.resolvedAction(for: "button.siri"), .keystroke(keys: "f1"))
+    }
+
+    func testPresentationComesFromTheBindingThatActuallyFires() throws {
+        let c = try layerFallbackController()
+        c.frontmostAppChanged(bundleID: "dev.warp.Warp-Stable")
+        c.pushLayer("L1")
+        // Falls through to the terminal's own ring.left, so it must carry THAT binding's label —
+        // not global's "Left", which belongs to a different binding of the same key.
+        XCTAssertEqual(c.resolvedPresentation(for: "ring.left")?.label, "Prev Tab")
+    }
 }
