@@ -48,7 +48,11 @@ The project is a native macOS menu-bar controller for a 3rd-generation USB-C Sir
 - Outer-ring circular scrolling and swipe/two-finger-tap recognition.
 - Per-app profiles with inheritance.
 - Layer × app composition; a layer button supports both sticky tap-to-toggle and momentary hold.
+  A layer is a MODIFIER, not a second keyboard — see "Layer resolution" below.
 - macOS-style HUD when a layer is enabled or disabled.
+- Hold-progress HUD: while a button with hold bindings is held, a card shows a filling track, a tick
+  per bound stage, and the name/icon of the action that runs if released now. Stage 0 shows the
+  ordinary tap, because releasing early fires it — it is a choice, not a cancel.
 - Double-tap disambiguation, three release-to-select hold stages, and synthetic hold-to-repeat.
 - Animated Space switching through BetterTouchTool action IDs 113/114 where configured.
 - Cursor shake highlight.
@@ -83,6 +87,54 @@ The current personal mapping is defined by `~/.config/siriremote/config.jsonc`. 
 - Browser base ring-left/right switch tabs; in L1 they become plain arrows.
 - Terminal Back repeats Delete while held.
 - Music uses AppleScript for previous/next, play/pause, and mute.
+
+
+### Layer resolution
+
+While layer `L` is held, key `K` resolves most-specific-first:
+
+1. `"L.K"` in the active app mode's `inherits` chain — this app, in this layer.
+2. `"K"` among mode `L`'s **own** bindings — any app, in this layer.
+3. `"K"` in the active app mode's `inherits` chain — this app, **without** the layer.
+
+Step 3 is why holding a layer never deadens a bound key. It was added after holding `L1` in a
+terminal left the Back button doing nothing: `terminal` binds it to `repeatKey delete`, `global`
+binds it not at all, and resolution used to fall back through the LAYER mode's `inherits` chain —
+which lands on `global`, never on the app's own binding.
+
+Step 2 deliberately does not walk mode `L`'s `inherits`. Layer modes are written as
+`"L1": { "inherits": "global" }`, so following it would answer with `global`'s base binding and
+shadow step 3's app-specific one — the original bug.
+
+There is no fourth step for "any app, without the layer". Steps 1 and 3 walk the *app* mode's
+`inherits` chain, and that is what reaches `global`. Keeping it there rather than hard-wiring a
+global fallback is what lets a mode opt out: a mode with no `inherits` is standalone and sees
+nothing else, layered or not. All four cells of the app × layer matrix are pinned by tests in
+`ControllerTests`.
+
+`Controller.site(_:)` returns the action and its presentation together, so a label/icon can never be
+taken from a different binding that merely shares the key.
+
+### Presentation (`label` / `icon`)
+
+Display-only keys on any binding, used by the hold-progress HUD. Resolution order in
+`ActionVisual`: config `label`/`icon` → the real app icon for an action that OPENS an app (`launch`,
+`shell` of the form `open -a "X"`; shown alone, without a label) → the real app icon for an action
+AIMED at an app (`applescript` containing `tell application "X"`; shown beside the label) → an SF
+Symbol per action kind.
+
+Presentation inherits down the mode chain **independently of the binding, field by field**. A key
+keeps its identity even where a mode re-binds it, so `label`/`icon` are set once in `global` and an
+app mode that overrides only the action still shows the same name and icon. This was a bug fix:
+Play/Pause showed a generic AppleScript scroll icon whenever Apple Music was frontmost, because the
+`music` mode re-binds that button and presentation used to stop at the mode owning the binding.
+
+HUD icon geometry is measured, not assumed: the icon is centred on the label's cap-height box using
+AppKit's own `firstBaselineOffsetFromTop` (reconstructing the line box from ascender/descender put
+it visibly low), and sized by HEIGHT with the width following the image's aspect ratio (symbols are
+not square — `playpause.fill` is 40x22, and fitting it into a square box rendered it at half the
+height of a square symbol). `--test-hold-hud` holds each stage far longer than the real thresholds
+so it can actually be screenshotted; app launch latency makes the real ones unhittable.
 
 ## Build and run
 

@@ -213,10 +213,54 @@ Bind a key to `{ "action": "layer", "to": "L1" }`. That key becomes a **layer ke
 - **Tap** it → toggle layer `L1` *sticky* on/off (persists until tapped again).
 - **Hold** it and press other keys → *momentary* `L1` (active only while held).
 
-While a layer is active, a key `K` resolves to **`"L1.K"` in the current app mode first** — so the
-same layer does different things per app — then falls back to the standalone `L1` mode. Example:
-`L1.ring.left` = `cmd+shift+left` in `global` (the default), but `cmd+opt+left` in `browser`. Keep a
-marker mode `"L1": { "inherits": "global" }` so the layer exists and unbound keys pass through.
+**A layer is a modifier, not a second keyboard.** Holding one never turns a bound key into a dead
+key: a key the layer says nothing about keeps doing whatever it does unlayered, *in the current app*.
+
+While layer `L` is held, key `K` resolves most-specific-first:
+
+| # | Lookup | Means |
+|---|--------|-------|
+| 1 | `"L.K"` in the active app mode's `inherits` chain | this app, in this layer |
+| 2 | `"K"` among mode `L`'s **own** bindings | any app, in this layer |
+| 3 | `"K"` in the active app mode's `inherits` chain | this app, **without** the layer |
+
+Example: `L1.ring.left` = `cmd+shift+left` in `global` (the default) but `cmd+opt+left` in `browser`
+(step 1); `terminal` binds `button.menu` to `repeatKey delete` and says nothing about it in `L1`, so
+holding `L1` in a terminal still deletes (step 3).
+
+Two consequences worth knowing:
+
+- **There is no fourth step for "any app, without the layer."** Steps 1 and 3 walk the *app* mode's
+  `inherits` chain, and that is what reaches `global` — a key bound only in `global`'s base still
+  resolves under a layer inside `terminal`, because `terminal` inherits `global`. Keeping this in
+  `inherits` instead of hard-wiring a global fallback is what lets a mode opt out: a mode written
+  without `inherits` is standalone and genuinely sees nothing else, layered or not. The flip side is
+  that an app mode that forgets `"inherits": "global"` will only answer for the keys it lists.
+- **Step 2 does not follow mode `L`'s own `inherits`.** Layer modes are written as
+  `"L1": { "inherits": "global" }`, so following it would answer with `global`'s *base* binding and
+  shadow step 3's app-specific one. Put app-agnostic layer bindings directly in the `L1` mode; they
+  are step 2. Keep the marker mode so the layer exists.
+
+### Labels and icons
+
+Any binding may carry `label` and `icon`. They change nothing about what runs — they are how the
+hold-progress HUD names the action you'd get by releasing right now.
+
+```jsonc
+"button.power.hold": { "action": "shell", "command": "pmset sleepnow",
+                       "label": "Sleep", "icon": "moon.fill" },
+```
+
+`icon` is an SF Symbol name, and is usually unnecessary: an action that **opens** an app shows that
+app's real icon *instead of* a label (`launch`, and `shell` commands written as `open -a "Some App"`),
+and an action **aimed at** an app (`applescript` containing `tell application "X"`) shows that app's
+icon *beside* its label. Otherwise a symbol is picked from the action kind.
+
+**Presentation inherits down the mode chain on its own, field by field, independently of the
+binding.** A key keeps its identity even where a mode re-binds it, so set `label`/`icon` once in
+`global` and an app mode that overrides only the *action* still shows the same name and icon — no
+duplication to drift out of sync. A mode that genuinely presents a key differently just says so, and
+the nearer mode wins.
 
 ### Settings (tuning)
 
