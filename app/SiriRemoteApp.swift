@@ -105,9 +105,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Covers all three presentations: a shell `open -a` (real app icon), a `launch`
             // (real app icon), and a command given an explicit label + symbol in config.
             let demo: [(TimeInterval, Action, Config.Presentation?)] = [
-                (0.5, .shell(command: "open -a 'Mission Control'"), nil),
-                (1.0, .launch(app: "Music", url: nil), nil),
-                (1.6, .shell(command: "pmset sleepnow"),
+                // Stretched well past the real thresholds: each stage has to stay put long enough
+                // to be screenshotted, and app launch latency makes short windows unhittable.
+                (2.0, .shell(command: "open -a 'Mission Control'"), nil),
+                (3.5, .launch(app: "Music", url: nil), nil),
+                (5.0, .shell(command: "pmset sleepnow"),
                       Config.Presentation(label: "Sleep", icon: "moon.fill")),
             ]
             func face(_ a: Action, _ p: Config.Presentation?) -> HoldProgressHUD.Face {
@@ -115,10 +117,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return .init(label: v.label, image: v.image, iconOnly: v.iconOnly)
             }
             // Unlabelled AppleScript aimed at an app — should show Music's real icon, WITH a label.
-            hud.begin(base: face(.applescript(script: "tell application \"Music\" to playpause"), nil),
+            hud.begin(base: face(.applescript(script: "tell application \"Music\" to playpause"),
+                                 Config.Presentation(label: "Play / Pause", icon: "playpause.fill")),
                       stages: demo.map { .init(threshold: $0.0, face: face($0.1, $0.2)) })
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { hud.end(firedStage: 3) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { exit(0) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { hud.end(firedStage: 3) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { exit(0) }
             return
         }
 

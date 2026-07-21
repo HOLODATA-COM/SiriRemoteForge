@@ -234,7 +234,13 @@ final class HoldProgressHUD {
         }
 
         title.isHidden = false
-        let iconW: CGFloat = image != nil ? 28 : 0
+        // Size the icon by HEIGHT, with the width following its own aspect ratio. Symbols are not
+        // square — `playpause.fill` is 40x22 — and fitting one into a square box renders it at
+        // barely half the height of a square symbol like `moon.fill`, so icons looked randomly
+        // sized. Matching heights is what makes them read as one set.
+        let iconH: CGFloat = image != nil ? 24 : 0
+        let aspect = (image?.size.height ?? 0) > 0 ? image!.size.width / image!.size.height : 1
+        let iconW: CGFloat = image != nil ? min((iconH * aspect).rounded(), 46) : 0
         let gap: CGFloat = image != nil ? 9 : 0
 
         let font = title.font ?? .systemFont(ofSize: 16, weight: .semibold)
@@ -245,16 +251,19 @@ final class HoldProgressHUD {
         let x = (cardW - groupW) / 2
         let textH: CGFloat = 30
 
-        // Centre the icon on the text's CAP-HEIGHT box rather than on its frame. A label's frame
-        // reserves descender room that a word like "Music" never uses, so frame-centring an icon
-        // that is twice the cap height leaves it sitting visibly low.
-        let lineH = font.ascender - font.descender
-        let baseline = (rowMidY - textH / 2) + (textH - lineH) / 2 - font.descender
-        let capCentre = baseline + font.capHeight / 2
-
-        iconView?.frame = NSRect(x: x, y: capCentre - iconW / 2, width: iconW, height: iconW)
         title.alignment = .left
         title.frame = NSRect(x: x + iconW + gap, y: rowMidY - textH / 2, width: textW, height: textH)
+
+        // Centre the icon on the text's CAP-HEIGHT box rather than on its frame: a label's frame
+        // reserves descender room that a word like "Music" never uses, so frame-centring an icon
+        // twice the cap height leaves it sitting visibly low.
+        //
+        // The baseline comes from AppKit rather than from ascender/descender arithmetic — a label
+        // does not lay its line out the way that reconstruction assumes, and guessing put the icon
+        // a few points under the text. Read it AFTER setting the frame.
+        let baseline = title.frame.maxY - title.firstBaselineOffsetFromTop
+        let capCentre = baseline + font.capHeight / 2
+        iconView?.frame = NSRect(x: x, y: capCentre - iconH / 2, width: iconW, height: iconH)
     }
 
     /// Vertical centre of the title/icon row, in card coordinates. Sits a clear gap above the
@@ -374,6 +383,10 @@ final class HoldProgressHUD {
 
         let icon = NSImageView(frame: NSRect(x: 0, y: cardH - 54, width: 28, height: 28))
         icon.imageScaling = .scaleProportionallyUpOrDown
+        // Symbols are template images, so this makes them carry the label's colour instead of the
+        // default grey — a mid-grey glyph beside near-black text reads as a mistake. Real app icons
+        // are not templates and are left in full colour, which is the point of showing them.
+        icon.contentTintColor = .labelColor
         icon.wantsLayer = true
         card.addSubview(icon)
 
