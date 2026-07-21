@@ -21,6 +21,8 @@ SWIFT_FILES=(
     "TouchHandler.swift"
     "CursorHighlighter.swift"
     "LayerHUD.swift"
+    "HoldProgressHUD.swift"
+    "ActionVisual.swift"
     # --- Settings UI (SwiftUI) ---
     "TuneSettings.swift"
     "SettingsModel.swift"

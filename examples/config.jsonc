@@ -73,7 +73,16 @@
       // NOTE: binding button.power at all requires turning off macOS's own power-button sleep, or
       // it will ALSO lock the Mac on every press. See "Required system setting if you bind the
       // Power button" in README.md — one `defaults write`, reversible.
-      "button.power.hold": { "action": "shell", "command": "pmset sleepnow" },
+      
+      // Any binding may carry `label` and `icon` purely for display — they change nothing about
+      // what runs. The hold-progress HUD uses them to say what you'd get by releasing now.
+      //   label : short name shown on the card. Defaults to the action itself, which reads badly
+      //           for shell commands ("pmset sleepnow"), so name those.
+      //   icon  : an SF Symbol name (see Apple's SF Symbols app). Usually unnecessary — an action
+      //           that opens an app already shows that app's REAL icon, including `shell` commands
+      //           written as `open -a "Some App"`. Otherwise a symbol is picked from the action kind.
+      "button.power.hold": { "action": "shell", "command": "pmset sleepnow",
+                             "label": "Sleep", "icon": "moon.fill" },
       // Play/Pause. The tap MUST stay bound whenever any variant below is bound: binding a
       // .double/.hold stage makes the app own this button and suppress the native media key, so
       // without this line a short press would do nothing at all.
@@ -126,8 +135,12 @@
       "inherits":        "global",
       "ring.left":       { "action": "applescript", "script": "tell application \"Music\" to previous track" },
       "ring.right":      { "action": "applescript", "script": "tell application \"Music\" to next track" },
-      "button.playPause":{ "action": "applescript", "script": "tell application \"Music\" to playpause" },
-      "button.mute":     { "action": "applescript", "script": "tell application \"Music\" to set mute to not mute" }
+      // `label`/`icon` matter most for actions like these: without them the HUD would have to
+      // show the whole AppleScript.
+      "button.playPause":{ "action": "applescript", "script": "tell application \"Music\" to playpause",
+                           "label": "Play / Pause", "icon": "playpause.fill" },
+      "button.mute":     { "action": "applescript", "script": "tell application \"Music\" to set mute to not mute",
+                           "label": "Mute", "icon": "speaker.slash.fill" }
     },
     // In a terminal (Warp), the Back button (button.menu) deletes a char; HOLDING it auto-repeats
     // delete (repeatKey) until release — the app generates the repeats (the remote won't).

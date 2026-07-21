@@ -88,6 +88,15 @@ class RemoteInputHandler {
     /// fired for the transient momentary hold (which would flash on every press/release).
     var onLayerToggle: ((_ on: Bool, _ layer: String) -> Void)?
 
+    /// Multi-stage hold progress, for the on-screen HUD. `onHoldBegan` carries every BOUND stage
+    /// with its threshold and a short label for the action it would run; `onHoldEnded` reports which
+    /// stage actually fired (0 = released before stage 1). Only emitted for buttons that have at
+    /// least one hold binding — there is nothing to choose between otherwise.
+    var onHoldBegan: ((_ base: (action: Action, presentation: Config.Presentation?)?,
+                       _ stages: [(threshold: TimeInterval, action: Action,
+                                   presentation: Config.Presentation?)]) -> Void)?
+    var onHoldEnded: ((_ firedStage: Int) -> Void)?
+
     /// Double-tap: if a `<key>.double` binding exists, the single is HELD for `doubleTapWindow` to
     /// see whether a 2nd tap arrives. A lone tap fires `<key>` only after the window elapses; a
     /// quick 2nd tap cancels that pending single and fires `<key>.double` instead — so a double-tap
@@ -674,13 +683,22 @@ class RemoteInputHandler {
             // Arm a timer for each BOUND hold stage; each only records the stage reached (it does
             // NOT fire — see `holdStageTimers`). If no stage is bound the tap completes on press.
             var items: [DispatchWorkItem] = []
-            for stage in 1...3 where controller.hasBinding(for: RemoteInputHandler.holdStageKey(tapKey, stage)) {
+            // Collected for the on-screen progress HUD: release-to-select is unusable if you cannot
+            // see which stage you are in, so the same stages that are armed here are what it shows.
+            var hudStages: [(threshold: TimeInterval, action: Action, presentation: Config.Presentation?)] = []
+            for stage in 1...3 {
+                let stageKey = RemoteInputHandler.holdStageKey(tapKey, stage)
+                guard controller.hasBinding(for: stageKey) else { continue }
                 let work = DispatchWorkItem { [weak self] in
                     guard let self = self else { return }
                     self.deepestStage[buttonName] = max(self.deepestStage[buttonName] ?? 0, stage)
                 }
                 items.append(work)
                 DispatchQueue.main.asyncAfter(deadline: .now() + holdStageThreshold(stage), execute: work)
+                if let stageAction = controller.resolvedAction(for: stageKey) {
+                    hudStages.append((holdStageThreshold(stage), stageAction,
+                                      controller.resolvedPresentation(for: stageKey)))
+                }
             }
             guard !items.isEmpty else {
                 // No `.hold*` binding → the tap completes on press: fire the single immediately
@@ -692,11 +710,17 @@ class RemoteInputHandler {
             }
             deepestStage[buttonName] = 0
             holdStageTimers[buttonName] = items
+            // Stage 0 is the ordinary tap — releasing early fires it (see the release branch).
+            let base = controller.resolvedAction(for: tapKey).map {
+                (action: $0, presentation: controller.resolvedPresentation(for: tapKey))
+            }
+            onHoldBegan?(base, hudStages)
         } else {
             // Release-to-select: cancel remaining stage timers, then fire the deepest stage reached.
             guard let items = holdStageTimers.removeValue(forKey: buttonName) else { return }
             items.forEach { $0.cancel() }
             let reached = deepestStage.removeValue(forKey: buttonName) ?? 0
+            onHoldEnded?(reached)
             if reached >= 1 {
                 fireHoldStage(controller: controller, tapKey: tapKey, reached: reached)
             } else {

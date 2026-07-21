@@ -42,6 +42,12 @@ public final class Controller {
         return engine.resolve("\(layer).\(key)") ?? engine.resolve(key, in: layer)
     }
 
+    /// Display overrides for `key`, resolved through the same layer/app chain as `resolve`.
+    public func resolvedPresentation(for key: String) -> Config.Presentation? {
+        guard let layer = activeLayer else { return engine.resolvePresentation(key) }
+        return engine.resolvePresentation("\(layer).\(key)") ?? engine.resolvePresentation(key, in: layer)
+    }
+
     /// Resolve and dispatch. Returns `true` if a binding matched (action dispatched or mode
     /// switched), `false` if the active mode has no binding for this event — letting the caller
     /// fall back to native behavior. While a layer is active, resolves against the layer instead.

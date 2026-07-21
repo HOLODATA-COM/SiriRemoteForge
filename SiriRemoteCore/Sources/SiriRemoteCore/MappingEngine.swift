@@ -25,6 +25,25 @@ public final class MappingEngine {
         return nil
     }
 
+    /// Presentation for `eventKey`, resolved along the SAME inherits chain as `resolve` so the
+    /// label/icon always belong to the binding that would actually fire.
+    public func resolvePresentation(_ eventKey: String) -> Config.Presentation? {
+        resolvePresentation(eventKey, in: activeMode)
+    }
+
+    public func resolvePresentation(_ eventKey: String, in modeName: String) -> Config.Presentation? {
+        var name: String? = modeName
+        var visited = Set<String>()
+        while let current = name, !visited.contains(current), let mode = config.modes[current] {
+            visited.insert(current)
+            // Stop at the mode that owns the BINDING, so an override in a nearer mode without a
+            // label does not fall through and pick up a farther mode's label.
+            if mode.bindings[eventKey] != nil { return mode.presentation[eventKey] }
+            name = mode.inherits
+        }
+        return nil
+    }
+
     /// Frontmost app changed: reset active mode to that app's configured mode (or default).
     public func applyApp(bundleID: String) {
         activeMode = config.appProfiles[bundleID]

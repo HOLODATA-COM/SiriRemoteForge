@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var touchHandler: TouchHandler?
     private var cursorHighlighter: CursorHighlighter?
     private var layerHUD: LayerHUD?
+    private var holdHUD: HoldProgressHUD?
     /// Last connection state the HUD reflected — nil until the first callback, so the initial
     /// connect still announces itself. Guards against one physical connect showing several cards.
     private var lastConnectedState: Bool?
@@ -90,6 +91,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             layerHUD = hud
             hud.showRemoteConnected()
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { hud.showRemoteDisconnected() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { exit(0) }
+            return
+        }
+
+        // Headless visual QC: `--test-hold-hud` runs a hold from 0 through every stage so the
+        // progress card can be screenshotted, then exits — without seizing the remote. Uses real
+        // actions so the icon resolution (app icons vs SF Symbols) is exercised too.
+        if CommandLine.arguments.contains("--test-hold-hud") {
+            NSApp.setActivationPolicy(.accessory)
+            let hud = HoldProgressHUD()
+            holdHUD = hud
+            // Covers all three presentations: a shell `open -a` (real app icon), a `launch`
+            // (real app icon), and a command given an explicit label + symbol in config.
+            let demo: [(TimeInterval, Action, Config.Presentation?)] = [
+                (0.5, .shell(command: "open -a 'Mission Control'"), nil),
+                (1.0, .launch(app: "Music", url: nil), nil),
+                (1.6, .shell(command: "pmset sleepnow"),
+                      Config.Presentation(label: "Sleep", icon: "moon.fill")),
+            ]
+            func face(_ a: Action, _ p: Config.Presentation?) -> HoldProgressHUD.Face {
+                let v = ActionVisual.resolve(a, p)
+                return .init(label: v.label, image: v.image, iconOnly: v.iconOnly)
+            }
+            hud.begin(base: face(.media(key: "playpause"), nil),
+                      stages: demo.map { .init(threshold: $0.0, face: face($0.1, $0.2)) })
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { hud.end(firedStage: 3) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { exit(0) }
             return
         }
@@ -217,6 +244,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         remoteInputHandler?.onLayerToggle = { on, name in
             on ? hud.showOn(name) : hud.showOff(name)
         }
+
+        // Release-to-select needs to be visible: a track that fills while a button is held, with a
+        // tick per bound stage and the name of the action that runs if it is released right now.
+        let progress = HoldProgressHUD()
+        holdHUD = progress
+        remoteInputHandler?.onHoldBegan = { base, stages in
+            func face(_ action: Action, _ p: Config.Presentation?) -> HoldProgressHUD.Face {
+                let v = ActionVisual.resolve(action, p)
+                return .init(label: v.label, image: v.image, iconOnly: v.iconOnly)
+            }
+            progress.begin(base: base.map { face($0.action, $0.presentation) },
+                           stages: stages.map {
+                               .init(threshold: $0.threshold, face: face($0.action, $0.presentation))
+                           })
+        }
+        remoteInputHandler?.onHoldEnded = { fired in progress.end(firedStage: fired) }
 
         cursorHighlighter = CursorHighlighter()
         touchHandler?.onShake = { [weak self] in

@@ -36,9 +36,27 @@ public struct Config: Equatable {
     public struct Mode: Equatable {
         public var inherits: String?
         public var bindings: [String: Action]
-        public init(inherits: String?, bindings: [String: Action]) {
+        /// Optional display overrides, keyed by the SAME event key as `bindings`. Kept parallel
+        /// rather than folded into `Action` so every existing consumer of `bindings` is untouched:
+        /// this is presentation, and nothing that dispatches an action needs to know about it.
+        public var presentation: [String: Presentation]
+        public init(inherits: String?, bindings: [String: Action],
+                    presentation: [String: Presentation] = [:]) {
             self.inherits = inherits
             self.bindings = bindings
+            self.presentation = presentation
+        }
+    }
+
+    /// How a binding should be shown on screen (the hold-progress HUD, the Layout tab).
+    /// `label` overrides the derived `Action.displayLabel`; `icon` is an SF Symbol name.
+    /// Both optional — everything still falls back to sensible derivation.
+    public struct Presentation: Equatable {
+        public var label: String?
+        public var icon: String?
+        public init(label: String? = nil, icon: String? = nil) {
+            self.label = label
+            self.icon = icon
         }
     }
 }
@@ -210,15 +228,21 @@ extension Config.Mode: Decodable {
         let c = try decoder.container(keyedBy: DynamicKey.self)
         var inherits: String? = nil
         var bindings: [String: Action] = [:]
+        var presentation: [String: Config.Presentation] = [:]
         for key in c.allKeys {
             if key.stringValue == "inherits" {
                 inherits = try c.decode(String.self, forKey: key)
             } else {
                 bindings[key.stringValue] = try c.decode(Action.self, forKey: key)
+                // `label` / `icon` live alongside `action` in the same object, so they are read
+                // from the same container; absent keys simply leave no entry here.
+                let p = try c.decode(Config.Presentation.self, forKey: key)
+                if p.label != nil || p.icon != nil { presentation[key.stringValue] = p }
             }
         }
         self.inherits = inherits
         self.bindings = bindings
+        self.presentation = presentation
     }
 }
 
@@ -265,7 +289,40 @@ extension Config.Mode: Encodable {
             try c.encode(inherits, forKey: DynamicKey(stringValue: "inherits"))
         }
         for (key, action) in bindings {
-            try c.encode(action, forKey: DynamicKey(stringValue: key))
+            let dk = DynamicKey(stringValue: key)
+            if let p = presentation[key] {
+                try c.encode(BindingWithPresentation(action: action, presentation: p), forKey: dk)
+            } else {
+                try c.encode(action, forKey: dk)
+            }
         }
+    }
+}
+
+extension Config.Presentation: Decodable {
+    private enum K: String, CodingKey { case label, icon }
+    public init(from decoder: Decoder) throws {
+        // A binding object may legitimately have neither key; that is not an error.
+        guard let c = try? decoder.container(keyedBy: K.self) else {
+            label = nil; icon = nil; return
+        }
+        label = try c.decodeIfPresent(String.self, forKey: .label)
+        icon  = try c.decodeIfPresent(String.self, forKey: .icon)
+    }
+}
+
+/// Writes `action` and its display overrides FLAT into one object, so a round-tripped config keeps
+/// `label`/`icon` sitting next to `action` exactly as a human would write them.
+private struct BindingWithPresentation: Encodable {
+    let action: Action
+    let presentation: Config.Presentation
+
+    private enum K: String, CodingKey { case label, icon }
+
+    func encode(to encoder: Encoder) throws {
+        try action.encode(to: encoder)          // emits {"action": …, params…}
+        var c = encoder.container(keyedBy: K.self)
+        try c.encodeIfPresent(presentation.label, forKey: .label)
+        try c.encodeIfPresent(presentation.icon, forKey: .icon)
     }
 }
