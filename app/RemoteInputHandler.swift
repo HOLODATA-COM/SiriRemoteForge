@@ -654,6 +654,8 @@ class RemoteInputHandler {
                 // No `.hold*` binding → the tap completes on press: fire the single immediately
                 // (no added latency), or a `.double` if this is a quick 2nd tap.
                 fireTapOrDouble(buttonName, tapKey: tapKey)
+                // …and holding it now auto-repeats, since nothing else claims the hold.
+                startAutoRepeatIfEligible(buttonName, tapKey: tapKey)
                 return
             }
             deepestStage[buttonName] = 0
@@ -731,6 +733,53 @@ class RemoteInputHandler {
     /// path so it's logged like any dispatch), then after `delay` repeats every `interval` on the
     /// main queue until `stopKeyRepeat`. Repeats call `Keys.synthesize` directly to avoid
     /// re-resolving the binding every tick.
+    /// How long a button must be held before it starts auto-repeating. Deliberately the same as
+    /// stage-1 hold, so the rule is one idea: hold past the hold threshold and either a `.hold`
+    /// binding fires, or — if there is none — the key repeats.
+    private var autoRepeatDelay: TimeInterval { holdThreshold }
+    /// ~16 repeats/second once it starts, roughly matching the system key-repeat feel.
+    private let autoRepeatInterval: TimeInterval = 0.06
+
+    /// Hold-to-repeat for keys that never asked for it: if a button has a tap binding and no
+    /// `.hold*` binding, nothing else claims the hold, so holding it repeats the tap.
+    ///
+    /// Restricted to actions where repeating is *meaningful and harmless* — a real keystroke or a
+    /// media key. Repeating the others would be actively wrong: `applescript`/`shell` would re-run
+    /// a side effect dozens of times (a bound Mute toggle would flap on and off), `launch` would
+    /// reopen an app, `mode`/`layer` would thrash the active layer, `brightness` would re-set the
+    /// same value. A modifier-only chord ("hyperkey") is excluded too: it has no main key, so it is
+    /// held rather than tapped, and repeating it means nothing.
+    ///
+    /// Opting out is already possible without new config: bind any `.hold` stage to the button and
+    /// that claims the hold instead.
+    private func startAutoRepeatIfEligible(_ buttonName: String, tapKey: String) {
+        guard let controller = controller,
+              let action = controller.resolvedAction(for: tapKey) else { return }
+
+        switch action {
+        case .keystroke(let keys):
+            // mainKey == nil ⇒ modifier-only chord; there is no key to repeat.
+            guard KeyMap.parse(keys)?.mainKey != nil else { return }
+        case .media:
+            break
+        default:
+            return
+        }
+
+        stopKeyRepeat(buttonName)   // never stack two repeats on one button
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + autoRepeatDelay, repeating: autoRepeatInterval)
+        // Re-dispatch through the controller rather than synthesizing directly, so each repeat
+        // resolves against the CURRENT mode/layer — holding a key while the frontmost app changes
+        // then does the right thing instead of replaying a stale keystroke.
+        timer.setEventHandler { [weak self] in
+            guard let self = self, let controller = self.controller else { return }
+            _ = controller.handle(InputEvent(key: tapKey))
+        }
+        repeatTimers[buttonName] = timer
+        timer.resume()
+    }
+
     private func startKeyRepeat(_ buttonName: String, tapKey: String, keys: String,
                                 delay: Double, interval: Double) {
         stopKeyRepeat(buttonName)   // defensive: never stack two repeats on one button
