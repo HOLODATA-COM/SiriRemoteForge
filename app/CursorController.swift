@@ -24,6 +24,62 @@ class CursorController {
     /// previous gesture doesn't carry over).
     func resetMoveAccumulator() { accumX = 0; accumY = 0 }
 
+    // Cached display rects, in the same global top-left-origin space as event locations. Read from
+    // the multitouch callback thread, refreshed on the main thread when displays change.
+    private let displayLock = NSLock()
+    private var displayBounds: [CGRect] = []
+    private var screenObserver: NSObjectProtocol?
+
+    init() {
+        refreshDisplayBounds()
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main) { [weak self] _ in self?.refreshDisplayBounds() }
+    }
+
+    deinit {
+        if let observer = screenObserver { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    private func refreshDisplayBounds() {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(16, &ids, &count) == .success else { return }
+        let rects = ids.prefix(Int(count)).map { CGDisplayBounds($0) }
+        displayLock.lock()
+        displayBounds = Array(rects)
+        displayLock.unlock()
+    }
+
+    /// Keep a move target on a real display.
+    ///
+    /// `CGEvent(source: nil).location` reports the last position we POSTED, not where the cursor
+    /// actually came to rest. macOS clamps the cursor to the desktop, but that clamp is invisible
+    /// from here — so pushing into an edge walks the reported position further and further
+    /// off-screen, and moving back has to pay off that invisible debt before anything visibly
+    /// moves. Clamping the target ourselves keeps the reported position and the real cursor in
+    /// agreement, so an edge stops the cursor dead and it leaves the edge on the very first move.
+    ///
+    /// A target that already lands on some display is left alone — that is how the cursor crosses
+    /// between monitors. Only a target on no display at all gets pulled back, into whichever
+    /// display the cursor is currently on.
+    private func clampToDisplays(_ target: CGPoint, from current: CGPoint) -> CGPoint {
+        displayLock.lock()
+        let rects = displayBounds
+        displayLock.unlock()
+        guard !rects.isEmpty else { return target }
+        if rects.contains(where: { $0.contains(target) }) { return target }
+
+        let home = rects.first(where: { $0.contains(current) }) ?? rects.min {
+            hypot(current.x - $0.midX, current.y - $0.midY)
+                < hypot(current.x - $1.midX, current.y - $1.midY)
+        }
+        guard let r = home else { return target }
+        // maxX/maxY are exclusive: a point exactly on them is already off the display.
+        return CGPoint(x: min(max(target.x, r.minX), r.maxX - 1),
+                       y: min(max(target.y, r.minY), r.maxY - 1))
+    }
+
     // Double/triple-click tracking: macOS only recognizes a multi-click when the click-state
     // field is 2/3 on clicks within the system double-click interval.
     private var lastClickTime: TimeInterval = 0
@@ -34,7 +90,7 @@ class CursorController {
     /// Move the cursor by an already-scaled delta (pixels). Thread-safe: reads the position and
     /// posts the move via CoreGraphics only, so it can run directly on the multitouch callback
     /// thread with NO main-thread hop (that hop was the main source of cursor stutter). Sub-pixel
-    /// deltas accumulate into whole-pixel steps, and macOS clamps the target to the visible area.
+    /// deltas accumulate into whole-pixel steps, and `clampToDisplays` keeps the target on-screen.
     func moveCursor(deltaX: CGFloat, deltaY: CGFloat) {
         accumX += deltaX
         accumY += deltaY
@@ -44,10 +100,9 @@ class CursorController {
         accumX -= moveX
         accumY -= moveY
 
-        // Current position in global Quartz coords (top-left origin). Reading the live position each
-        // frame lets macOS's own edge-clamping keep us on-screen with no drift.
+        // Current position in global Quartz coords (top-left origin).
         let pos = CGEvent(source: nil)?.location ?? .zero
-        let target = CGPoint(x: pos.x + moveX, y: pos.y + moveY)
+        let target = clampToDisplays(CGPoint(x: pos.x + moveX, y: pos.y + moveY), from: pos)
 
         let eventType: CGEventType = isDragging ? .leftMouseDragged : .mouseMoved
         guard let event = CGEvent(mouseEventSource: nil, mouseType: eventType,
