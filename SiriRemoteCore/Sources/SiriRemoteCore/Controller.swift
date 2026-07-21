@@ -57,6 +57,12 @@ public final class Controller {
     /// Step 2 deliberately does NOT walk the layer mode's inherits chain. Layer modes are declared
     /// as `"L1": { "inherits": "global" }`, so walking it would answer with GLOBAL's base binding
     /// and shadow step 3's app-specific one — the exact bug described above.
+    ///
+    /// There is no fourth step for "any app, without the layer". Steps 1 and 3 walk the app mode's
+    /// `inherits` chain, which is what reaches `global` — so a key bound only in global's base
+    /// still resolves under a layer in a terminal. Keeping that in `inherits` rather than hard-wiring
+    /// a global fallback is what lets a mode opt out: a mode with no `inherits` is standalone and
+    /// genuinely sees nothing else, layered or not.
     private func site(_ key: String) -> Site? {
         guard let layer = activeLayer else {
             guard let action = engine.resolve(key) else { return nil }

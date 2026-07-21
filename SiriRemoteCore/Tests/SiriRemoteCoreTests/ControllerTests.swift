@@ -247,4 +247,74 @@ final class ControllerTests: XCTestCase {
         // not global's "Left", which belongs to a different binding of the same key.
         XCTAssertEqual(c.resolvedPresentation(for: "ring.left")?.label, "Prev Tab")
     }
+
+    // The four cells of "app x layer". 1 and 3 walk the app's inherits chain, so the two
+    // "any app" cells are reached THROUGH that chain rather than as extra steps — which is why a
+    // mode that does not inherit global does not see global, by design.
+    private let quadrantCfg = """
+    { "settings": { "defaultMode": "global" },
+      "appProfiles": { "dev.warp.Warp-Stable": "terminal", "loner": "island", "default": "global" },
+      "modes": {
+        "global":   { "ring.up":      { "action": "keystroke", "keys": "up" },
+                      "L1.ring.up":   { "action": "keystroke", "keys": "cmd+up" },
+                      "ring.down":    { "action": "keystroke", "keys": "down" },
+                      "L1.ring.down": { "action": "keystroke", "keys": "cmd+down" } },
+        "terminal": { "inherits": "global",
+                      "ring.up":      { "action": "keystroke", "keys": "ctrl+up" },
+                      "L1.ring.up":   { "action": "keystroke", "keys": "opt+up" } },
+        "island":   { "ring.left":    { "action": "keystroke", "keys": "left" } },
+        "L1":       {}
+      } }
+    """
+
+    func testCellThisAppThisLayer() throws {
+        let c = try makeController(quadrantCfg, SpyExecutor())
+        c.frontmostAppChanged(bundleID: "dev.warp.Warp-Stable")
+        c.pushLayer("L1")
+        XCTAssertEqual(c.resolvedAction(for: "ring.up"), .keystroke(keys: "opt+up"))
+    }
+
+    func testCellAnyAppThisLayerReachedThroughInherits() throws {
+        let c = try makeController(quadrantCfg, SpyExecutor())
+        c.frontmostAppChanged(bundleID: "dev.warp.Warp-Stable")
+        c.pushLayer("L1")
+        // "L1.ring.down" exists only in global; terminal inherits global, so step 1 finds it.
+        XCTAssertEqual(c.resolvedAction(for: "ring.down"), .keystroke(keys: "cmd+down"))
+    }
+
+    func testCellThisAppNoLayer() throws {
+        let c = try makeController(quadrantCfg, SpyExecutor())
+        c.frontmostAppChanged(bundleID: "dev.warp.Warp-Stable")
+        XCTAssertEqual(c.resolvedAction(for: "ring.up"), .keystroke(keys: "ctrl+up"))
+    }
+
+    // The cell the four-way question is really about: a key bound ONLY in global's base, with an
+    // app mode active and a layer held. Step 3 walks the app's inherits chain into global.
+    func testCellAnyAppNoLayerReachedThroughInherits() throws {
+        let cfg = """
+        { "settings": { "defaultMode": "global" },
+          "appProfiles": { "dev.warp.Warp-Stable": "terminal", "default": "global" },
+          "modes": {
+            "global":   { "ring.right": { "action": "keystroke", "keys": "right" } },
+            "terminal": { "inherits": "global" },
+            "L1":       { "inherits": "global" }
+          } }
+        """
+        let c = try makeController(cfg, SpyExecutor())
+        c.frontmostAppChanged(bundleID: "dev.warp.Warp-Stable")
+        c.pushLayer("L1")
+        XCTAssertEqual(c.resolvedAction(for: "ring.right"), .keystroke(keys: "right"))
+        XCTAssertTrue(c.hasBinding(for: "ring.right"))
+    }
+
+    // A mode with NO `inherits` is deliberately standalone: it does not see global, layered or not.
+    // Resolution must not smuggle in a hidden global fallback behind the author's back.
+    func testStandaloneModeDoesNotSeeGlobal() throws {
+        let c = try makeController(quadrantCfg, SpyExecutor())
+        c.frontmostAppChanged(bundleID: "loner")
+        XCTAssertNil(c.resolvedAction(for: "ring.up"))
+        c.pushLayer("L1")
+        XCTAssertNil(c.resolvedAction(for: "ring.up"))
+        XCTAssertEqual(c.resolvedAction(for: "ring.left"), .keystroke(keys: "left"))
+    }
 }
