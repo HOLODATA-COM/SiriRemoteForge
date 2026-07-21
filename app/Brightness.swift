@@ -41,10 +41,31 @@ enum Brightness {
         guard let h = handle, let p = dlsym(h, "DisplayServicesGetBrightness") else { return nil }
         return unsafeBitCast(p, to: GetFn.self)
     }()
+    /// Current brightness, read from whichever display will actually answer.
+    ///
+    /// NOT `CGMainDisplayID()`: `DisplayServicesGetBrightness` fails on many external panels, and
+    /// when an external display is the *main* one the read failed every single time. That silently
+    /// disabled this whole fallback — restore then depended entirely on the `isDimmed` flag, and if
+    /// the flag was ever lost the screen could not be brought back at all. Reading any responsive
+    /// display is representative anyway, because `dimToMin`/`restoreToMax` drive brightness KEYS,
+    /// which move every display together.
     private static func mainValue() -> Float? {
         guard let getBrightness = getBrightness else { return nil }
-        var v: Float = 0
-        return getBrightness(CGMainDisplayID(), &v) == 0 ? v : nil
+
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(16, &ids, &count) == .success, count > 0 else { return nil }
+
+        // Built-in first — it is the one that reliably answers; externals are hit or miss.
+        let active = Array(ids.prefix(Int(count)))
+        let ordered = active.filter { CGDisplayIsBuiltin($0) != 0 }
+                    + active.filter { CGDisplayIsBuiltin($0) == 0 }
+
+        for id in ordered {
+            var v: Float = 0
+            if getBrightness(id, &v) == 0 { return v }
+        }
+        return nil
     }
 
     // MARK: - Set via synthesized brightness keys (moves every display, notch by notch)
@@ -85,18 +106,13 @@ enum Brightness {
     static func restoreIfDimmed(threshold: Float = 0.05) {
         let check = {
             let measured = mainValue()
-            // Fail OPEN when the brightness read fails. Ramping up while already at maximum is a
-            // no-op, so "restore when unsure" costs nothing — whereas "stay dark when unsure"
-            // leaves the screen black with no way back from the remote. The old `?? false` chose
-            // the expensive direction.
-            let dimmed: Bool
-            if isDimmed {
-                dimmed = true                          // we dimmed it; authoritative
-            } else if let m = measured {
-                dimmed = m < threshold                 // trust a good reading
-            } else {
-                dimmed = true                          // read failed — restoring is harmless
-            }
+            // Fail CLOSED when the read fails. Failing open was tried and was wrong: on a Mac whose
+            // main display is an external panel the read failed *every* time, so every button press
+            // and every touch ramped the brightness up. Now that `mainValue()` falls back to a
+            // display that answers, a nil here means no display would report at all — rare enough
+            // that `isDimmed` covers the normal path, and staying put beats raising brightness
+            // constantly.
+            let dimmed = isDimmed || (measured.map { $0 < threshold } ?? false)
 
             // Log only near-dim situations, at most once a second. Enough to tell apart the ways
             // "shaking it in the morning doesn't bring the screen back" can happen: the flag was

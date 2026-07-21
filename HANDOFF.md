@@ -332,24 +332,41 @@ Established so far:
 - The remote itself sleeps after a few minutes idle. The user's hypothesis is that the overnight
   disconnect is what breaks it; untested.
 
-Changes already made in response (none confirmed to fix it):
+**Very likely root cause, found 2026-07-21 and fixed — awaiting an overnight confirmation.**
 
-- `restoreIfDimmed` now **fails open**: if `DisplayServicesGetBrightness` returns nil, it restores
-  anyway. Ramping up while already at maximum is a no-op, so "restore when unsure" is free, whereas
-  the old `?? false` chose to stay dark. Closes one of the possible causes.
-- Reconnecting the remote now calls `restoreIfDimmed()` directly, so waking the remote is enough
-  and it no longer depends on a particular button or on the trackpad having re-attached.
-- Diagnostic logging in `restoreIfDimmed` (rate-limited, only near-dim situations):
-  `💡 restoreIfDimmed: isDimmed=? measured=? → RESTORE/declined`
+`mainValue()` read `CGMainDisplayID()`, and on this Mac the main display is an external panel that
+`DisplayServicesGetBrightness` refuses:
 
-**Still open — the threshold case.** If minimum brightness reads back as something slightly above
-`threshold` (0.05) and `isDimmed` has been lost, the check still declines. Deliberately not
-"fixed" by raising the threshold: that would yank a deliberately-dimmed screen to full brightness
-on any button press. Wait for the log line before choosing a number.
+```
+CGMainDisplayID() = 2
+display 2 ★MAIN  builtin=false  read=FAILED (1000)
+display 1        builtin=true   read=1.000
+display 5        builtin=false   read=1.000
+```
 
-Next time it happens: **do not restart the app first.** Read the log. The one line above
-distinguishes the remaining causes — flag lost, reading wrong, or the restore ran but the
-synthesized brightness keys had no effect (the worst case, and the only one not yet ruled out).
+So the read failed **every** time, silently. With the original `?? false` that meant the live-read
+fallback never fired at all: restoring depended entirely on the in-memory `isDimmed` flag, and any
+path that lost the flag left the screen dark with no way back from the remote.
+
+The same root cause produced the opposite bug when "fixed" from the wrong end: failing *open* on a
+nil read meant every button press and every touch decided "dimmed" and ramped brightness up. Both
+directions are wrong; the read itself had to be fixed.
+
+`mainValue()` now walks the active display list — built-in first, then externals — and returns the
+first display that answers. Driving brightness with synthesized keys moves every display together,
+so any responsive display is representative. Failure handling is back to fail-closed.
+
+Also in place:
+
+- Reconnecting the remote calls `restoreIfDimmed()` directly, so waking the remote is enough and it
+  does not depend on which input arrives first or on the trackpad having re-attached.
+- Rate-limited diagnostic: `💡 restoreIfDimmed: isDimmed=? measured=? → RESTORE/declined`. The
+  `measured` field used to be permanently `nil` on this Mac; it now shows a real number.
+
+**Still unverified:** whether the morning symptom is actually gone. Test after a night with the
+screen dimmed. If it recurs, **do not restart the app first** — read the log. The remaining
+untested possibility is that the restore runs but the synthesized brightness keys have no effect in
+that state, which the log will show as `→ RESTORE` with the screen still dark.
 
 ## Maintenance rules
 
