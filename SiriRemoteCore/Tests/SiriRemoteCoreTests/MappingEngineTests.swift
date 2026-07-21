@@ -15,6 +15,43 @@ final class MappingEngineTests: XCTestCase {
       } }
     """
 
+    // Presentation (`label`/`icon`) belongs to the KEY, not to each per-mode action override.
+    // A mode that re-binds a key for its own reasons should not have to restate how that key looks.
+    private let presentationCfg = """
+    { "settings": { "defaultMode": "global" },
+      "appProfiles": { "com.apple.Music": "music", "default": "global" },
+      "modes": {
+        "global": { "button.playPause": { "action": "media", "key": "playpause",
+                                          "label": "Play / Pause", "icon": "playpause.fill" },
+                    "button.mute":      { "action": "media", "key": "mute", "icon": "speaker.fill" } },
+        "music":  { "inherits": "global",
+                    "button.playPause": { "action": "applescript", "script": "tell app to playpause" },
+                    "button.mute":      { "action": "applescript", "script": "mute", "label": "Silence" } }
+      } }
+    """
+
+    func testPresentationInheritedThroughOverriddenBinding() throws {
+        let e = try engine(presentationCfg)
+        e.applyApp(bundleID: "com.apple.Music")
+        XCTAssertEqual(e.activeMode, "music")
+        // music re-binds the ACTION but says nothing about presentation → inherits global's.
+        XCTAssertEqual(e.resolve("button.playPause"), .applescript(script: "tell app to playpause"))
+        XCTAssertEqual(e.resolvePresentation("button.playPause")?.label, "Play / Pause")
+        XCTAssertEqual(e.resolvePresentation("button.playPause")?.icon, "playpause.fill")
+    }
+
+    func testPresentationFieldsInheritIndependently() throws {
+        let e = try engine(presentationCfg)
+        e.applyApp(bundleID: "com.apple.Music")
+        // music overrides only the label; the icon still comes from global.
+        XCTAssertEqual(e.resolvePresentation("button.mute")?.label, "Silence")
+        XCTAssertEqual(e.resolvePresentation("button.mute")?.icon, "speaker.fill")
+    }
+
+    func testPresentationNilWhenNothingInChainDeclaresIt() throws {
+        XCTAssertNil(try engine(cfg).resolvePresentation("button.menu"))
+    }
+
     func testStartsAtDefaultMode() throws {
         XCTAssertEqual(try engine(cfg).activeMode, "global")
     }

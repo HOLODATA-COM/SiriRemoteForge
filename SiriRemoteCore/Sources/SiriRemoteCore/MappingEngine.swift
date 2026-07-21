@@ -31,17 +31,31 @@ public final class MappingEngine {
         resolvePresentation(eventKey, in: activeMode)
     }
 
+    /// Presentation inherits along the mode chain INDEPENDENTLY of the binding, field by field.
+    ///
+    /// A key keeps its identity across modes: `button.playPause` is the play/pause button whether
+    /// the active mode talks to Music directly or goes through a guard first. Modes override the
+    /// ACTION for their own reasons, and forcing each override to restate the same label and icon
+    /// would be pure duplication — and would silently show the wrong icon the day someone forgot.
+    /// So a mode that says nothing about how a key presents inherits that from its parent, even
+    /// where it does change what the key does. A mode that genuinely presents a key differently
+    /// just says so, and the nearer mode wins.
     public func resolvePresentation(_ eventKey: String, in modeName: String) -> Config.Presentation? {
         var name: String? = modeName
         var visited = Set<String>()
+        var label: String?
+        var icon: String?
         while let current = name, !visited.contains(current), let mode = config.modes[current] {
             visited.insert(current)
-            // Stop at the mode that owns the BINDING, so an override in a nearer mode without a
-            // label does not fall through and pick up a farther mode's label.
-            if mode.bindings[eventKey] != nil { return mode.presentation[eventKey] }
+            if let p = mode.presentation[eventKey] {
+                if label == nil { label = p.label }
+                if icon == nil { icon = p.icon }
+                if label != nil, icon != nil { break }
+            }
             name = mode.inherits
         }
-        return nil
+        guard label != nil || icon != nil else { return nil }
+        return Config.Presentation(label: label, icon: icon)
     }
 
     /// Frontmost app changed: reset active mode to that app's configured mode (or default).

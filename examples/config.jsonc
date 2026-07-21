@@ -80,13 +80,21 @@
       //           for shell commands ("pmset sleepnow"), so name those.
       //   icon  : an SF Symbol name (see Apple's SF Symbols app). Usually unnecessary — an action
       //           that opens an app already shows that app's REAL icon, including `shell` commands
-      //           written as `open -a "Some App"`. Otherwise a symbol is picked from the action kind.
+      //           written as `open -a "Some App"` and AppleScript that says `tell application "X"`.
+      //           Otherwise a symbol is picked from the action kind.
+      //
+      // These INHERIT down the mode chain on their own, field by field, and independently of the
+      // binding: a key keeps its identity even where a mode re-binds it. Set them once here in
+      // "global" and every app mode that overrides the ACTION still shows the same name and icon —
+      // see "music" below, which re-binds Play/Pause but says nothing about how it looks. A mode
+      // that genuinely presents a key differently just says so, and the nearer mode wins.
       "button.power.hold": { "action": "shell", "command": "pmset sleepnow",
                              "label": "Sleep", "icon": "moon.fill" },
       // Play/Pause. The tap MUST stay bound whenever any variant below is bound: binding a
       // .double/.hold stage makes the app own this button and suppress the native media key, so
       // without this line a short press would do nothing at all.
-      "button.playPause":       { "action": "media", "key": "playpause" },
+      "button.playPause":       { "action": "media", "key": "playpause",
+                                  "label": "Play / Pause", "icon": "playpause.fill" },
       // Hold Play/Pause past holdThreshold2 (1.0s) and release → open Apple Music.
       "button.playPause.hold2": { "action": "launch", "app": "Music" },
       // TV button (to the right of Back) → toggle LAYER L1. TAP once to switch to L1 (sticky, stays
@@ -133,12 +141,16 @@
     // In Apple Music, ring left/right skip tracks instead (inherits the rest from global):
     "music": {
       "inherits":        "global",
-      "ring.left":       { "action": "applescript", "script": "tell application \"Music\" to previous track" },
-      "ring.right":      { "action": "applescript", "script": "tell application \"Music\" to next track" },
-      // `label`/`icon` matter most for actions like these: without them the HUD would have to
-      // show the whole AppleScript.
-      "button.playPause":{ "action": "applescript", "script": "tell application \"Music\" to playpause",
-                           "label": "Play / Pause", "icon": "playpause.fill" },
+      // These have no counterpart in "global", so they carry their own presentation.
+      "ring.left":       { "action": "applescript", "script": "tell application \"Music\" to previous track",
+                           "label": "Previous", "icon": "backward.end.fill" },
+      "ring.right":      { "action": "applescript", "script": "tell application \"Music\" to next track",
+                           "label": "Next", "icon": "forward.end.fill" },
+      // Deliberately NO label/icon: this re-binds the ACTION (talking to Music directly rather than
+      // through the media key), but it is still the same button, so it inherits "Play / Pause" and
+      // playpause.fill from "global". Restating them here would be duplication waiting to drift.
+      "button.playPause":{ "action": "applescript", "script": "tell application \"Music\" to playpause" },
+      // "global" leaves Mute unbound, so there is nothing to inherit — this one names itself.
       "button.mute":     { "action": "applescript", "script": "tell application \"Music\" to set mute to not mute",
                            "label": "Mute", "icon": "speaker.slash.fill" }
     },

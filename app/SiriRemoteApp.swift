@@ -114,7 +114,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let v = ActionVisual.resolve(a, p)
                 return .init(label: v.label, image: v.image, iconOnly: v.iconOnly)
             }
-            hud.begin(base: face(.media(key: "playpause"), nil),
+            // Unlabelled AppleScript aimed at an app — should show Music's real icon, WITH a label.
+            hud.begin(base: face(.applescript(script: "tell application \"Music\" to playpause"), nil),
                       stages: demo.map { .init(threshold: $0.0, face: face($0.1, $0.2)) })
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { hud.end(firedStage: 3) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { exit(0) }

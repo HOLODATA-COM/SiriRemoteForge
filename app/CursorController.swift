@@ -61,8 +61,9 @@ class CursorController {
     /// agreement, so an edge stops the cursor dead and it leaves the edge on the very first move.
     ///
     /// A target that already lands on some display is left alone — that is how the cursor crosses
-    /// between monitors. Only a target on no display at all gets pulled back, into whichever
-    /// display the cursor is currently on.
+    /// between monitors normally. A target on no display at all is either handed to a neighbour
+    /// (see `crossToNeighbour`) or, if there is nothing that way, clamped back into the display the
+    /// cursor is on.
     private func clampToDisplays(_ target: CGPoint, from current: CGPoint) -> CGPoint {
         displayLock.lock()
         let rects = displayBounds
@@ -75,9 +76,56 @@ class CursorController {
                 < hypot(current.x - $1.midX, current.y - $1.midY)
         }
         guard let r = home else { return target }
+        if let crossed = crossToNeighbour(target, from: r, rects: rects) { return crossed }
         // maxX/maxY are exclusive: a point exactly on them is already off the display.
         return CGPoint(x: min(max(target.x, r.minX), r.maxX - 1),
                        y: min(max(target.y, r.minY), r.maxY - 1))
+    }
+
+    /// Displays rarely line up edge to edge. A portrait monitor next to a landscape one leaves long
+    /// stretches of its side facing nothing at all, and walking the cursor off there would stop it
+    /// dead against empty space — even though there is a display just up or down the way.
+    ///
+    /// So instead of a wall, hand the cursor to the nearest display lying in the direction of
+    /// travel, entering along the edge that faces us. Leaving the tall screen below the neighbour's
+    /// own bottom edge slides onto that bottom edge rather than stopping.
+    ///
+    /// Returns nil when there really is nothing that way — the outer border of the desktop — and
+    /// the caller clamps as before.
+    private func crossToNeighbour(_ target: CGPoint, from home: CGRect, rects: [CGRect]) -> CGPoint? {
+        // How far outside `home` the target sits on each axis (0 = still inside on that axis).
+        let overX: CGFloat = target.x < home.minX ? target.x - home.minX
+                           : target.x > home.maxX - 1 ? target.x - (home.maxX - 1) : 0
+        let overY: CGFloat = target.y < home.minY ? target.y - home.minY
+                           : target.y > home.maxY - 1 ? target.y - (home.maxY - 1) : 0
+        guard overX != 0 || overY != 0 else { return nil }
+
+        // A diagonal move leaves on both axes at once; the larger overflow is the way we're headed.
+        let horizontal = abs(overX) >= abs(overY)
+        let forward = horizontal ? overX > 0 : overY > 0
+
+        let candidates = rects.filter { r in
+            guard r != home else { return false }
+            if horizontal { return forward ? r.minX >= home.maxX - 1 : r.maxX - 1 <= home.minX }
+            return forward ? r.minY >= home.maxY - 1 : r.maxY - 1 <= home.minY
+        }
+        guard let dest = candidates.min(by: { gap(from: target, to: $0) < gap(from: target, to: $1) })
+        else { return nil }
+
+        // Enter on the facing edge, keeping the other axis as close to the line we were travelling
+        // as the destination allows — that clamp is what lands us on the neighbour's bottom edge.
+        if horizontal {
+            return CGPoint(x: forward ? dest.minX : dest.maxX - 1,
+                           y: min(max(target.y, dest.minY), dest.maxY - 1))
+        }
+        return CGPoint(x: min(max(target.x, dest.minX), dest.maxX - 1),
+                       y: forward ? dest.minY : dest.maxY - 1)
+    }
+
+    /// Distance from a point to the nearest point of a rect (0 when the point is inside it).
+    private func gap(from p: CGPoint, to r: CGRect) -> CGFloat {
+        hypot(max(r.minX - p.x, 0, p.x - (r.maxX - 1)),
+              max(r.minY - p.y, 0, p.y - (r.maxY - 1)))
     }
 
     // Double/triple-click tracking: macOS only recognizes a multi-click when the click-state

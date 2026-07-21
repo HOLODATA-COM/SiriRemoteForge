@@ -9,8 +9,10 @@
 //    1. `label` / `icon` written in config.jsonc for that binding
 //    2. the REAL application icon, for anything that opens an app — `launch`, and also
 //       `shell` commands of the `open -a "Some App"` form, which is how most app launches are
-//       actually written
-//    3. an SF Symbol picked from the action kind
+//       actually written. Shown alone, without a label.
+//    3. the REAL application icon again for an action AIMED at an app (`tell application "X" …`),
+//       this time beside the label — it drives that app, it does not open it
+//    4. an SF Symbol picked from the action kind
 //
 
 import AppKit
@@ -50,6 +52,14 @@ enum ActionVisual {
             return Visual(label: app, image: icon, iconOnly: true)
         }
 
+        // An action AIMED at an app (rather than one that opens it) still shows that app's icon —
+        // far more recognisable than the generic per-kind symbol — but keeps its label, because
+        // "tell Music to playpause" is not "open Music" and must not read as though it were.
+        if let app = targetedAppName(action), let icon = appIcon(named: app) {
+            icon.size = NSSize(width: inlineSize, height: inlineSize)
+            return Visual(label: named ?? fallbackLabel(action), image: icon, iconOnly: false)
+        }
+
         return Visual(label: named ?? fallbackLabel(action),
                       image: symbol(defaultSymbolName(action), size: inlineSize),
                       iconOnly: false)
@@ -74,16 +84,26 @@ enum ActionVisual {
         }
     }
 
+    /// The app an action drives without opening it: `tell application "Music" to …`.
+    private static func targetedAppName(_ action: Action) -> String? {
+        guard case .applescript(let script) = action else { return nil }
+        return firstMatch(#"\btell\s+application\s+(?:"([^"]+)"|'([^']+)')"#, in: script)
+    }
+
     /// Pull the app out of `open -a "Some App"` / `open -g -a 'Some App'` / `open -a SomeApp`.
     /// Returns nil for any other command, including `open <url>`, which opens no app by name.
     static func appName(fromOpenCommand command: String) -> String? {
-        let pattern = #"\bopen\b[^\n]*?\s-a\s+(?:"([^"]+)"|'([^']+)'|([^\s'"]+))"#
+        firstMatch(#"\bopen\b[^\n]*?\s-a\s+(?:"([^"]+)"|'([^']+)'|([^\s'"]+))"#, in: command)
+    }
+
+    /// First non-empty capture group of `pattern` in `text`.
+    private static func firstMatch(_ pattern: String, in text: String) -> String? {
         guard let re = try? NSRegularExpression(pattern: pattern),
-              let m = re.firstMatch(in: command, range: NSRange(command.startIndex..., in: command))
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))
         else { return nil }
         for i in 1..<m.numberOfRanges {
-            if let r = Range(m.range(at: i), in: command) {
-                let name = String(command[r]).trimmingCharacters(in: .whitespaces)
+            if let r = Range(m.range(at: i), in: text) {
+                let name = String(text[r]).trimmingCharacters(in: .whitespaces)
                 if !name.isEmpty { return name }
             }
         }
