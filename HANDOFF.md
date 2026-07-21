@@ -313,6 +313,44 @@ Apple page follow-up: its sole public "Bluetooth for macOS" entry links to the e
 Bluetooth profile is listed. The companion instructions PDF is Apple-account-gated and was not
 available to non-interactive retrieval.
 
+## Open issue — brightness does not come back the next morning
+
+**Status: unresolved, waiting on a reproduction with logging in place. Do not clear
+`/tmp/hypervibe.log` — it is accumulating on purpose.**
+
+Symptom, reported 2026-07-21: the Power button is used to dim all displays before bed; the next
+morning neither pressing a button nor touching the trackpad brings the brightness back.
+
+Established so far:
+
+- Both input paths fail, so this is **not** input detection alone.
+- All displays support brightness control and all dim together, so it is not a
+  main-display-vs-other-display mismatch (an early theory, ruled out by the user).
+- The app does not crash overnight and is still running; no crash reports.
+- The Mac never sleeps: `OnlySwitch` holds a `NoDisplaySleepAssertion` and `caffeinate` prevents
+  idle sleep, so the display stays *on* at zero brightness all night — an unusual state.
+- The remote itself sleeps after a few minutes idle. The user's hypothesis is that the overnight
+  disconnect is what breaks it; untested.
+
+Changes already made in response (none confirmed to fix it):
+
+- `restoreIfDimmed` now **fails open**: if `DisplayServicesGetBrightness` returns nil, it restores
+  anyway. Ramping up while already at maximum is a no-op, so "restore when unsure" is free, whereas
+  the old `?? false` chose to stay dark. Closes one of the possible causes.
+- Reconnecting the remote now calls `restoreIfDimmed()` directly, so waking the remote is enough
+  and it no longer depends on a particular button or on the trackpad having re-attached.
+- Diagnostic logging in `restoreIfDimmed` (rate-limited, only near-dim situations):
+  `💡 restoreIfDimmed: isDimmed=? measured=? → RESTORE/declined`
+
+**Still open — the threshold case.** If minimum brightness reads back as something slightly above
+`threshold` (0.05) and `isDimmed` has been lost, the check still declines. Deliberately not
+"fixed" by raising the threshold: that would yank a deliberately-dimmed screen to full brightness
+on any button press. Wait for the log line before choosing a number.
+
+Next time it happens: **do not restart the app first.** Read the log. The one line above
+distinguishes the remaining causes — flag lost, reading wrong, or the restore ran but the
+synthesized brightness keys had no effect (the worst case, and the only one not yet ruled out).
+
 ## Maintenance rules
 
 - Preserve user changes and the active config; do not reset or replace mappings without explicit

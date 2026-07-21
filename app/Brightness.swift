@@ -79,9 +79,41 @@ enum Brightness {
     /// If the displays are currently at/near minimum brightness — either because WE dimmed them
     /// (flag) OR because they were dimmed some other way (live read < `threshold`) — restore to max.
     /// A normal press at normal brightness (flag clear + read above threshold) is a no-op.
+    /// Rate-limits the diagnostic below — this runs on every button press and every touch start.
+    private static var lastDiagLog: UInt64 = 0
+
     static func restoreIfDimmed(threshold: Float = 0.05) {
         let check = {
-            let dimmed = isDimmed || (mainValue().map { $0 < threshold } ?? false)
+            let measured = mainValue()
+            // Fail OPEN when the brightness read fails. Ramping up while already at maximum is a
+            // no-op, so "restore when unsure" costs nothing — whereas "stay dark when unsure"
+            // leaves the screen black with no way back from the remote. The old `?? false` chose
+            // the expensive direction.
+            let dimmed: Bool
+            if isDimmed {
+                dimmed = true                          // we dimmed it; authoritative
+            } else if let m = measured {
+                dimmed = m < threshold                 // trust a good reading
+            } else {
+                dimmed = true                          // read failed — restoring is harmless
+            }
+
+            // Log only near-dim situations, at most once a second. Enough to tell apart the ways
+            // "shaking it in the morning doesn't bring the screen back" can happen: the flag was
+            // lost (isDimmed=false), the brightness read failed (measured=nil, which makes the
+            // fallback fail CLOSED and never restore), or the main display reads bright while
+            // another display is the dark one.
+            if isDimmed || (measured ?? 1) < 0.15 {
+                let now = DispatchTime.now().uptimeNanoseconds
+                if now &- lastDiagLog > 1_000_000_000 {
+                    lastDiagLog = now
+                    rmDebug(String(format: "💡 restoreIfDimmed: isDimmed=%@ measured=%@ → %@",
+                                   isDimmed ? "Y" : "N",
+                                   measured.map { String(format: "%.3f", $0) } ?? "nil(read failed)",
+                                   dimmed ? "RESTORE" : "declined"))
+                }
+            }
+
             guard dimmed else { return }
             restoreToMax()
             rmDebug("💡 brightness: restore → max")

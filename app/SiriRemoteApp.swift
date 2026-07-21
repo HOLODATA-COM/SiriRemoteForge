@@ -245,6 +245,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.lastConnectedState = connected
                     connected ? self.layerHUD?.showRemoteConnected()
                               : self.layerHUD?.showRemoteDisconnected()
+
+                    // Reconnecting is itself a wake signal: the remote sleeps after a few minutes
+                    // idle, so a screen dimmed with the Power button is typically found the next
+                    // morning with the remote asleep. Restoring here means picking the remote up is
+                    // enough — it does not depend on a specific button or touch arriving first, and
+                    // it covers the case where the trackpad has not re-attached yet.
+                    if connected { Brightness.restoreIfDimmed() }
                 }
             }
         }
