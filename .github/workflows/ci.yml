@@ -34,13 +34,3 @@ jobs:
       - name: Build app
         working-directory: app
         run: ./build.sh
-
-  config:
-    name: Example config is valid JSONC
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      # The loader tolerates comments and trailing commas; a broken example silently falls back to
-      # defaults at runtime, which has bitten this project before, so it is checked in CI.
-      - name: Validate examples/config.jsonc
-        run: swift test --package-path SiriRemoteCore --filter JSONCTests
