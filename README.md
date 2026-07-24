@@ -243,7 +243,9 @@ one-double-click installer that bundles everything is in [`dist/`](dist/README.m
 
 JSONC (JSON + `//` comments). A default is written on first run. **Saving hot-reloads it live.**
 Three top-level keys: `settings`, `appProfiles`, `modes`. A complete, working example to crib from
-lives in [`examples/config.jsonc`](examples/config.jsonc).
+lives in [`examples/config.jsonc`](examples/config.jsonc), and the maintainer's actual daily-driver
+setup — push-to-talk, per-app Music/browser/terminal modes, layers — is in
+[`examples/config.author.jsonc`](examples/config.author.jsonc).
 
 ```jsonc
 {
