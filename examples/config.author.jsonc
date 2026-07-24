@@ -1,0 +1,266 @@
+// config.author.jsonc — the maintainer's actual daily-driver SiriRemoteForge config.
+// A real-world companion to examples/config.jsonc; copy to ~/.config/siriremote/config.jsonc to use.
+{
+  // siriRemote config — edit and save; changes hot-reload live.
+  // Event keys: ring.up ring.down ring.left ring.right
+  //             button.menu button.tv button.siri button.playPause
+  //             button.volumeUp button.volumeDown button.back
+  //             button.nextTrack button.prevTrack button.mute button.power
+  // Actions: keystroke(keys) media(key) mouse(op) launch(app|url)
+  //          shell(command) applescript(script) mode(to)
+  // A binding OVERRIDES native behavior; unbound buttons stay native.
+  "settings": {
+    "defaultMode": "global",
+    "cursorSpeed": 1.8,          // higher = faster cursor (overall baseline)
+    "cursorDeadzone": 0.006,     // higher = more jitter ignored, easier to hold & click
+    // Pointer acceleration: multiplier layered on cursorSpeed, driven by per-frame finger speed
+    // (same normalized units as cursorDeadzone). Slow = precise, fast = reach; ~1.0 at mid-speed.
+    "accelMin": 0.14,            // slow, deliberate → precision (~1px steps). Lower = finer/slower.
+    "accelMax": 6.0,             // quick flick → reach (higher: compensates the removed 2x double-scale)
+    "accelLowSpeed": 0.007,      // per-frame speed below which accel = accelMin (narrow precise zone; only the genuinely slow)
+    "accelHighSpeed": 0.06,      // per-frame speed above which accel = accelMax (a quick flick)
+    "clickRiseThreshold": 0.1,   // contact rise counted as a press (lower = freezes more readily)
+    "pressMoveMax": 0.025,       // finger move above this cancels a stray press-freeze
+    "holdThreshold": 0.5,        // seconds held → stage 1 (".hold"). Release-to-select: fires on RELEASE, not at the threshold.
+    "holdThreshold2": 1.0,       // seconds held → stage 2 (".hold2") — keep holding past stage 1 to reach it
+    "holdThreshold3": 1.6,
+    // Keep holding this many seconds PAST the deepest bound stage and releasing does nothing —
+    // the way out of a long-press you started by mistake. Only applies to keys that actually
+    // have hold bindings; a key whose hold means "repeat" (Back in a terminal) is unaffected,
+    // since its repeats have already happened and there is nothing pending to take back.
+    "holdCancelGrace": 1.0,
+    // Radial app launcher: hold the layer key (button.tv) 0.5s and a ring of these appears,
+    // centred on the pointer. Move the cursor toward one and press Select to open it; any
+    // other button cancels. Clockwise from the top. Names as in /Applications.
+    "appWheel": ["WeChat", "Google Chrome", "Music", "Warp"],       // seconds held → stage 3 (".hold3") — the deepest hold; deepest stage reached fires on release
+    "doubleTapWindow": 0.2,      // seconds from the first RELEASE to the second press. Measured from the release, not the
+                                 // press, so holding the first tap longer no longer eats the window.
+    "spacesModeWindow": 5.0,     // Spaces Mode: seconds without a left/right switch before it disarms
+    "findCursorEnabled": true,   // shake the cursor (rapid back-and-forth) to flash a locate highlight
+    // Rest the cursor on an app that FILLS a display (fullscreen or just maximised) and it becomes
+    // frontmost, so keystroke bindings land where you are pointing. Only apps covering >=90% of a
+    // display: raising one of those changes nothing you can see, whereas doing this to overlapping
+    // windows would reshuffle them as the pointer crossed — and macOS cannot focus without raising.
+    "focusFollowsCursor": true,
+    // Circular scroll (iPod wheel): circle a finger on the OUTER ring to scroll.
+    "circularScroll": {
+      "enabled": true,
+      "minRadius": 0.35,         // only touches this far from center count as the outer ring
+      "startThreshold": 0.1,     // radians (~5.7°) of rotation before scrolling starts (was 0.35 ≈ 20°, too much)
+      "pixelsPerRadian": 75,     // scroll pixels per radian of rotation (speed) — lower = slower
+      "scrollEase": 0.3,         // scroll smoothing (smaller = smoother / laggier)
+      // Velocity gain — the wheel's pointer acceleration. Circle slowly = precise, fast = reach.
+      // Speeds are RADIANS PER FRAME (pad runs ~33-60Hz): slow circle ~0.01, quick spin ~0.07.
+      // Set accelMin = accelMax = 1 for the old strictly-1:1 behaviour.
+      "accelMin": 1.0,           // gain at/below accelLowSpeed  (lower = finer slow control)
+      "accelMax": 2.5,           // gain at/above accelHighSpeed (higher = more reach per turn)
+      "accelLowSpeed": 0.010,    // rad/frame below which gain = accelMin
+      "accelHighSpeed": 0.070,   // rad/frame above which gain = accelMax
+      "accelCurve": 2.0,         // bends the ramp: 1 = plain smoothstep (symmetric),
+                                 // >1 = stays precise longer then climbs steeply,
+                                 // <1 = reaches full speed sooner
+      "invert": true             // flip if it scrolls the wrong way (was false; circling felt reversed)
+    }
+  },
+
+  // Per-app auto-switch: frontmost app's bundle id -> mode name.
+  "appProfiles": {
+    "com.apple.Music": "music",
+    "com.google.Chrome": "browser",
+    "com.apple.Safari": "browser",
+    "dev.warp.Warp-Stable": "terminal",   // Warp (the user's terminal): hold Back button = repeat-delete
+    "com.apple.Terminal": "terminal",
+    "default": "global"
+  },
+
+  "modes": {
+    "global": {
+      // Side voice (Siri) button → PUSH-TO-TALK for dictation (Typeless). Hold >=0.2s and it fires
+      // the hotkey (dictation ON); release fires the SAME hotkey again (OFF). Both edges send the
+      // combo below. A HOLD opens dictation; two QUICK taps (each < the 0.2s threshold) send Enter
+      // instead — the activation delay separates the two gestures, so they coexist.
+      "button.siri":  { "action": "pushToTalk", "keys": "rctrl+rcmd+ropt" },
+      // Double-TAP the Siri button → Enter (two quick taps, distinct from the push-to-talk hold above).
+      "button.siri.double": { "action": "keystroke", "keys": "enter" },
+      // Top-right Power button → dim all displays to minimum; any button/touch restores to max
+      // (Brightness.restoreIfDimmed). The Mac stays awake and remote-controllable (not display sleep).
+      "button.power": { "action": "brightness", "value": 0.0 },
+      // Hold Power past holdThreshold (0.5s) and release → actually sleep the Mac. macOS's own
+      // power-button sleep is turned off (loginwindow PowerButtonSleepsSystem=false) because it
+      // fired on every short press and could not be intercepted from userspace; this puts sleep
+      // back under our control, on a deliberate long press only.
+      "button.power.hold": { "action": "shell", "command": "pmset sleepnow",
+                             "label": "Sleep", "icon": "moon.fill" },
+      // Play/Pause. Must stay bound: binding any variant (.double/.hold2 below) makes the app own
+      // this button and suppress the native media key, so without this a short press does nothing.
+      //
+      // NOT `media(playpause)` — the app boots out com.apple.rcd at launch (so the remote's native
+      // AVRCP signals stop auto-launching Music), and rcd is exactly what routes synthesized media
+      // keys to a player. With it gone, `media` posts an event nobody handles. AppleScript talks to
+      // Music directly, so it works from any app; the `is running` guard keeps it from launching
+      // Music just because the button was pressed.
+      "button.playPause":       { "action": "applescript", "script": "if application \"Music\" is running then tell application \"Music\" to playpause",
+                                 "label": "Play / Pause", "icon": "playpause.fill" },
+      // Double-tap → toggle full screen. NOT a keystroke: synthesizing Ctrl+Cmd+F looks like it
+      // should work — it is the menu shortcut every app carries — but it does not take effect,
+      // exactly as with the Space hotkeys. The `fullscreen` action drives the window's AXFullScreen
+      // attribute through the Accessibility API instead, which is what actually moves it.
+      "button.playPause.double": { "action": "fullscreen",
+                                 "label": "Full Screen", "icon": "arrow.up.left.and.arrow.down.right" },
+      // Hold past holdThreshold2 (1.0s) and release → open Apple Music.
+      "button.playPause.hold2": { "action": "launch", "app": "Music" },
+      // Mute. Bound explicitly for the same reason as Play/Pause above: binding .double below makes
+      // the app own this button and suppress the native mute key, so without this a short press
+      // would stop muting. AppleScript rather than media(mute) so it does not depend on the
+      // media-key routing this app deliberately disables (it boots out com.apple.rcd).
+      "button.mute":        { "action": "applescript", "script": "set volume output muted (not (output muted of (get volume settings)))",
+                            "label": "Mute", "icon": "speaker.slash.fill" },
+      // Double-tap Mute → Spotlight.
+      "button.mute.double": { "action": "keystroke", "keys": "cmd+space",
+                            "label": "Spotlight", "icon": "magnifyingglass" },
+      // TV button (to the right of Back) → toggle LAYER L1. TAP once to switch to L1 (sticky, stays
+      // until you tap again); tap again to switch back. (Holding it + pressing other keys = momentary
+      // L1.) An on-screen HUD confirms the switch. Add L1-specific bindings in the "L1" mode below.
+      "button.tv": { "action": "layer", "to": "L1" },
+      // Hold the layer key → the radial app launcher (apps listed in settings.appWheel). An
+      // ordinary hold binding, so it gets the same progress card as every other hold; a layer key
+      // that carries hold stages falls through to the normal machinery instead of consuming its
+      // own press. Tap still toggles the layer; holding it WITH another key is still momentary.
+      "button.tv.hold": { "action": "appWheel", "label": "App \u5706\u76d8", "icon": "circle.grid.3x3.fill" },
+      // Back button, the SAME everywhere regardless of what a short press does in that app.
+      // Placed in "global" so every mode inherits it; the short press stays per-app.
+      //   0.5s → close the current WINDOW — literally pressing its red button through the
+      //          Accessibility API. Not Cmd+W: in anything tabbed that closes the active TAB, and
+      //          an app is free to bind Cmd+W however it likes. Pressing the real control is the
+      //          only way to be sure which of the two you get.
+      //
+      // `after` sets this binding's own delay, overriding the global threshold for its stage. That
+      // is why Back can sit at 0.5s and 1.2s without dragging Play/Pause's "open Music" (stage 2,
+      // 1.0s) along with it. Stages are ordered by their effective delay, not by the suffix.
+      //   1.2s → quit the frontmost app (0.7s after Close). AppleScript IS better here — it names the target
+      //          explicitly instead of relying on the app having a Quit shortcut. A graceful quit,
+      //          so unsaved work still prompts; force-killing would discard it.
+      // Back button, everywhere (Chrome/Safari override the TAP to Cmd+[ back-in-history):
+      //   • Tap                → Delete
+      //   • Plain hold         → auto-repeating Delete (a real held key). No `.hold*` is bound, so
+      //     nothing claims the hold and it falls through to hold-to-repeat.
+      //   • Tap, then hold     → the SECOND menu (.taphold*): close window (0.5s), then quit app.
+      //     Tap-then-hold, not plain hold, so a plain hold stays "delete faster" and the window/quit
+      //     menu is one deliberate gesture away. `after` sets each stage's own delay.
+      "button.menu":          { "action": "keystroke", "keys": "delete",
+                                "label": "Delete", "icon": "delete.left" },
+      "button.menu.taphold":  { "action": "closeWindow", "after": 0.5,
+                                "label": "Close Window", "icon": "xmark.circle.fill" },
+      "button.menu.taphold2": { "action": "applescript", "after": 1.2,
+                                "script": "tell application \"System Events\" to set n to name of first application process whose frontmost is true\nif n is not \"HyperVibe\" then tell application n to quit",
+                                "label": "Quit App", "icon": "power" },
+      // Click-ring = a 4-way arrow d-pad. Left/Right are plain ←/→: inside Mission Control they
+      // browse spaces/windows; elsewhere they're just arrow keys (no direct desktop switching).
+      "ring.up":      { "action": "keystroke", "keys": "up" },
+      "ring.down":    { "action": "keystroke", "keys": "down" },
+      // Hold ring-DOWN past holdThreshold (0.5s) and release → minimise the frontmost window.
+      // Accessibility API rather than Cmd+M: synthesizing Ctrl+Cmd+F for full screen turned out not
+      // to work at all, so menu shortcuts cannot be assumed to be honoured.
+      //
+      // COST, deliberately accepted: binding ANY hold stage disables auto-repeat on this key, so
+      // holding ring-DOWN no longer repeats the down arrow. "Hold = repeat" and "hold = a discrete
+      // action" cannot share a button — the same conflict as Back in a terminal.
+      "ring.down.hold": { "action": "minimize",
+                          "label": "Minimise", "icon": "arrow.down.right.and.arrow.up.left" },
+      "ring.left":    { "action": "keystroke", "keys": "left" },
+      "ring.right":   { "action": "keystroke", "keys": "right" },
+      // --- What LAYER L1 does. "L1.<key>" here = the DEFAULT for every app; override it per-app by
+      //     adding "L1.<key>" to that app's own mode (e.g. "browser" below). Edit these in the app:
+      //     Settings → Layout → pick an app chip + "Editing: layer L1".
+      "L1.ring.left":         { "action": "keystroke", "keys": "cmd+shift+left" },   // prev tab
+      "L1.ring.right":        { "action": "keystroke", "keys": "cmd+shift+right" },  // next tab
+      // DOUBLE-tap ring LEFT/RIGHT switches desktop in L1 too, matching the base layer. Needed
+      // explicitly: L1 binds ring.left/right (prev/next tab), so it CLAIMS the key, and the double
+      // no longer falls through to the base ring.left/right.double. (Single tab-switch gains one
+      // doubleTapWindow of latency here, the usual cost of adding a double.)
+      "L1.ring.left.double":  { "action": "space", "to": "left",
+                                "label": "Space ←", "icon": "rectangle.split.3x1" },
+      "L1.ring.right.double": { "action": "space", "to": "right",
+                                "label": "Space →", "icon": "rectangle.split.3x1" },
+      "L1.button.volumeUp":   { "action": "keystroke", "keys": "cmd+=" },            // zoom in
+      "L1.button.volumeDown": { "action": "keystroke", "keys": "cmd+-" },            // zoom out
+      // The two lower-left buttons become copy/paste while L1 is held. Without these they were not
+      // "empty" — an unbound layer key falls through to the app's own binding, so Play/Pause in L1
+      // still toggled playback.
+      // Back (button.menu) is intentionally NOT bound in L1: with no L1 variant, the layer no longer
+      // claims it, so it falls through to the base binding — Delete (tap), close-window (0.5s hold),
+      // quit (1.2s hold) — exactly as everywhere else. (Was Cmd+A / Select All; removed.)
+      "L1.button.playPause":  { "action": "keystroke", "keys": "cmd+c",
+                                "label": "Copy", "icon": "doc.on.doc" },
+      // Hold Play/Pause in L1 → cut. Release-to-select, so a quick press still copies.
+      "L1.button.playPause.hold": { "action": "keystroke", "keys": "cmd+x",
+                                    "label": "Cut", "icon": "scissors" },
+      "L1.button.mute":       { "action": "keystroke", "keys": "cmd+v",
+                                "label": "Paste", "icon": "doc.on.clipboard" },
+      // Long-press ring UP → open Mission Control (single tap still sends ↑ on release):
+      "ring.up.hold": { "action": "shell", "command": "open -a 'Mission Control'" },
+      // A single tap stays ←/→ but is held ~doubleTapWindow to disambiguate from the double.
+      // DOUBLE-tap ring LEFT/RIGHT → switch desktop, animated, in ANY app. No third-party tool:
+      // the `space` action drives System Events, the only route measured to actually move a Space.
+      "ring.left.double":  { "action": "space", "to": "left",
+                             "label": "Space \u2190", "icon": "rectangle.split.3x1" },
+      "ring.right.double": { "action": "space", "to": "right",
+                             "label": "Space \u2192", "icon": "rectangle.split.3x1" }
+    },
+    // In Chrome / Safari, the Back button (reports as button.menu on this remote) = Back in history
+    // Chrome / Safari. BASE ring left/right = prev/next tab; in LAYER L1 they become plain arrows.
+    "browser": {
+      "inherits":     "global",
+      // Back button (button.menu) → history Back (Cmd+[).
+      "button.menu":  { "action": "keystroke", "keys": "cmd+[" },
+      // BASE (no layer): ring left/right = prev/next TAB (Cmd+Option+←/→).
+      "ring.left":     { "action": "keystroke", "keys": "cmd+opt+left" },
+      "ring.right":    { "action": "keystroke", "keys": "cmd+opt+right" },
+      // In LAYER L1: ring left/right = plain arrows (overrides the global L1 default), for Chrome & Safari.
+      "L1.ring.left":  { "action": "keystroke", "keys": "left" },
+      "L1.ring.right": { "action": "keystroke", "keys": "right" },
+      // Double-tap ring-DOWN → close tab (Cmd+W); double-tap ring-UP → reopen last closed tab (Cmd+Shift+T).
+      "ring.down.double": { "action": "keystroke", "keys": "cmd+w" },
+      "ring.up.double":   { "action": "keystroke", "keys": "cmd+shift+t" }
+    },
+    // In Apple Music, ring left/right skip tracks instead (inherits the rest from global):
+    "music": {
+      "inherits":        "global",
+      "ring.left":       { "action": "applescript", "script": "tell application \"Music\" to previous track",
+                           "label": "Previous", "icon": "backward.end.fill" },
+      "ring.right":      { "action": "applescript", "script": "tell application \"Music\" to next track",
+                           "label": "Next", "icon": "forward.end.fill" },
+      "button.playPause":{ "action": "applescript", "script": "tell application \"Music\" to playpause" }
+      // Mute is deliberately NOT overridden here: it stays the GLOBAL system mute (base binding), the
+      // same everywhere. A real mute remembers the volume and restores it exactly; Music-specific
+      // muting can't (current Music.app makes `mute` read-only → error 9038, and a volume toggle
+      // loses the level). Mute is one global thing, so leave it global.
+    },
+    // Terminal (Warp). Back needs NO override any more: the global Back is now tap = delete, plain
+    // hold = auto-repeating delete, and tap-then-hold = the close/quit menu — which is exactly the
+    // terminal behaviour, so it just inherits. (Previously a `repeatKey` special case; the global
+    // hold-to-repeat superseded it, and dropping the override lets tap-then-hold work here too.)
+    "terminal": {
+      "inherits":    "global",
+      // Ring left/right are SWAPPED relative to global here: in a terminal you change tabs far more
+      // often than you arrow sideways, so tabs get the base layer and the arrows move into L1.
+      // BASE (no layer): prev/next TAB.
+      "ring.left":     { "action": "keystroke", "keys": "cmd+shift+left" },
+      "ring.right":    { "action": "keystroke", "keys": "cmd+shift+right" },
+      // In LAYER L1: plain arrows (overrides the global L1 default, which is the tab switch).
+      "L1.ring.left":  { "action": "keystroke", "keys": "left" },
+      "L1.ring.right": { "action": "keystroke", "keys": "right" },
+      // Double-tap ring-DOWN → close tab/pane (Cmd+W); double-tap ring-UP → reopen closed tab
+      // (Cmd+Shift+T). Both are BASE-layer (no "L1." prefix). Double-tap ring-left/right stay the
+      // global switch-desktop.
+      "ring.down.double": { "action": "keystroke", "keys": "cmd+w" },
+      "ring.up.double":   { "action": "keystroke", "keys": "cmd+shift+t" }
+    },
+    // L1: the LAYER toggled by the TV button (see button.tv above). Its bindings live as "L1.<key>"
+    // in the app modes (global = default; per-app overrides in each app's mode). This mode itself is
+    // just a marker so the layer exists; keep it (inherits global for pass-through of unbound keys).
+    "L1": {
+      "inherits": "global"
+    }
+  }
+}
