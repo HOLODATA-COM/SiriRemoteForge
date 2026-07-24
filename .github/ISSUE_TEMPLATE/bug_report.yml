@@ -1,0 +1,51 @@
+name: Bug report
+description: Something behaves differently from what the README says
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A binding that "doesn't work" is almost always visible in `/tmp/hypervibe.log`.
+        Please look there first — it usually names the exact key and mode being resolved.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Frontmost app was …
+        2. Held the … button for … seconds
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant part of your config.jsonc
+      render: jsonc
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "15.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: How is the remote connected?
+      options: [USB-C, Bluetooth, Both at different times]
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant lines from /tmp/hypervibe.log
+      render: text

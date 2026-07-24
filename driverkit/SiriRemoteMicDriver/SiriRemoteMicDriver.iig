@@ -1,0 +1,21 @@
+#ifndef SiriRemoteMicDriver_h
+#define SiriRemoteMicDriver_h
+
+#include <HIDDriverKit/IOUserHIDEventService.iig>
+
+class SiriRemoteMicDriver : public IOUserHIDEventService
+{
+public:
+    virtual kern_return_t
+    Start(IOService *provider) override;
+
+protected:
+    virtual void
+    handleReport(uint64_t timestamp,
+                 uint8_t *report,
+                 uint32_t reportLength,
+                 IOHIDReportType type,
+                 uint32_t reportID) override;
+};
+
+#endif /* SiriRemoteMicDriver_h */

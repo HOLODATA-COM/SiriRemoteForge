@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core engine (SwiftPM tests)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: swift --version
+      - name: Build
+        run: swift build --package-path SiriRemoteCore
+      - name: Test
+        run: swift test --package-path SiriRemoteCore
+
+  app:
+    name: App (compiles and links)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      # The app is compiled straight with swiftc (no Xcode project) and links the private
+      # MultitouchSupport framework, which ships with macOS — so this only proves it builds.
+      # It cannot RUN here: seizing the remote needs real hardware and Accessibility permission.
+      - name: Build app
+        working-directory: app
+        run: ./build.sh

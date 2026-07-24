@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleDisplayName</key>
+    <string>Siri Remote Microphone Driver</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>DEXT</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>IOKitPersonalities</key>
+    <dict>
+        <key>SiriRemoteMicDriver</key>
+        <dict>
+            <key>CFBundleIdentifier</key>
+            <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+            <key>CFBundleIdentifierKernel</key>
+            <string>com.apple.iokit.IOHIDFamily</string>
+            <key>IOClass</key>
+            <string>AppleUserHIDEventService</string>
+            <key>IOMatchCategory</key>
+            <string>IODefaultMatchCategory</string>
+            <key>IOProbeScore</key>
+            <integer>8000</integer>
+            <key>IOProviderClass</key>
+            <string>IOHIDInterface</string>
+            <key>IOUserClass</key>
+            <string>SiriRemoteMicDriver</string>
+            <key>IOUserServerName</key>
+            <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+            <key>VendorID</key>
+            <integer>76</integer>
+            <key>ProductID</key>
+            <integer>789</integer>
+            <key>PrimaryUsagePage</key>
+            <integer>12</integer>
+            <key>PrimaryUsage</key>
+            <integer>4</integer>
+        </dict>
+    </dict>
+    <key>OSBundleUsageDescription</key>
+    <string>Captures raw microphone reports from Siri Remote interface 5 for local protocol research.</string>
+    <key>OSMinimumDriverKitVersion</key>
+    <string>$(DRIVERKIT_DEPLOYMENT_TARGET)</string>
+</dict>
+</plist>
