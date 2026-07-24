@@ -1,0 +1,127 @@
+#!/bin/bash
+
+# Build script for HyperVibe
+# Make sure Xcode Command Line Tools are installed: xcode-select --install
+
+set -e
+
+echo "Building HyperVibe..."
+
+SWIFT_FILES=(
+    "main.swift"
+    "SiriRemoteApp.swift"
+    "MenuBarManager.swift"
+    "RemoteDetector.swift"
+    "RemoteInputHandler.swift"
+    "GATTDiagnostics.swift"
+    "NativePushToTalk.swift"
+    "BuiltinMicFeeder.swift"
+    "CursorController.swift"
+    "FocusFollowsCursor.swift"
+    "MediaController.swift"
+    "MediaKeyInterceptor.swift"
+    "TouchHandler.swift"
+    "TouchSnapshot.swift"
+    "TouchMonitor.swift"
+    "AppWheel.swift"
+    "CursorHighlighter.swift"
+    "DragIndicator.swift"
+    "LayerHUD.swift"
+    "HoldProgressHUD.swift"
+    "ActionVisual.swift"
+    # --- Settings UI (SwiftUI) ---
+    "TuneSettings.swift"
+    "SettingsModel.swift"
+    "LaunchAtLogin.swift"
+    "DeviceInfo.swift"
+    "AccelCurveView.swift"
+    "SettingsView.swift"
+    "SettingsWindow.swift"
+    "RemoteView.swift"
+    "LayoutView.swift"
+    # --- Config engine integration (this fork) ---
+    "KeyMap.swift"
+    "MacActionExecutor.swift"
+    "Spaces.swift"
+    "WindowControl.swift"
+    "Brightness.swift"
+    "AppWatcher.swift"
+    "ConfigStore.swift"
+    "ConfigFileWatcher.swift"
+    # --- SiriRemoteCore (pure engine, compiled into the binary) ---
+    "../SiriRemoteCore/Sources/SiriRemoteCore/JSONC.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/Action.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/Config.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/ConfigLoader.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/ConfigWriter.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/Events.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/CircularScroll.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/MappingEngine.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/Controller.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/Placeholder.swift"
+)
+
+# Find SDK path
+SDK_PATH=$(xcrun --show-sdk-path --sdk macosx 2>/dev/null || echo "")
+
+if [ -z "$SDK_PATH" ]; then
+    echo "Error: macOS SDK not found. Please install Xcode Command Line Tools:"
+    echo "  xcode-select --install"
+    exit 1
+fi
+
+echo "Using SDK: $SDK_PATH"
+
+# Detect architecture
+ARCH=$(uname -m)
+if [ "$ARCH" == "arm64" ]; then
+    TARGET="arm64-apple-macosx13.0"
+else
+    TARGET="x86_64-apple-macosx13.0"
+fi
+
+echo "Building for: $TARGET"
+
+# C ring writer for the built-in-mic fallback (Phase 2b). Compiled by clang and linked
+# into the Swift binary: C owns the C11 atomics of the shared-memory ABI (see
+# mic/router/SiriRemoteMicRingWriter.c for the pattern this follows).
+clang -c -O2 -Wall -Wextra -Werror \
+    -isysroot "$SDK_PATH" \
+    -mmacosx-version-min=13.0 \
+    BuiltinMicRingWriter.c \
+    -o BuiltinMicRingWriter.o
+
+# Build
+swiftc \
+    -sdk "$SDK_PATH" \
+    -target "$TARGET" \
+    -o HyperVibe \
+    "${SWIFT_FILES[@]}" \
+    BuiltinMicRingWriter.o \
+    -import-objc-header SiriRemote-Bridging-Header.h \
+    -F /System/Library/PrivateFrameworks \
+    -framework IOKit \
+    -framework CoreGraphics \
+    -framework AudioToolbox \
+    -framework CoreAudio \
+    -framework AVFoundation \
+    -framework Carbon \
+    -framework AppKit \
+    -framework CoreBluetooth \
+    -framework SwiftUI \
+    -framework MultitouchSupport
+
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "✓ Build successful!"
+    echo ""
+    echo "To create a proper macOS app bundle, run:"
+    echo "  ./create_app_bundle.sh"
+    echo ""
+    echo "Or run directly with:"
+    echo "  ./HyperVibe"
+else
+    echo ""
+    echo "✗ Build failed!"
+    exit 1
+fi

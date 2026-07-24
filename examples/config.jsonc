@@ -1,0 +1,197 @@
+// Example ~/.config/siriremote/config.jsonc — a real, working setup you can crib from.
+// Copy it to ~/.config/siriremote/config.jsonc and edit; the app hot-reloads on save.
+// See the README for the full event-key / action / layer reference.
+//
+{
+  // siriRemote config — edit and save; changes hot-reload live.
+  // Event keys: ring.up ring.down ring.left ring.right
+  //             button.menu button.tv button.siri button.playPause
+  //             button.volumeUp button.volumeDown button.back
+  //             button.nextTrack button.prevTrack button.mute button.power
+  // Actions: keystroke(keys) media(key) mouse(op) launch(app|url)
+  //          shell(command) applescript(script) mode(to)
+  // A binding OVERRIDES native behavior; unbound buttons stay native.
+  "settings": {
+    "defaultMode": "global",
+    "cursorSpeed": 1.8,          // higher = faster cursor (overall baseline)
+    "cursorDeadzone": 0.006,     // higher = more jitter ignored, easier to hold & click
+    // Pointer acceleration: multiplier layered on cursorSpeed, driven by per-frame finger speed
+    // (same normalized units as cursorDeadzone). Slow = precise, fast = reach; ~1.0 at mid-speed.
+    "accelMin": 0.14,            // slow, deliberate → precision (~1px steps). Lower = finer/slower.
+    "accelMax": 6.0,             // quick flick → reach (higher: compensates the removed 2x double-scale)
+    "accelLowSpeed": 0.007,      // per-frame speed below which accel = accelMin (narrow precise zone; only the genuinely slow)
+    "accelHighSpeed": 0.06,      // per-frame speed above which accel = accelMax (a quick flick)
+    "clickRiseThreshold": 0.1,   // contact rise counted as a press (lower = freezes more readily)
+    "pressMoveMax": 0.025,       // finger move above this cancels a stray press-freeze
+    "holdThreshold": 0.5,        // seconds held → stage 1 (".hold"). Release-to-select: fires on RELEASE, not at the threshold.
+    "holdThreshold2": 1.0,       // seconds held → stage 2 (".hold2") — keep holding past stage 1 to reach it
+    "holdThreshold3": 1.6,       // seconds held → stage 3 (".hold3") — the deepest hold; deepest stage reached fires on release
+    "doubleTapWindow": 0.2,      // seconds for a 2nd tap to fire a "<key>.double" instead of a single (lower = snappier single, harder to double)
+    "spacesModeWindow": 5.0,     // Spaces Mode: seconds without a left/right switch before it disarms
+    "findCursorEnabled": true,   // shake the cursor (rapid back-and-forth) to flash a locate highlight
+    // Rest the cursor on an app that FILLS a display (fullscreen or just maximised) and it becomes
+    // frontmost, so keystroke bindings land where you are pointing. Only apps covering >=90% of a
+    // display: raising one of those changes nothing you can see, whereas doing this to overlapping
+    // windows would reshuffle them as the pointer crossed — and macOS cannot focus without raising.
+    "focusFollowsCursor": false,
+    // Circular scroll (iPod wheel): circle a finger on the OUTER ring to scroll.
+    "circularScroll": {
+      "enabled": true,
+      "minRadius": 0.35,         // only touches this far from center count as the outer ring
+      "startThreshold": 0.1,     // radians (~5.7°) of rotation before scrolling starts (was 0.35 ≈ 20°, too much)
+      "pixelsPerRadian": 75,     // scroll pixels per radian of rotation (speed) — lower = slower
+      "scrollEase": 0.3,         // scroll smoothing (smaller = smoother / laggier)
+      // Velocity gain — the wheel's pointer acceleration. Circle slowly = precise, fast = reach.
+      // Speeds are RADIANS PER FRAME (pad runs ~33-60Hz): slow circle ~0.01, quick spin ~0.07.
+      // Set accelMin = accelMax = 1 for the old strictly-1:1 behaviour.
+      "accelMin": 1.0,           // gain at/below accelLowSpeed  (lower = finer slow control)
+      "accelMax": 2.5,           // gain at/above accelHighSpeed (higher = more reach per turn)
+      "accelLowSpeed": 0.010,    // rad/frame below which gain = accelMin
+      "accelHighSpeed": 0.070,   // rad/frame above which gain = accelMax
+      "accelCurve": 2.0,         // bends the ramp: 1 = plain smoothstep (symmetric),
+                                 // >1 = stays precise longer then climbs steeply,
+                                 // <1 = reaches full speed sooner
+      "invert": true             // flip if it scrolls the wrong way (was false; circling felt reversed)
+    }
+  },
+
+  // Per-app auto-switch: frontmost app's bundle id -> mode name.
+  "appProfiles": {
+    "com.apple.Music": "music",
+    "com.google.Chrome": "browser",
+    "com.apple.Safari": "browser",
+    "dev.warp.Warp-Stable": "terminal",   // Warp (the user's terminal): hold Back button = repeat-delete
+    "com.apple.Terminal": "terminal",
+    "default": "global"
+  },
+
+  "modes": {
+    "global": {
+      // Side voice (Siri) button → right-side modifier chord (hyperkey) to bind in your app:
+      "button.siri":  { "action": "keystroke", "keys": "rctrl+rcmd+ropt" },
+      // Double-tap the Siri button → Enter (the single hyperkey above still fires on the 1st tap):
+      "button.siri.double": { "action": "keystroke", "keys": "enter" },
+      // Triple-tap the Siri button → Escape. Only the deepest count reached fires, so this never
+      // also emits the double or the single. The one cost: binding a triple means THIS key's
+      // double must wait one doubleTapWindow to see whether a 3rd tap is coming. No other key is
+      // affected, and the plain tap is never delayed.
+      "button.siri.triple": { "action": "keystroke", "keys": "escape" },
+      // Top-right Power button → dim all displays to minimum; any button/touch restores to max
+      // (Brightness.restoreIfDimmed). The Mac stays awake and remote-controllable (not display sleep).
+      "button.power": { "action": "brightness", "value": 0.0 },
+      // Hold Power past holdThreshold (0.5s) and release → actually sleep the Mac.
+      // NOTE: binding button.power at all requires turning off macOS's own power-button sleep, or
+      // it will ALSO lock the Mac on every press. See "Required system setting if you bind the
+      // Power button" in README.md — one `defaults write`, reversible.
+      
+      // Any binding may carry `label` and `icon` purely for display — they change nothing about
+      // what runs. The hold-progress HUD uses them to say what you'd get by releasing now.
+      //   label : short name shown on the card. Defaults to the action itself, which reads badly
+      //           for shell commands ("pmset sleepnow"), so name those.
+      //   icon  : an SF Symbol name (see Apple's SF Symbols app). Usually unnecessary — an action
+      //           that opens an app already shows that app's REAL icon, including `shell` commands
+      //           written as `open -a "Some App"` and AppleScript that says `tell application "X"`.
+      //           Otherwise a symbol is picked from the action kind.
+      //
+      // These INHERIT down the mode chain on their own, field by field, and independently of the
+      // binding: a key keeps its identity even where a mode re-binds it. Set them once here in
+      // "global" and every app mode that overrides the ACTION still shows the same name and icon —
+      // see "music" below, which re-binds Play/Pause but says nothing about how it looks. A mode
+      // that genuinely presents a key differently just says so, and the nearer mode wins.
+      "button.power.hold": { "action": "shell", "command": "pmset sleepnow",
+                             "label": "Sleep", "icon": "moon.fill" },
+      // Back button → Delete, everywhere. Modes that mean something else by "back" override it
+      // ("browser" → Cmd+[, "terminal" → auto-repeating delete); every other mode inherits this.
+      // A plain `keystroke`, not `repeatKey`: repeatKey returns before hold stages are armed, so
+      // making it repeat here would silently disable any `button.menu.hold*` you add later.
+      "button.menu":  { "action": "keystroke", "keys": "delete",
+                        "label": "Delete", "icon": "delete.left" },
+      // Play/Pause. The tap MUST stay bound whenever any variant below is bound: binding a
+      // .double/.hold stage makes the app own this button and suppress the native media key, so
+      // without this line a short press would do nothing at all.
+      "button.playPause":       { "action": "media", "key": "playpause",
+                                  "label": "Play / Pause", "icon": "playpause.fill" },
+      // Hold Play/Pause past holdThreshold2 (1.0s) and release → open Apple Music.
+      "button.playPause.hold2": { "action": "launch", "app": "Music" },
+      // TV button (to the right of Back) → toggle LAYER L1. TAP once to switch to L1 (sticky, stays
+      // until you tap again); tap again to switch back. (Holding it + pressing other keys = momentary
+      // L1.) An on-screen HUD confirms the switch. Add L1-specific bindings in the "L1" mode below.
+      "button.tv": { "action": "layer", "to": "L1" },
+      // Click-ring = a 4-way arrow d-pad. Left/Right are plain ←/→: inside Mission Control they
+      // browse spaces/windows; elsewhere they're just arrow keys (no direct desktop switching).
+      "ring.up":      { "action": "keystroke", "keys": "up" },
+      "ring.down":    { "action": "keystroke", "keys": "down" },
+      "ring.left":    { "action": "keystroke", "keys": "left" },
+      "ring.right":   { "action": "keystroke", "keys": "right" },
+      // --- What LAYER L1 does. "L1.<key>" here = the DEFAULT for every app; override it per-app by
+      //     adding "L1.<key>" to that app's own mode (e.g. "browser" below). Edit these in the app:
+      //     Settings → Layout → pick an app chip + "Editing: layer L1".
+      "L1.ring.left":         { "action": "keystroke", "keys": "cmd+shift+left" },   // prev tab
+      "L1.ring.right":        { "action": "keystroke", "keys": "cmd+shift+right" },  // next tab
+      "L1.button.volumeUp":   { "action": "keystroke", "keys": "cmd+=" },            // zoom in
+      "L1.button.volumeDown": { "action": "keystroke", "keys": "cmd+-" },            // zoom out
+      // Long-press ring UP → open Mission Control (single tap still sends ↑ on release):
+      "ring.up.hold": { "action": "shell", "command": "open -a 'Mission Control'" },
+      // DOUBLE-tap ring LEFT/RIGHT → switch desktop, in ANY app (inherited by every mode).
+      "ring.left.double":  { "action": "space", "to": "left" },
+      "ring.right.double": { "action": "space", "to": "right" }
+    },
+    // In Chrome / Safari, the Back button (reports as button.menu on this remote) = Back in history
+    // Chrome / Safari. BASE ring left/right = prev/next tab; in LAYER L1 they become plain arrows.
+    "browser": {
+      "inherits":     "global",
+      // Back button (button.menu) → history Back (Cmd+[).
+      "button.menu":  { "action": "keystroke", "keys": "cmd+[" },
+      // BASE (no layer): ring left/right = prev/next TAB (Cmd+Option+←/→).
+      "ring.left":     { "action": "keystroke", "keys": "cmd+opt+left" },
+      "ring.right":    { "action": "keystroke", "keys": "cmd+opt+right" },
+      // In LAYER L1: ring left/right = plain arrows (overrides the global L1 default), for Chrome & Safari.
+      "L1.ring.left":  { "action": "keystroke", "keys": "left" },
+      "L1.ring.right": { "action": "keystroke", "keys": "right" },
+      // Double-tap ring-DOWN → close tab (Cmd+W); double-tap ring-UP → reopen last closed tab (Cmd+Shift+T).
+      "ring.down.double": { "action": "keystroke", "keys": "cmd+w" },
+      "ring.up.double":   { "action": "keystroke", "keys": "cmd+shift+t" }
+    },
+    // In Apple Music, ring left/right skip tracks instead (inherits the rest from global):
+    "music": {
+      "inherits":        "global",
+      // These have no counterpart in "global", so they carry their own presentation.
+      "ring.left":       { "action": "applescript", "script": "tell application \"Music\" to previous track",
+                           "label": "Previous", "icon": "backward.end.fill" },
+      "ring.right":      { "action": "applescript", "script": "tell application \"Music\" to next track",
+                           "label": "Next", "icon": "forward.end.fill" },
+      // Deliberately NO label/icon: this re-binds the ACTION (talking to Music directly rather than
+      // through the media key), but it is still the same button, so it inherits "Play / Pause" and
+      // playpause.fill from "global". Restating them here would be duplication waiting to drift.
+      "button.playPause":{ "action": "applescript", "script": "tell application \"Music\" to playpause" },
+      // "global" leaves Mute unbound, so there is nothing to inherit — this one names itself.
+      "button.mute":     { "action": "applescript", "script": "tell application \"Music\" to set mute to not mute",
+                           "label": "Mute", "icon": "speaker.slash.fill" }
+    },
+    // In a terminal (Warp), the Back button (button.menu) deletes a char; HOLDING it auto-repeats
+    // delete (repeatKey) until release — the app generates the repeats (the remote won't).
+    "terminal": {
+      "inherits":    "global",
+      "button.menu": { "action": "repeatKey", "keys": "delete", "delay": 0.3, "interval": 0.045 },
+      // Double-tap ring-DOWN → close tab/pane (Cmd+W); double-tap ring-UP → reopen closed tab
+      // (Cmd+Shift+T). Double-tap ring-left/right stay the global switch-desktop.
+      "ring.down.double": { "action": "keystroke", "keys": "cmd+w" },
+      "ring.up.double":   { "action": "keystroke", "keys": "cmd+shift+t" }
+    },
+    // L1: the LAYER toggled by the TV button (see button.tv above). Its bindings live as "L1.<key>"
+    // in the app modes (global = default; per-app overrides in each app's mode).
+    //
+    // A layer is a MODIFIER, not a separate keyboard. A key the layer says nothing about keeps
+    // doing whatever it does unlayered, IN THE CURRENT APP — holding the layer never deadens a
+    // bound key. Resolution order for key K while layer L is held:
+    //   1. "L.K" in the current app's mode chain   — this app, in this layer
+    //   2. "K" among mode "L"'s OWN bindings       — any app, in this layer
+    //   3. "K" in the current app's mode chain     — this app, without the layer
+    // Put app-agnostic layer bindings directly in this mode; they are step 2.
+    // (Step 2 does not follow this mode's `inherits`, or global's base binding would shadow the
+    // current app's at step 3.)
+    "L1": {
+      "inherits": "global"
+    }
+  }
+}

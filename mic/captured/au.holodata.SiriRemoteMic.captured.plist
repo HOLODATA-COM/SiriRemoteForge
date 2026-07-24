@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>au.holodata.SiriRemoteMic.captured</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Application Support/SiriRemoteMic/srm_captured</string>
+    </array>
+    <!-- Start at boot and stay resident: it must be listening for the demand notification the
+         instant any app opens the virtual mic. KeepAlive restarts it if it ever crashes. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Adaptive</string>
+    <key>StandardOutPath</key>
+    <string>/var/log/srm_captured.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/srm_captured.log</string>
+</dict>
+</plist>
