@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/logo.png" alt="SiriRemoteForge" width="132" height="132">
+
 # 🛰️ SiriRemoteForge
 
 ### Thirteen buttons. However many meanings you want.
