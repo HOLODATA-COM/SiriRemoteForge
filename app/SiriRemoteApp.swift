@@ -312,12 +312,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // tick per bound stage and the name of the action that runs if it is released right now.
         let progress = HoldProgressHUD()
         holdHUD = progress
-        remoteInputHandler?.onHoldBegan = { base, stages in
+        remoteInputHandler?.onHoldBegan = { startedAt, base, stages in
             func face(_ action: Action, _ p: Config.Presentation?) -> HoldProgressHUD.Face {
                 let v = ActionVisual.resolve(action, p)
                 return .init(label: v.label, image: v.image, iconOnly: v.iconOnly)
             }
-            progress.begin(base: base.map { face($0.action, $0.presentation) },
+            progress.begin(startedAt: startedAt,
+                           base: base.map { face($0.action, $0.presentation) },
                            stages: stages.map {
                                var f = face($0.action, $0.presentation)
                                f.isCancel = $0.isCancel

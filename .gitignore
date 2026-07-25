@@ -37,3 +37,8 @@ app/BuiltinMicRingWriter.o
 # Apple's PacketLogger. NEVER publish: personal data + redistributing Apple's tool would violate its
 # license. The dist/*.sh + dist/*.applescript source stay tracked; only the generated output is ignored.
 dist/build/
+
+# Local product-film production files and rendered media.
+# This directory contains narration, animation sources, app artwork, and final exports.
+# It is intentionally local-only and must never be published with the open-source repository.
+video/

@@ -57,11 +57,10 @@ class RemoteInputHandler {
     var controller: Controller?
 
     /// Multi-stage long-press — RELEASE-TO-SELECT. If any of `<key>.hold`/`.hold2`/`.hold3` is
-    /// bound, a press schedules a timer for each BOUND stage at its threshold (holdThreshold =
-    /// stage 1, holdThreshold2 = stage 2, holdThreshold3 = stage 3). When a stage's timer elapses
-    /// it only RECORDS that the stage was reached (`deepestStage`) — it does NOT fire. Keep holding
-    /// to reach a deeper stage. On RELEASE, the deepest bound stage reached is fired; releasing
-    /// before stage 1 fires the normal tap/double instead. HID callbacks run on the main runloop.
+    /// bound, a press captures one monotonic start time plus every BOUND stage threshold. On release,
+    /// elapsed time selects the deepest crossed stage; releasing before stage 1 fires tap/double.
+    /// The HUD receives that SAME start time and thresholds, so the icon on screen and the action
+    /// selected on release cannot drift apart when a main-queue timer is delayed under load.
     /// (Consequence: a single `.hold` binding now fires on release-after-threshold, not at the
     /// threshold — an intentional trade of the multi-stage model.)
     var holdThreshold: TimeInterval = 0.5
@@ -70,28 +69,27 @@ class RemoteInputHandler {
     /// Seconds after the DEEPEST BOUND stage past which releasing fires nothing — the escape hatch
     /// for a hold started by mistake. 0 disables it.
     ///
-    /// Only reaches keys that actually have hold bindings: it is armed inside the same branch as
-    /// the stage timers, and `.repeatKey` keys return long before that. A key whose hold means
+    /// Only reaches keys that actually have hold bindings: it is captured inside the same branch as
+    /// the stage thresholds, and `.repeatKey` keys return long before that. A key whose hold means
     /// "repeat" (Back in a terminal) therefore never cancels, which is right — there is nothing
     /// pending to take back, the repeats already happened.
     var holdCancelGrace: TimeInterval = 1.0
-    private var holdCancelled: Set<String> = []
-    private var holdCancelWork: [String: DispatchWorkItem] = [:]
-    private var holdStageTimers: [String: [DispatchWorkItem]] = [:]
-
     /// One armed hold stage: which binding it fires and when. Ordered by `delay`, NOT by the `.hold`
     /// / `.hold2` / `.hold3` suffix — with per-binding `after` overrides a key may perfectly well
     /// give `.hold3` an earlier delay than `.hold`, and the suffix is then just a name.
     private struct ArmedStage {
         let key: String
         let delay: TimeInterval
+        let ordinal: Int
     }
-    /// The stages armed for the press in progress, sorted by delay.
-    private var armedStages: [String: [ArmedStage]] = [:]
-    /// Index into `armedStages` of the DEEPEST stage reached. Timers fire in time order, so the last
-    /// one to write wins — no max() over stage numbers, which stopped meaning "latest" the moment
-    /// delays became per-binding.
-    private var deepestStage: [String: Int] = [:]
+    /// One complete hold gesture. `cancelAt` is captured at press time so a config hot reload cannot
+    /// move the escape hatch underneath a button that is already down.
+    private struct ArmedHold {
+        let startedAt: CFTimeInterval
+        let stages: [ArmedStage]
+        let cancelAt: TimeInterval?
+    }
+    private var armedHolds: [String: ArmedHold] = [:]
 
     /// Layer key (Feature: LAYER). A `.layer` binding gives its button BOTH activation styles:
     ///   • HOLD it and press other keys → momentary (the layer is active only while held).
@@ -123,7 +121,8 @@ class RemoteInputHandler {
     /// with its threshold and a short label for the action it would run; `onHoldEnded` reports which
     /// stage actually fired (0 = released before stage 1). Only emitted for buttons that have at
     /// least one hold binding — there is nothing to choose between otherwise.
-    var onHoldBegan: ((_ base: (action: Action, presentation: Config.Presentation?)?,
+    var onHoldBegan: ((_ startedAt: CFTimeInterval,
+                       _ base: (action: Action, presentation: Config.Presentation?)?,
                        _ stages: [(threshold: TimeInterval, action: Action,
                                    presentation: Config.Presentation?, isCancel: Bool)]) -> Void)?
     /// Which of the stages passed to `onHoldBegan` fired, as a 1-BASED POSITION in that list
@@ -688,9 +687,9 @@ class RemoteInputHandler {
     /// Route a button press/release through the config engine. Priority on press: Spaces Mode →
     /// `.pushToTalk` (both raw edges, no discrimination) → `.repeatKey` (auto-repeat) →
     /// `.layer` (momentary layer) → multi-stage long-press / tap.
-    /// Long-press is RELEASE-TO-SELECT (see the `holdThreshold`/`holdStageTimers` docs): a press
-    /// arms a timer per bound `.hold*` stage, each timer only records the stage reached, and the
-    /// deepest stage reached fires on release; a release before stage 1 fires the tap/double.
+    /// Long-press is RELEASE-TO-SELECT (see the `holdThreshold`/`armedHolds` docs): a press
+    /// captures one clock anchor plus every bound `.hold*` threshold, and elapsed time selects the
+    /// deepest stage on release; a release before stage 1 fires the tap/double.
     /// Unbound events do nothing.
     /// If a layer button is held momentarily and a DIFFERENT button is pressed, the layer is being
     /// "used" (as a shift), so its release should revert — not toggle it sticky.
@@ -707,6 +706,9 @@ class RemoteInputHandler {
     private func routeButton(_ buttonName: String, pressed: Bool) {
         guard let controller = controller else { return }
         let tapKey = RemoteInputHandler.configKey(for: buttonName)
+        // Capture release selection once. The layer branch and the hold-dispatch branch must make
+        // the same decision even if this release lands exactly on a stage boundary.
+        let releaseHoldSelection = pressed ? nil : currentHoldSelection(for: buttonName)
 
         // If a layer button is being held momentarily, ANY other button press "uses" it (so its
         // release reverts the layer instead of toggling it sticky). Mark this FIRST — before the
@@ -856,7 +858,7 @@ class RemoteInputHandler {
             // engaged optimistically on press and DO NOT return — the hold path below still has to
             // dispatch the action, cancel the stage timers and dismiss the progress card. Returning
             // here left all three undone, so the card hung on screen looking like a stuck hold.
-            if deepestStage[buttonName] != nil || holdCancelled.contains(buttonName) {
+            if let selection = releaseHoldSelection, selection != .tap {
                 unwindMomentaryLayer()
             } else {
                 let name = layerName ?? ""
@@ -909,8 +911,8 @@ class RemoteInputHandler {
             handleTapPress(buttonName, tapKey: tapKey)
             startAutoRepeatIfEligible(buttonName, tapKey: tapKey)
         } else {
-            // Release-to-select: cancel remaining stage timers, then fire the deepest stage reached.
-            guard let items = holdStageTimers.removeValue(forKey: buttonName) else {
+            // Release-to-select from elapsed monotonic time — never from delayed timer callbacks.
+            guard let hold = armedHolds.removeValue(forKey: buttonName) else {
                 // No hold stages: this is where the double-tap window OPENS. Measuring it from the
                 // release rather than from the press is the point — a first tap held a little
                 // longer would otherwise eat into the window, so how fast you must tap the second
@@ -918,24 +920,22 @@ class RemoteInputHandler {
                 handleTapRelease(buttonName, tapKey: tapKey)
                 return
             }
-            items.forEach { $0.cancel() }
-            let reachedIndex = deepestStage.removeValue(forKey: buttonName)
-            let armed = armedStages.removeValue(forKey: buttonName) ?? []
-            holdCancelWork.removeValue(forKey: buttonName)?.cancel()
-            let cancelled = holdCancelled.remove(buttonName) != nil
+            let selection = releaseHoldSelection ?? HoldTiming.selection(
+                elapsed: CACurrentMediaTime() - hold.startedAt,
+                stageDelays: hold.stages.map(\.delay),
+                cancelAt: hold.cancelAt)
 
-            // `armed` is already in the order the HUD was given, so the index IS the position —
-            // no translating between stage numbers and list positions, which is what previously
-            // confirmed the wrong action on release. The cancel entry, if any, sits after them all.
-            if cancelled {
-                onHoldEnded?(armed.count + 1)
+            switch selection {
+            case .cancel:
+                onHoldEnded?(hold.stages.count + 1)
                 print("🔘 \(tapKey) hold cancelled")
-                return
-            }
-            onHoldEnded?(reachedIndex.map { $0 + 1 } ?? 0)
-            if let index = reachedIndex, index < armed.count {
-                fireHold(controller: controller, holdKey: armed[index].key)
-            } else {
+            case .stage(let index):
+                onHoldEnded?(index + 1)
+                if index < hold.stages.count {
+                    fireHold(controller: controller, holdKey: hold.stages[index].key)
+                }
+            case .tap:
+                onHoldEnded?(0)
                 // Released before the first stage → it was a tap: fire the single (or a `.double`).
                 fireTapOrDouble(buttonName, tapKey: tapKey)
             }
@@ -946,8 +946,8 @@ class RemoteInputHandler {
     /// progress HUD. Returns false — arming nothing — if the button binds no stage in that family,
     /// so the caller can fall through to the next family or to the plain tap. This is the shared
     /// machinery behind both the plain long-press and the tap-then-hold menu; only the binding
-    /// suffix differs. The release branch above is family-agnostic: it reads `holdStageTimers`
-    /// whichever family populated it.
+    /// suffix differs. The release branch above is family-agnostic: it reads whichever `ArmedHold`
+    /// the press populated.
     private func armHoldStages(buttonName: String, tapKey: String, family: HoldFamily) -> Bool {
         guard let controller = controller else { return false }
 
@@ -958,47 +958,53 @@ class RemoteInputHandler {
             let stageKey = RemoteInputHandler.holdStageKey(tapKey, stage, family)
             guard controller.hasBinding(for: stageKey) else { continue }
             let delay = controller.resolvedHoldDelay(for: stageKey) ?? holdStageThreshold(stage)
-            armed.append(ArmedStage(key: stageKey, delay: delay))
+            armed.append(ArmedStage(key: stageKey, delay: delay, ordinal: stage))
         }
         guard !armed.isEmpty else { return false }
-        armed.sort { $0.delay < $1.delay }
+        // Equal effective delays keep their declared `.hold`/`.hold2`/`.hold3` order so the input
+        // selection and HUD use one deterministic stage position.
+        armed.sort {
+            $0.delay == $1.delay ? $0.ordinal < $1.ordinal : $0.delay < $1.delay
+        }
 
-        var items: [DispatchWorkItem] = []
         var hudStages: [(threshold: TimeInterval, action: Action,
                          presentation: Config.Presentation?, isCancel: Bool)] = []
-        for (index, stage) in armed.enumerated() {
-            let work = DispatchWorkItem { [weak self] in self?.deepestStage[buttonName] = index }
-            items.append(work)
-            DispatchQueue.main.asyncAfter(deadline: .now() + stage.delay, execute: work)
+        for stage in armed {
             if let stageAction = controller.resolvedAction(for: stage.key) {
                 hudStages.append((stage.delay, stageAction,
                                   controller.resolvedPresentation(for: stage.key), false))
             }
         }
-        // Cancel anything still armed from a previous press whose release was swallowed —
-        // overwriting the dictionary would orphan those work items, not stop them.
-        holdStageTimers.removeValue(forKey: buttonName)?.forEach { $0.cancel() }
-        holdCancelWork.removeValue(forKey: buttonName)?.cancel()
-        deepestStage.removeValue(forKey: buttonName)   // absent = no stage reached yet
-        armedStages[buttonName] = armed
-        holdStageTimers[buttonName] = items
-        holdCancelled.remove(buttonName)
-
         // Escape hatch: keep holding past the deepest stage and releasing does nothing at all.
+        var cancelAt: TimeInterval?
         if holdCancelGrace > 0, let deepest = armed.last {
-            let cancelAt = deepest.delay + holdCancelGrace
-            let cancel = DispatchWorkItem { [weak self] in self?.holdCancelled.insert(buttonName) }
-            holdCancelWork[buttonName] = cancel
-            DispatchQueue.main.asyncAfter(deadline: .now() + cancelAt, execute: cancel)
-            hudStages.append((cancelAt, Action.mouse(op: "click"),
+            let threshold = deepest.delay + holdCancelGrace
+            cancelAt = threshold
+            hudStages.append((threshold, Action.mouse(op: "click"),
                               Config.Presentation(label: "Cancel", icon: "arrow.uturn.backward"), true))
         }
+        let startedAt = CACurrentMediaTime()
+        armedHolds[buttonName] = ArmedHold(startedAt: startedAt, stages: armed, cancelAt: cancelAt)
         // Stage 0 is the ordinary tap — releasing early fires it (see the release branch).
         let base = controller.resolvedAction(for: tapKey).map {
             (action: $0, presentation: controller.resolvedPresentation(for: tapKey))
         }
-        onHoldBegan?(base, hudStages)
+        onHoldBegan?(startedAt, base, hudStages)
         return true
+    }
+
+    /// Select the action that the HUD represents at this instant. Both sides use the exact same
+    /// monotonic anchor and threshold comparison (`>=`), removing the timer-callback race where the
+    /// Cancel arrow was already visible but release still dispatched Quit App.
+    private func currentHoldSelection(
+        for buttonName: String,
+        at now: CFTimeInterval = CACurrentMediaTime()
+    ) -> HoldSelection? {
+        guard let hold = armedHolds[buttonName] else { return nil }
+        return HoldTiming.selection(
+            elapsed: now - hold.startedAt,
+            stageDelays: hold.stages.map(\.delay),
+            cancelAt: hold.cancelAt)
     }
 
     /// A press qualifies as the "hold" half of tap-then-hold when the key carries a `.taphold*` menu
@@ -1430,7 +1436,8 @@ class RemoteInputHandler {
 
             // Same card as any other hold. Not emitted for a drop press, which schedules nothing —
             // a filling track there would promise a drag that is not coming.
-            onHoldBegan?((action: .mouse(op: "click"),
+            onHoldBegan?(CACurrentMediaTime(),
+                         (action: .mouse(op: "click"),
                           presentation: RemoteInputHandler.selectTapPresentation),
                          [(stickyDragThreshold, Action.mouse(op: "click"),
                            RemoteInputHandler.selectDragPresentation, false)])
@@ -1639,13 +1646,9 @@ class RemoteInputHandler {
             // losing the device (releaseAllHeldKeys) or a deliberate press drops it.
         }
 
-        // Hold stages. Left running, a stale recorder fires during the NEXT press and inflates
-        // `deepestStage`, so releasing that press as a quick tap dispatches the long-press action.
-        holdStageTimers.removeValue(forKey: buttonName)?.forEach { $0.cancel() }
-        holdCancelWork.removeValue(forKey: buttonName)?.cancel()
-        deepestStage.removeValue(forKey: buttonName)
-        armedStages.removeValue(forKey: buttonName)
-        holdCancelled.remove(buttonName)
+        // Hold selection is derived from this press's immutable clock anchor; removing the record
+        // makes it impossible for a torn-down press to affect a later one.
+        armedHolds.removeValue(forKey: buttonName)
         tapFiredThisPress.remove(buttonName)
 
         // A momentary layer is engaged on press and released only in the release branch. Swallow
@@ -1660,13 +1663,7 @@ class RemoteInputHandler {
     }
 
     private func cancelHoldStages() {
-        for (_, items) in holdStageTimers { items.forEach { $0.cancel() } }
-        holdStageTimers.removeAll()
-        for (_, work) in holdCancelWork { work.cancel() }
-        holdCancelWork.removeAll()
-        deepestStage.removeAll()
-        armedStages.removeAll()
-        holdCancelled.removeAll()
+        armedHolds.removeAll()
     }
 
     private func postKey(keyCode: Int, flags: CGEventFlags, keyDown: Bool) {

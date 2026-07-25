@@ -56,6 +56,7 @@ SWIFT_FILES=(
     "../SiriRemoteCore/Sources/SiriRemoteCore/ConfigWriter.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/Events.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/CircularScroll.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/HoldTiming.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/MappingEngine.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/Controller.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/Placeholder.swift"
