@@ -11,6 +11,12 @@ import Foundation
 struct TuneSettings: Codable, Equatable {
     var cursorSpeed: Double
     var cursorDeadzone: Double
+    var touchMovesScroll: Bool
+    var touchScrollSpeed: Double
+    var touchScrollAcceleration: Bool
+    var touchModeSwitchEnabled: Bool
+    var touchModeSwitchButton: String?
+    var touchModeSwitchTrigger: String
     var accelMin: Double
     var accelMax: Double
     var accelLowSpeed: Double
@@ -24,6 +30,7 @@ struct TuneSettings: Codable, Equatable {
     var doubleTapWindow: Double
     var spacesModeWindow: Double
     var findCursorEnabled: Bool
+    var findCursorSensitivity: Double
     var focusFollowsCursor: Bool
     var circularEnabled: Bool
     var circularMinRadius: Double
@@ -39,10 +46,14 @@ struct TuneSettings: Codable, Equatable {
     var circularAccelCurve: Double
 
     static let `default` = TuneSettings(
-        cursorSpeed: 0.6, cursorDeadzone: 0.006, accelMin: 0.4, accelMax: 2.6,
+        cursorSpeed: 0.6, cursorDeadzone: 0.006,
+        touchMovesScroll: false, touchScrollSpeed: 300, touchScrollAcceleration: false,
+        touchModeSwitchEnabled: false, touchModeSwitchButton: nil, touchModeSwitchTrigger: "tap",
+        accelMin: 0.4, accelMax: 2.6,
         accelLowSpeed: 0.008, accelHighSpeed: 0.06, clickRiseThreshold: 0.1, pressMoveMax: 0.025,
         holdThreshold: 0.5, holdThreshold2: 1.0, holdThreshold3: 1.6, holdCancelGrace: 1.0,
         doubleTapWindow: 0.3, spacesModeWindow: 5.0, findCursorEnabled: true,
+        findCursorSensitivity: 0.5,
         focusFollowsCursor: false,
         circularEnabled: true,
         circularMinRadius: 0.35, circularStartThreshold: 0.35, circularPixelsPerRadian: 75,
@@ -55,6 +66,12 @@ struct TuneSettings: Codable, Equatable {
     init(seed s: Config.Settings) {
         cursorSpeed = s.cursorSpeed
         cursorDeadzone = s.cursorDeadzone
+        touchMovesScroll = s.touchMovesScroll
+        touchScrollSpeed = s.touchScrollSpeed
+        touchScrollAcceleration = s.touchScrollAcceleration
+        touchModeSwitchEnabled = s.touchModeSwitchEnabled
+        touchModeSwitchButton = s.touchModeSwitchButton
+        touchModeSwitchTrigger = s.touchModeSwitchTrigger
         accelMin = s.accelMin
         accelMax = s.accelMax
         accelLowSpeed = s.accelLowSpeed
@@ -68,10 +85,11 @@ struct TuneSettings: Codable, Equatable {
         doubleTapWindow = s.doubleTapWindow
         spacesModeWindow = s.spacesModeWindow
         findCursorEnabled = s.findCursorEnabled
+        findCursorSensitivity = s.findCursorSensitivity
         focusFollowsCursor = s.focusFollowsCursor
         circularEnabled = s.circularScroll.enabled
         circularMinRadius = s.circularScroll.minRadius
-        circularStartThreshold = s.circularScroll.startThreshold
+        circularStartThreshold = min(max(s.circularScroll.startThreshold, 0), .pi / 4)
         circularPixelsPerRadian = s.circularScroll.pixelsPerRadian
         circularScrollEase = s.circularScroll.scrollEase
         circularInvert = s.circularScroll.invert
@@ -82,12 +100,17 @@ struct TuneSettings: Codable, Equatable {
         circularAccelCurve = s.circularScroll.accelCurve
     }
 
-    init(cursorSpeed: Double, cursorDeadzone: Double, accelMin: Double, accelMax: Double,
+    init(cursorSpeed: Double, cursorDeadzone: Double,
+         touchMovesScroll: Bool, touchScrollSpeed: Double, touchScrollAcceleration: Bool,
+         touchModeSwitchEnabled: Bool, touchModeSwitchButton: String?,
+         touchModeSwitchTrigger: String,
+         accelMin: Double, accelMax: Double,
          accelLowSpeed: Double, accelHighSpeed: Double, clickRiseThreshold: Double,
          pressMoveMax: Double, holdThreshold: Double, holdThreshold2: Double, holdThreshold3: Double,
          holdCancelGrace: Double,
          doubleTapWindow: Double,
-         spacesModeWindow: Double, findCursorEnabled: Bool, focusFollowsCursor: Bool,
+         spacesModeWindow: Double, findCursorEnabled: Bool, findCursorSensitivity: Double,
+         focusFollowsCursor: Bool,
          circularEnabled: Bool,
          circularMinRadius: Double, circularStartThreshold: Double, circularPixelsPerRadian: Double,
          circularScrollEase: Double, circularInvert: Bool,
@@ -96,6 +119,12 @@ struct TuneSettings: Codable, Equatable {
          circularAccelCurve: Double) {
         self.cursorSpeed = cursorSpeed
         self.cursorDeadzone = cursorDeadzone
+        self.touchMovesScroll = touchMovesScroll
+        self.touchScrollSpeed = touchScrollSpeed
+        self.touchScrollAcceleration = touchScrollAcceleration
+        self.touchModeSwitchEnabled = touchModeSwitchEnabled
+        self.touchModeSwitchButton = touchModeSwitchButton
+        self.touchModeSwitchTrigger = touchModeSwitchTrigger
         self.accelMin = accelMin
         self.accelMax = accelMax
         self.accelLowSpeed = accelLowSpeed
@@ -109,6 +138,7 @@ struct TuneSettings: Codable, Equatable {
         self.doubleTapWindow = doubleTapWindow
         self.spacesModeWindow = spacesModeWindow
         self.findCursorEnabled = findCursorEnabled
+        self.findCursorSensitivity = findCursorSensitivity
         self.focusFollowsCursor = focusFollowsCursor
         self.circularEnabled = circularEnabled
         self.circularMinRadius = circularMinRadius
@@ -137,5 +167,20 @@ struct TuneSettings: Codable, Equatable {
             accelLowSpeed: circularAccelLowSpeed,
             accelHighSpeed: circularAccelHighSpeed,
             accelCurve: circularAccelCurve)
+    }
+
+    /// Exact config event reserved by the Touch Surface switch, or nil while disabled/unassigned.
+    var touchModeSwitchEventKey: String? {
+        guard touchModeSwitchEnabled, let button = touchModeSwitchButton else { return nil }
+        let suffix: String
+        switch touchModeSwitchTrigger {
+        case "double": suffix = ".double"
+        case "triple": suffix = ".triple"
+        case "hold":   suffix = ".hold"
+        case "hold2":  suffix = ".hold2"
+        case "hold3":  suffix = ".hold3"
+        default:       suffix = ""
+        }
+        return button + suffix
     }
 }

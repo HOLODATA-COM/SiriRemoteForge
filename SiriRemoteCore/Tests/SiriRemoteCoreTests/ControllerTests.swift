@@ -83,6 +83,29 @@ final class ControllerTests: XCTestCase {
         XCTAssertFalse(c.hasBinding(for: "button.tv.hold"))
     }
 
+    func testRuntimeOverridePreservesAndRestoresSavedBinding() throws {
+        let spy = SpyExecutor()
+        let c = try makeController(cfg, spy)
+        var toggles = 0
+        c.setRuntimeOverride(
+            for: "button.tv",
+            presentation: .init(label: "Touch switch", icon: "arrow.triangle.2.circlepath")
+        ) {
+            toggles += 1
+        }
+
+        XCTAssertEqual(c.resolvedAction(for: "button.tv"), .disabled)
+        XCTAssertEqual(c.resolvedPresentation(for: "button.tv")?.label, "Touch switch")
+        XCTAssertTrue(c.handle(InputEvent(key: "button.tv")))
+        XCTAssertEqual(toggles, 1)
+        XCTAssertTrue(spy.executed.isEmpty)
+
+        c.setRuntimeOverride(for: "button.tv", handler: nil)
+        XCTAssertEqual(c.resolvedAction(for: "button.tv"), .shell(command: "say hi"))
+        XCTAssertTrue(c.handle(InputEvent(key: "button.tv")))
+        XCTAssertEqual(spy.executed.map(\.0), [.shell(command: "say hi")])
+    }
+
     // MARK: - Momentary layer (Feature: LAYER)
 
     private let layerCfg = """

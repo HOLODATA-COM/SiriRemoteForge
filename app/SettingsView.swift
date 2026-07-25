@@ -34,6 +34,7 @@ struct SettingsView: View {
                 Form {
                     deviceSection
                     cursorSection
+                    touchSurfaceSection
                     accelerationSection
                     clickSection
                     circularSection
@@ -44,7 +45,10 @@ struct SettingsView: View {
                 .formStyle(.grouped)
             case .layout:
                 if let config = model.config {
-                    LayoutView(config: config, onSave: { newConfig in
+                    LayoutView(
+                        config: config,
+                        reservedEventKey: model.tune.touchModeSwitchEventKey,
+                        onSave: { newConfig in
                         // Atomic, validated write → hot-reloads → refreshes model.config. A failed
                         // write (invalid config / permissions) leaves the old file intact; log it.
                         do { try ConfigStore.save(newConfig) }
@@ -241,8 +245,8 @@ struct SettingsView: View {
             }
         } footer: {
             Text(device.updatedAt == nil
-                 ? "The remote's microphone is not readable on macOS — see docs/mic-reverse-engineering.md"
-                 : "Battery and firmware come from the system Bluetooth stack. The microphone is not readable on macOS.")
+                 ? "Open Setup & Permissions from the menu bar to configure Siri Remote Mic."
+                 : "Battery and firmware come from the system Bluetooth stack. Siri Remote Mic readiness is shown under Setup & Permissions.")
                 .font(.system(size: 11))
         }
     }
@@ -262,13 +266,19 @@ struct SettingsView: View {
             Toggle(isOn: $model.tune.findCursorEnabled) {
                 rowLabel("Find cursor on shake", "cursorarrow.rays")
             }
+            if model.tune.findCursorEnabled {
+                slider(icon: "waveform.path", title: "Shake sensitivity",
+                       value: $model.tune.findCursorSensitivity, range: 0...1,
+                       minIcon: "minus", maxIcon: "plus",
+                       display: { String(format: "%.0f%%", $0 * 100) })
+            }
             Toggle(isOn: $model.tune.focusFollowsCursor) {
                 rowLabel("Focus app under cursor", "macwindow.on.rectangle")
             }
         } header: {
             Text("Cursor")
         } footer: {
-            Text("Higher steadiness ignores finger jitter, so it's easier to hold still and click. Find cursor on shake flashes a ring around the pointer when you rapidly shake it back and forth.\n\nFocus app under cursor makes shortcuts land where you're pointing: rest the cursor on another display and the app there becomes frontmost. Only apps already covering that whole display, fullscreen or maximised — raising one of those changes nothing you can see, while doing this to overlapping windows would reshuffle them as the pointer crossed.")
+            Text("Higher steadiness ignores finger jitter, so it's easier to hold still and click. Find cursor on shake flashes a ring around the pointer when you shake it back and forth; higher sensitivity accepts slower movement and gives the shake more time to complete.\n\nFocus app under cursor makes shortcuts land where you're pointing: rest the cursor on another display and the app there becomes frontmost. Only apps already covering that whole display, fullscreen or maximised — raising one of those changes nothing you can see, while doing this to overlapping windows would reshuffle them as the pointer crossed.")
         }
     }
 
@@ -294,6 +304,60 @@ struct SettingsView: View {
             Text("Pointer Acceleration")
         } footer: {
             Text("Slow finger motion moves the cursor less (precision); fast motion moves it more (reach), scaling on top of Speed. The two thresholds mark where the slow and fast ends kick in — below the slow threshold the factor is the slow-move factor, above the fast threshold it's the fast-move factor, smooth between.")
+        }
+    }
+
+    private var touchSurfaceSection: some View {
+        Section {
+            Picker(selection: $model.tune.touchMovesScroll) {
+                Text("Move pointer").tag(false)
+                Text("Scroll").tag(true)
+            } label: {
+                rowLabel("One-finger movement", "hand.draw")
+            }
+            slider(icon: "speedometer", title: "Scroll speed",
+                   value: $model.tune.touchScrollSpeed, range: 20...500,
+                   minIcon: "tortoise.fill", maxIcon: "hare.fill",
+                   display: { String(format: "%.0f", $0) })
+            Toggle(isOn: $model.tune.touchScrollAcceleration) {
+                rowLabel("Scroll acceleration", "gauge.with.dots.needle.50percent")
+            }
+            Toggle(isOn: $model.tune.touchModeSwitchEnabled) {
+                rowLabel("Switch modes with remote", "arrow.triangle.2.circlepath")
+            }
+            .disabled(model.tune.touchModeSwitchButton == nil)
+
+            HStack(spacing: 8) {
+                rowLabel("Switch button", "av.remote")
+                Spacer()
+                if model.isCapturingTouchModeButton {
+                    ProgressView().controlSize(.small)
+                    Text("Press a remote button…")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    Button("Cancel") { model.cancelTouchModeButtonCapture() }
+                } else if let key = model.tune.touchModeSwitchButton {
+                    Text(LayoutView.inputName(key))
+                        .font(.system(size: 11, weight: .medium))
+                    Button("Change…") { model.beginTouchModeButtonCapture() }
+                    Button("Release") { model.releaseTouchModeButton() }
+                } else {
+                    Button("Set button…") { model.beginTouchModeButtonCapture() }
+                }
+            }
+
+            Picker("Activate on", selection: $model.tune.touchModeSwitchTrigger) {
+                Text("Tap").tag("tap")
+                Text("Double-tap").tag("double")
+                Text("Triple-tap").tag("triple")
+                Text("Hold").tag("hold")
+                Text("Hold ··").tag("hold2")
+                Text("Hold ···").tag("hold3")
+            }
+            .disabled(model.tune.touchModeSwitchButton == nil)
+        } header: {
+            Text("Touch Surface")
+        } footer: {
+            Text("Choose whether one finger moves the pointer or scrolls. Scroll speed also controls two-finger scrolling. Acceleration keeps slow movement precise and makes fast flicks travel farther.\n\nThe remote switch temporarily owns only the selected button action; its saved Layout mapping is preserved underneath and returns immediately when the switch is disabled or released.")
         }
     }
 
@@ -346,11 +410,11 @@ struct SettingsView: View {
                        minIcon: "smallcircle.filled.circle.fill", maxIcon: "circle",
                        display: { String(format: "%.0f%%", $0 * 100) })
                 slider(icon: "timer", title: "Start resistance",
-                       value: $model.tune.circularStartThreshold, range: 0.1...1.5,
+                       value: $model.tune.circularStartThreshold, range: 0...(Double.pi / 4),
                        minIcon: "hare.fill", maxIcon: "tortoise.fill",
                        display: { String(format: "%.0f°", $0 * 180 / .pi) })
                 slider(icon: "speedometer", title: "Scroll speed",
-                       value: $model.tune.circularPixelsPerRadian, range: 40...400,
+                       value: $model.tune.circularPixelsPerRadian, range: 2...200,
                        minIcon: "tortoise.fill", maxIcon: "hare.fill",
                        display: { String(format: "%.0f", $0) })
                 slider(icon: "wind", title: "Smoothness",
@@ -371,11 +435,11 @@ struct SettingsView: View {
                 .padding(.vertical, 2)
 
                 slider(icon: "tortoise.fill", title: "Slow gain",
-                       value: $model.tune.circularAccelMin, range: 0.1...1.5,
+                       value: $model.tune.circularAccelMin, range: 0.02...1.5,
                        minIcon: "minus", maxIcon: "plus",
                        display: { String(format: "%.2f×", $0) })
                 slider(icon: "hare.fill", title: "Fast gain",
-                       value: $model.tune.circularAccelMax, range: 1.0...5.0,
+                       value: $model.tune.circularAccelMax, range: 0.1...5.0,
                        minIcon: "minus", maxIcon: "plus",
                        display: { String(format: "%.2f×", $0) })
                 slider(icon: "point.topleft.down.curvedto.point.bottomright.up", title: "Curve shape",

@@ -1,6 +1,9 @@
 import Foundation
 
 public enum Action: Equatable {
+    /// Explicitly consume an input without doing anything. This is different from removing a
+    /// binding: removing falls through to an inherited/native action, while disabled blocks it.
+    case disabled
     case keystroke(keys: String)
     // Push-to-talk: fire `keys` on the button's PRESS edge AND again on its RELEASE edge,
     // immediately, bypassing tap/double/hold/taphold discrimination and auto-repeat entirely
@@ -42,6 +45,7 @@ public extension Action {
     /// friendly names, `shell`/`applescript`/`launch` are summarised.
     var displayLabel: String {
         switch self {
+        case .disabled:                     return "Disabled"
         case .keystroke(let keys):      return ActionLabel.keystroke(keys)
         case .pushToTalk(let keys):     return ActionLabel.keystroke(keys) + " ⇅"
         case .media(let key):           return ActionLabel.media(key)
@@ -173,6 +177,7 @@ extension Action: Decodable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
         switch try c.decode(String.self, forKey: .action) {
+        case "disabled":    self = .disabled
         case "keystroke":   self = .keystroke(keys: try c.decode(String.self, forKey: .keys))
         case "pushToTalk":  self = .pushToTalk(keys: try c.decode(String.self, forKey: .keys))
         case "media":       self = .media(key: try c.decode(String.self, forKey: .key))
@@ -205,6 +210,8 @@ extension Action: Encodable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
         switch self {
+        case .disabled:
+            try c.encode("disabled", forKey: .action)
         case .keystroke(let keys):
             try c.encode("keystroke", forKey: .action)
             try c.encode(keys, forKey: .keys)

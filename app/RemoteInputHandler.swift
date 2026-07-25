@@ -205,6 +205,21 @@ class RemoteInputHandler {
 
     /// Called on any button activity; use to trigger trackpad re-scan after remote wake.
     var onButtonActivity: (() -> Void)?
+    /// One-shot physical-button capture for Settings. While armed, the next real HID button press
+    /// and its release are consumed before any normal action path.
+    private var buttonCapture: ((String) -> Void)?
+    private var capturedButtonAwaitingRelease: String?
+    static var lastCapturedButton: String?
+    static var lastCapturedTime: UInt64 = 0
+
+    func beginButtonCapture(_ completion: @escaping (String) -> Void) {
+        buttonCapture = completion
+        capturedButtonAwaitingRelease = nil
+    }
+
+    func cancelButtonCapture() {
+        buttonCapture = nil
+    }
     
     // First press after connection: do not perform action (sound already played at connect).
     private var isFirstPressAfterConnection = false
@@ -592,6 +607,30 @@ class RemoteInputHandler {
         }
         buttonState[buttonName] = isPressed
 
+        // Settings' one-shot recorder accepts HID BUTTONS only — touch/swipe callbacks never enter
+        // this path. Consume both edges so assigning a button cannot also fire its old action.
+        if !isPressed, capturedButtonAwaitingRelease == buttonName {
+            capturedButtonAwaitingRelease = nil
+            return
+        }
+        if isPressed, let capture = buttonCapture {
+            buttonCapture = nil
+            capturedButtonAwaitingRelease = buttonName
+            isFirstPressAfterConnection = false
+            if buttonName == "power" { RemoteInputHandler.armInputGuard() }
+            if RemoteInputHandler.onGlassButtons.contains(buttonName) {
+                RemoteInputHandler.armTouchGuard()
+            }
+            RemoteInputHandler.lastProcessedButton = buttonName
+            RemoteInputHandler.lastProcessedTime = mach_absolute_time()
+            RemoteInputHandler.lastCapturedButton = buttonName
+            RemoteInputHandler.lastCapturedTime = RemoteInputHandler.lastProcessedTime
+            let key = RemoteInputHandler.configKey(for: buttonName)
+            rmDebug("🎛 captured remote button for Touch Surface switch: \(key)")
+            capture(key)
+            return
+        }
+
         // The remote can sleep between initial enumeration and a later Siri press. Re-send the
         // gen-3 enable byte at the physical start of every diagnostic trial so a stale activation
         // cannot explain an otherwise empty voice stream.
@@ -675,9 +714,15 @@ class RemoteInputHandler {
             return
         }
 
-        // Select is the trackpad click — handled separately for click/drag semantics.
+        // Select keeps its native click/sticky-drag behavior until any Select slot is explicitly
+        // configured. Once configured it becomes a normal remappable button; an explicit Disabled
+        // binding consumes it without falling back to the native click.
         if buttonName == "select" {
-            handleSelectButton(pressed: intValue == 1)
+            if selectUsesConfig {
+                routeButton(buttonName, pressed: pressed)
+            } else {
+                handleSelectButton(pressed: intValue == 1)
+            }
             return
         }
 
@@ -939,6 +984,14 @@ class RemoteInputHandler {
                 // Released before the first stage → it was a tap: fire the single (or a `.double`).
                 fireTapOrDouble(buttonName, tapKey: tapKey)
             }
+        }
+    }
+
+    private var selectUsesConfig: Bool {
+        guard let controller = controller else { return false }
+        return ["select", "select.double", "select.triple",
+                "select.hold", "select.hold2", "select.hold3"].contains {
+            controller.hasBinding(for: $0)
         }
     }
 
@@ -1469,6 +1522,7 @@ class RemoteInputHandler {
         case "ringDown":  return "ring.down"
         case "ringLeft":  return "ring.left"
         case "ringRight": return "ring.right"
+        case "select":    return "select"
         default:          return "button.\(buttonName)"
         }
     }

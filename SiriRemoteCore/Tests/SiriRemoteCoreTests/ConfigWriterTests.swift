@@ -14,6 +14,7 @@ final class ConfigWriterTests: XCTestCase {
 
     func testActionRoundTripsForEveryCase() throws {
         let cases: [Action] = [
+            .disabled,
             .keystroke(keys: "cmd+shift+["),
             .keystroke(keys: "rctrl+rcmd+ropt"),          // modifier-only hyperkey chord
             .pushToTalk(keys: "f17"),
@@ -106,6 +107,7 @@ final class ConfigWriterTests: XCTestCase {
         "doubleTapWindow": 0.2,
         "spacesModeWindow": 5.0,
         "findCursorEnabled": true,
+        "findCursorSensitivity": 0.5,
         "circularScroll": {
           "enabled": true, "minRadius": 0.35, "startThreshold": 0.35,
           "pixelsPerRadian": 160, "scrollEase": 0.3, "invert": false

@@ -7,6 +7,15 @@ public protocol ActionExecutor: AnyObject {
 public final class Controller {
     private var engine: MappingEngine
     private let executor: ActionExecutor
+    /// Ephemeral, process-local bindings owned by app features (for example the Touch Surface mode
+    /// switch). They sit above config resolution without mutating the user's saved binding; clearing
+    /// one reveals the original binding immediately.
+    private var runtimeOverrides: [String: RuntimeOverride] = [:]
+
+    private struct RuntimeOverride {
+        let presentation: Config.Presentation?
+        let handler: () -> Void
+    }
 
     /// The active layer (from a `.layer` button — held momentary or tap-toggled sticky). While set,
     /// a key `K` resolves PER-APP first — the layer-namespaced key `"<layer>.K"` looked up in the
@@ -34,6 +43,22 @@ public final class Controller {
 
     /// The layer mode currently overriding resolution, or nil when resolving against the app mode.
     public var currentLayer: String? { activeLayer }
+
+    /// Temporarily reserve one event without editing config. Passing nil releases the reservation.
+    public func setRuntimeOverride(
+        for eventKey: String,
+        presentation: Config.Presentation? = nil,
+        handler: (() -> Void)?
+    ) {
+        if let handler {
+            runtimeOverrides[eventKey] = RuntimeOverride(
+                presentation: presentation,
+                handler: handler
+            )
+        } else {
+            runtimeOverrides.removeValue(forKey: eventKey)
+        }
+    }
 
     /// A resolved binding together with the presentation of that SAME binding. Kept as one value so
     /// the label and icon can never come from a different binding that merely shares the key.
@@ -75,6 +100,11 @@ public final class Controller {
     /// a global fallback is what lets a mode opt out: a mode with no `inherits` is standalone and
     /// genuinely sees nothing else, layered or not.
     private func site(_ key: String) -> Site? {
+        if let override = runtimeOverrides[key] {
+            // `.disabled` is only the introspection placeholder used by the existing press/hold
+            // machinery. `handle` invokes the override closure instead of executing this action.
+            return Site(action: .disabled, presentation: override.presentation, holdDelay: nil)
+        }
         guard let layer = activeLayer else {
             guard let action = engine.resolve(key) else { return nil }
             return Site(action: action, presentation: engine.resolvePresentation(key),
@@ -143,6 +173,10 @@ public final class Controller {
     /// fall back to native behavior. While a layer is active, resolves against the layer instead.
     @discardableResult
     public func handle(_ event: InputEvent) -> Bool {
+        if let override = runtimeOverrides[event.key] {
+            override.handler()
+            return true
+        }
         guard let action = resolve(event.key) else { return false }
         if case let .mode(to) = action {
             engine.switchMode(to: to)

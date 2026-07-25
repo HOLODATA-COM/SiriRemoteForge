@@ -33,12 +33,42 @@ final class SettingsModel: ObservableObject {
 
     /// Set by AppDelegate to push values into the running TouchHandler.
     var onApply: ((TuneSettings) -> Void)?
+    /// Starts/stops a one-shot physical Siri Remote button capture in RemoteInputHandler.
+    var onBeginButtonCapture: ((_ completion: @escaping (String) -> Void) -> Void)?
+    var onCancelButtonCapture: (() -> Void)?
+    @Published var isCapturingTouchModeButton = false
 
     init(initial: TuneSettings) {
         self.tune = initial
     }
 
     func resetToDefaults() {
+        cancelTouchModeButtonCapture()
         tune = .default
+    }
+
+    func beginTouchModeButtonCapture() {
+        guard !isCapturingTouchModeButton else {
+            cancelTouchModeButtonCapture()
+            return
+        }
+        isCapturingTouchModeButton = true
+        onBeginButtonCapture? { [weak self] key in
+            guard let self else { return }
+            self.tune.touchModeSwitchButton = key
+            self.tune.touchModeSwitchEnabled = true
+            self.isCapturingTouchModeButton = false
+        }
+    }
+
+    func cancelTouchModeButtonCapture() {
+        onCancelButtonCapture?()
+        isCapturingTouchModeButton = false
+    }
+
+    func releaseTouchModeButton() {
+        cancelTouchModeButtonCapture()
+        tune.touchModeSwitchEnabled = false
+        tune.touchModeSwitchButton = nil
     }
 }

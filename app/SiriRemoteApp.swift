@@ -39,10 +39,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: Controller?
     private var appWatcher: AppWatcher?
     private var configWatcher: ConfigFileWatcher?
+    private var touchModeSwitchOverrideKey: String?
 
     // Settings UI
     private var settingsModel: SettingsModel?
     private var settingsWindow: SettingsWindowController?
+    private var setupModel: SetupStatusModel?
+    private var setupWindow: SetupWindowController?
+    private var packetLoggerGuideWindow: PacketLoggerGuideWindowController?
     /// Debounces persisting Tuning-tab slider changes back into config.jsonc.
     private var tunePersistWork: DispatchWorkItem?
     
@@ -208,10 +212,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Initialize menu bar manager
         menuBarManager = MenuBarManager(statusItem: statusItem)
-        
-        // Check accessibility permissions
-        checkAccessibilityPermissions()
-        
+
+        // Read-only launch scan. Missing requirements are presented in one ordered window instead
+        // of firing several unrelated system prompts during startup. Every permission/install
+        // mutation remains behind a button the user explicitly presses.
+        let readiness = SetupStatusModel()
+        let setupWin = SetupWindowController(model: readiness)
+        setupModel = readiness
+        setupWindow = setupWin
+        let packetLoggerGuide = PacketLoggerGuideWindowController(model: readiness)
+        packetLoggerGuideWindow = packetLoggerGuide
+        menuBarManager.onOpenSetup = { [weak setupWin] in setupWin?.show() }
+        readiness.onShowPacketLoggerGuide = { [weak packetLoggerGuide] in
+            packetLoggerGuide?.show()
+        }
+        readiness.onInitialScan = { [weak setupWin] hasMissing in
+            if hasMissing { setupWin?.show() }
+        }
+        readiness.refresh()
+        if CommandLine.arguments.contains("--packetlogger-guide")
+            || (Bundle.main.object(
+                forInfoDictionaryKey: "HyperVibeShowPacketLoggerGuideOnLaunch"
+            ) as? Bool == true) {
+            DispatchQueue.main.async { packetLoggerGuide.show() }
+        }
+
         // Initialize controllers
         let cursorController = CursorController()
 
@@ -232,6 +257,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.scheduleTunePersist()   // write slider values back into config.jsonc (debounced)
         }
         model.config = config   // publish the live config to the Settings "Layout" tab
+        model.onBeginButtonCapture = { [weak self] completion in
+            self?.remoteInputHandler?.beginButtonCapture(completion)
+        }
+        model.onCancelButtonCapture = { [weak self] in
+            self?.remoteInputHandler?.cancelButtonCapture()
+        }
         settingsModel = model
         let settingsWin = SettingsWindowController(model: model)
         settingsWindow = settingsWin
@@ -239,6 +270,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Convenience: `./HyperVibe --settings` pops the window open immediately.
         if CommandLine.arguments.contains("--settings") {
             DispatchQueue.main.async { settingsWin.show() }
+        }
+        if CommandLine.arguments.contains("--setup") {
+            DispatchQueue.main.async { setupWin.show() }
         }
 
         // The launcher is summoned by an ordinary `.appWheel` hold binding, so it arrives here as an
@@ -281,7 +315,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Start touch handler for trackpad (before remote detection so we can wire the callback)
         touchHandler = TouchHandler(cursorController: cursorController)
-        touchHandler?.scrollScale = menuBarManager.scrollSpeed.scale
+        touchHandler?.onTap = { [weak self] in
+            guard let self = self else { return }
+            self.remoteInputHandler?.noteLayerUsedByOtherInput()
+            // A configured tap.one action wins, including explicit Disabled. With no binding,
+            // preserve the historical native fallback: a light touch clicks.
+            if self.controller?.handle(InputEvent(key: "tap.one")) == true {
+                print("👆 tap.one (config)")
+            } else {
+                cursorController.performClick()
+            }
+        }
         touchHandler?.onSwipe = { [weak self] direction in
             // Swipes are config-driven only. An unbound swipe does nothing — no native fallback,
             // so HyperVibe's Claude-Code default swipe keys (e.g. right = Shift+Tab) no longer
@@ -418,13 +462,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         
-        // Request Input Monitoring so media key tap works in both CLI and .app
-        if #available(macOS 10.15, *) {
-            if !CGPreflightListenEventAccess() {
-                CGRequestListenEventAccess()
-            }
-        }
-        
         // Virtual-mic fallback (Phase 2b): keep the "Siri Remote Mic" device fed with the
         // Mac's BUILT-IN microphone whenever the Siri button isn't held. Demand-gated on the
         // plug-in's consumers notification — the mic is only hot while some app actually has
@@ -446,6 +483,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyTune(_ t: TuneSettings) {
         touchHandler?.cursorSpeed = CGFloat(t.cursorSpeed)
         touchHandler?.cursorDeadzone = CGFloat(t.cursorDeadzone)
+        touchHandler?.touchMovesScroll = t.touchMovesScroll
+        touchHandler?.scrollScale = CGFloat(t.touchScrollSpeed)
+        touchHandler?.scrollAccelerationEnabled = t.touchScrollAcceleration
+        let newOverride = t.touchModeSwitchEventKey
+        if let old = touchModeSwitchOverrideKey, old != newOverride {
+            controller?.setRuntimeOverride(for: old, handler: nil)
+        }
+        if let eventKey = newOverride {
+            controller?.setRuntimeOverride(
+                for: eventKey,
+                presentation: Config.Presentation(
+                    label: "Toggle Touch movement",
+                    icon: "arrow.triangle.2.circlepath"
+                )
+            ) { [weak self] in
+                self?.toggleTouchMovement()
+            }
+        }
+        touchModeSwitchOverrideKey = newOverride
         touchHandler?.accelMin = CGFloat(t.accelMin)
         touchHandler?.accelMax = CGFloat(t.accelMax)
         touchHandler?.accelLowSpeed = CGFloat(t.accelLowSpeed)
@@ -459,6 +515,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         remoteInputHandler?.holdCancelGrace = t.holdCancelGrace
         remoteInputHandler?.doubleTapWindow = t.doubleTapWindow
         remoteInputHandler?.spacesModeWindow = t.spacesModeWindow
+        touchHandler?.shakeSensitivity = t.findCursorSensitivity
         findCursorEnabled = t.findCursorEnabled
         focusFollower?.enabled = t.focusFollowsCursor
     }
@@ -480,6 +537,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let merged = base.withSettingsUpdated { s in
             s.cursorSpeed = t.cursorSpeed
             s.cursorDeadzone = t.cursorDeadzone
+            s.touchMovesScroll = t.touchMovesScroll
+            s.touchScrollSpeed = t.touchScrollSpeed
+            s.touchScrollAcceleration = t.touchScrollAcceleration
+            s.touchModeSwitchEnabled = t.touchModeSwitchEnabled
+            s.touchModeSwitchButton = t.touchModeSwitchButton
+            s.touchModeSwitchTrigger = t.touchModeSwitchTrigger
             s.accelMin = t.accelMin
             s.accelMax = t.accelMax
             s.accelLowSpeed = t.accelLowSpeed
@@ -493,6 +556,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             s.doubleTapWindow = t.doubleTapWindow
             s.spacesModeWindow = t.spacesModeWindow
             s.findCursorEnabled = t.findCursorEnabled
+            s.findCursorSensitivity = t.findCursorSensitivity
             s.focusFollowsCursor = t.focusFollowsCursor
             s.circularScroll = t.circularConfig
         }
@@ -500,6 +564,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard merged != base else { return }
         do { try ConfigStore.save(merged) }
         catch { NSLog("[siriRemote] tune persist failed: \(error)") }
+    }
+
+    private func toggleTouchMovement() {
+        guard var tune = settingsModel?.tune else { return }
+        tune.touchMovesScroll.toggle()
+        settingsModel?.tune = tune
+        rmDebug("🎛 Touch movement switched to \(tune.touchMovesScroll ? "Scroll" : "Move pointer")")
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -512,6 +583,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         settingsWindow?.show()
         return true
+    }
+
+    /// Returning from System Settings is the common permission flow. Re-scan immediately so the
+    /// moved toggle drops into the completed section without making the user press Refresh.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        setupModel?.refresh()
     }
     
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -604,17 +681,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let bound = [base, base + ".double", base + ".triple",
                      base + ".hold", base + ".hold2", base + ".hold3"]
             .contains { controller?.hasBinding(for: $0) ?? false }
-        return fromRemote && bound
+        let captured = RemoteInputHandler.lastCapturedButton == buttonName
+            && Self.machDeltaToSeconds(from: RemoteInputHandler.lastCapturedTime) < 0.3
+        return fromRemote && (bound || captured)
     }
     
-    // MARK: - Permissions
-    
-    private func checkAccessibilityPermissions() {
-        // macOS will show its own prompt when needed
-        // No need for redundant custom alert
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
-    }
 }
 
 /// Suspends `com.apple.rcd` (Remote Control Daemon) for the user's GUI launchd domain while

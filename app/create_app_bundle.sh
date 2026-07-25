@@ -51,6 +51,31 @@ if [ -d "Resources" ]; then
     echo "Menu bar icons added to app bundle"
 fi
 
+# Build and embed the repair/install payload used by the in-app "Setup & Permissions" window.
+# This keeps the end-user path inside HyperVibe: after PacketLogger is present, one button installs
+# the virtual mic, router and daemon with one standard macOS administrator prompt.
+#
+# Development-only escape hatch: SRM_SKIP_MIC_PAYLOAD=1 ./create_app_bundle.sh
+if [ "${SRM_SKIP_MIC_PAYLOAD:-0}" != "1" ]; then
+    echo "Building Siri Remote Mic setup payload..."
+    (cd "../mic/router" && ./build.sh)
+    (cd "../mic/driver" && ./build.sh)
+    (cd "../mic/captured" && ./build.sh)
+
+    MIC_PAYLOAD="${APP_BUNDLE}/Contents/Resources/MicrophoneSetup"
+    rm -rf "$MIC_PAYLOAD"
+    mkdir -p "$MIC_PAYLOAD"
+    cp -R "../mic/driver/SiriRemoteMic.driver" "$MIC_PAYLOAD/"
+    cp "../mic/router/srm_router" "$MIC_PAYLOAD/"
+    cp "../mic/captured/srm_captured" "$MIC_PAYLOAD/"
+    cp "../mic/captured/au.holodata.SiriRemoteMic.captured.plist" "$MIC_PAYLOAD/"
+    cp "../dist/install_mic_components.sh" "$MIC_PAYLOAD/"
+    chmod 755 "$MIC_PAYLOAD/install_mic_components.sh"
+    echo "Siri Remote Mic setup payload embedded"
+else
+    echo "Skipping Siri Remote Mic setup payload (SRM_SKIP_MIC_PAYLOAD=1)"
+fi
+
 # Create proper Info.plist with all required keys
 echo "Creating Info.plist..."
 cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF

@@ -61,7 +61,12 @@ class TouchHandler {
     private var fastReconnectTimer: Timer?
     private var wakeObserver: NSObjectProtocol?
     
-    var scrollScale: CGFloat = 150.0
+    /// One-finger movement can be switched from pointer motion to linear scrolling.
+    var touchMovesScroll = false
+    /// Shared scale for one-finger Move → Scroll and the existing two-finger scroll gesture.
+    var scrollScale: CGFloat = 300.0
+    /// Velocity gain for linear scrolling. Off keeps a predictable 1:1 response.
+    var scrollAccelerationEnabled = false
     
     private var lastTouchPosition: CGPoint?
     private var lastTouchCount = 0
@@ -110,6 +115,8 @@ class TouchHandler {
     private var didScroll = false
     /// Sub-pixel accumulator so smooth continuous rotation emits whole scroll pixels as they add up.
     private var scrollRemainder: Double = 0
+    private var linearScrollRemainderX: CGFloat = 0
+    private var linearScrollRemainderY: CGFloat = 0
     /// Press-to-click freeze: pressing to click makes contact (zTotal) spike upward. A per-frame
     /// rise above this threshold = a press starting → freeze the cursor for a short window so the
     /// press/release doesn't drift the pointer.
@@ -140,22 +147,27 @@ class TouchHandler {
     var onSwipe: ((SwipeDirection) -> Void)?
     /// Fired on touch-up for a still two-finger tap (a two-finger drag scrolls instead).
     var onTwoFingerTap: (() -> Void)?
+    /// Fired on touch-up for a still one-finger tap. The app supplies config/native fallback.
+    var onTap: (() -> Void)?
     /// Fired when the cursor is "shaken" (rapid horizontal back-and-forth) — used to trigger the
     /// find-my-cursor highlight. Dispatched on main. Wiring gates it on the enabled setting.
     var onShake: (() -> Void)?
 
     // MARK: - Shake-to-locate detection
     // Feeds the per-frame horizontal movement (post-deadzone, PRE-accel) into a sign-reversal
-    // counter: each time dx flips sign while |dx| is above `shakeSpeedThreshold`, a reversal is
-    // recorded; `shakeReversals` reversals within `shakeWindow` seconds fire `onShake`. Debounced
-    // so it can't re-fire faster than `shakeDebounce`.
+    // counter: each time dx flips sign while |dx| is above the sensitivity-derived threshold, a
+    // reversal is recorded. Enough reversals inside the sensitivity-derived window fire onShake.
     /// Reversals required within the window to count as a shake.
     var shakeReversals: Int = 3
-    /// Sliding window (seconds) the reversals must fall within.
-    var shakeWindow: TimeInterval = 0.45
-    /// Minimum per-frame |dx| (normalized units, same as the deadzone) for a frame to count —
-    /// gates out slow drift so only a brisk shake triggers.
-    var shakeSpeedThreshold: CGFloat = 0.02
+    /// 0...1. Higher values accept a slower shake and allow more time for its reversals.
+    var shakeSensitivity: Double = 0.5
+    private var effectiveShakeWindow: TimeInterval {
+        0.25 + (0.40 * min(max(shakeSensitivity, 0), 1))
+    }
+    private var effectiveShakeSpeedThreshold: CGFloat {
+        let sensitivity = CGFloat(min(max(shakeSensitivity, 0), 1))
+        return 0.034 - (0.028 * sensitivity)
+    }
     /// Minimum seconds between two shake fires.
     private let shakeDebounce: TimeInterval = 0.4
     private var shakeLastSign = 0
@@ -467,6 +479,8 @@ class TouchHandler {
             circularActive = false
             didScroll = false
             scrollRemainder = 0
+            linearScrollRemainderX = 0
+            linearScrollRemainderY = 0
             rotationTotal = 0
             scrollEmitted = 0
             lastContact = contactSize
@@ -526,6 +540,18 @@ class TouchHandler {
                     lastTouchCount = activeTouchCount
                     return
                 }
+            }
+            // Optional Move → Scroll mode. A stationary contact can still become `tap.one`; once
+            // meaningful movement scrolls, `didScroll` prevents that same contact from clicking.
+            if touchMovesScroll {
+                if hypot(deltaX, deltaY) > 0.001 {
+                    performScroll(deltaX: deltaX, deltaY: deltaY)
+                    didScroll = true
+                }
+                lastContact = contactSize
+                lastTouchPosition = currentPos
+                lastTouchCount = activeTouchCount
+                return
             }
             // Press-to-click freeze: pressing to click spikes contact (zTotal) upward. A sharp
             // per-frame rise = a press starting → freeze the cursor for a short window covering the
@@ -634,8 +660,7 @@ class TouchHandler {
 
         if duration < tapMaxDuration && movement < tapMaxDistance {
             DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.cursorController.performClick()
+                self?.onTap?()
             }
         }
     }
@@ -666,16 +691,17 @@ class TouchHandler {
     }
     
     /// Shake detector: count horizontal sign reversals of brisk motion; fire `onShake` when
-    /// `shakeReversals` land within `shakeWindow`. `now` is the MT frame timestamp (seconds).
+    /// `shakeReversals` land within the sensitivity-derived window. `now` is the MT frame
+    /// timestamp (seconds).
     private func detectShake(dx: CGFloat, timestamp now: Double) {
         guard onShake != nil else { return }
         // Only frames with brisk horizontal motion participate; slow drift neither counts nor
         // resets the tracked sign.
-        guard abs(dx) >= shakeSpeedThreshold else { return }
+        guard abs(dx) >= effectiveShakeSpeedThreshold else { return }
         let sign = dx > 0 ? 1 : -1
         if shakeLastSign != 0 && sign != shakeLastSign {
             shakeReversalTimes.append(now)
-            shakeReversalTimes.removeAll { now - $0 > shakeWindow }
+            shakeReversalTimes.removeAll { now - $0 > effectiveShakeWindow }
             if shakeReversalTimes.count >= shakeReversals && now - shakeLastFireTime > shakeDebounce {
                 shakeLastFireTime = now
                 shakeReversalTimes.removeAll()
@@ -715,8 +741,25 @@ class TouchHandler {
     }
 
     private func performScroll(deltaX: CGFloat, deltaY: CGFloat) {
-        let scrollX = Int32(-deltaX * scrollScale)
-        let scrollY = Int32(deltaY * scrollScale)
+        let velocity = hypot(deltaX, deltaY)
+        let gain: CGFloat
+        if scrollAccelerationEnabled {
+            // Slow motion stays precise; a deliberate flick gains reach. The speed slider remains
+            // the overall scale, so turning acceleration off is immediately predictable.
+            let t = smoothstep(velocity, 0.004, 0.04)
+            gain = 0.5 + 1.7 * t
+        } else {
+            gain = 1
+        }
+        linearScrollRemainderX += -deltaX * scrollScale * gain
+        linearScrollRemainderY += deltaY * scrollScale * gain
+        let wholeX = linearScrollRemainderX.rounded(.towardZero)
+        let wholeY = linearScrollRemainderY.rounded(.towardZero)
+        linearScrollRemainderX -= wholeX
+        linearScrollRemainderY -= wholeY
+        guard wholeX != 0 || wholeY != 0 else { return }
+        let scrollX = Int32(wholeX)
+        let scrollY = Int32(wholeY)
         
         DispatchQueue.main.async { [weak self] in
             self?.cursorController.scroll(deltaX: scrollX, deltaY: scrollY)
