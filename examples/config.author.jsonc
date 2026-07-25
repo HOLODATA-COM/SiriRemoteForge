@@ -77,11 +77,14 @@
     "global": {
       // Side voice (Siri) button → PUSH-TO-TALK for dictation (Typeless). Hold >=0.2s and it fires
       // the hotkey (dictation ON); release fires the SAME hotkey again (OFF). Both edges send the
-      // combo below. A HOLD opens dictation; two QUICK taps (each < the 0.2s threshold) send Enter
-      // instead — the activation delay separates the two gestures, so they coexist.
+      // combo below. A HOLD opens dictation; a single QUICK tap (released < the 0.2s threshold) sends
+      // Enter instead — the activation delay separates the two gestures, so they never collide.
       "button.siri":  { "action": "pushToTalk", "keys": "rctrl+rcmd+ropt" },
-      // Double-TAP the Siri button → Enter (two quick taps, distinct from the push-to-talk hold above).
-      "button.siri.double": { "action": "keystroke", "keys": "enter" },
+      // SHORT-press (a single quick tap) the Siri button → Enter. The base key above is the
+      // push-to-talk hold, so the quick-tap action lives on the `.tap` variant (a push-to-talk button
+      // has no room for a base single-tap). With no `.double` bound there's nothing to disambiguate,
+      // so it fires immediately (no double-tap-window latency).
+      "button.siri.tap": { "action": "keystroke", "keys": "enter" },
       // Top-right Power button → dim all displays to minimum; any button/touch restores to max
       // (Brightness.restoreIfDimmed). The Mac stays awake and remote-controllable (not display sleep).
       "button.power": { "action": "brightness", "value": 0.0 },

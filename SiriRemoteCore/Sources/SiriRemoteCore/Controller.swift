@@ -99,11 +99,14 @@ public final class Controller {
 
     /// The variants one physical button can carry. Resolution treats them as one family.
     /// `.taphold*` is a SECOND hold menu reached by tap-then-press-and-hold (see RemoteInputHandler),
-    /// parallel to the plain-hold `.hold*` ladder. Longer suffixes must precede their prefixes so
-    /// `baseKey` strips `.taphold2` before `.taphold`, and `.taphold` before `.hold` would mis-strip
-    /// — `.taphold*` are listed ahead of the `.hold*` group for that reason.
+    /// parallel to the plain-hold `.hold*` ladder. `.tap` is the quick single-tap of a PUSH-TO-TALK
+    /// button — whose base key is already the hold (dictation) binding, so its short-press action has
+    /// nowhere to live but an explicit suffix (see RemoteInputHandler's push-to-talk quick-tap branch).
+    /// Longer suffixes must precede their prefixes so `baseKey` strips `.taphold2` before `.taphold`,
+    /// and `.taphold` before `.hold` would mis-strip — `.taphold*` are listed ahead of the `.hold*`
+    /// group for that reason. (`.tap` shares no such end-overlap, so its position is free.)
     private static let variantSuffixes = [".taphold3", ".taphold2", ".taphold",
-                                          ".hold3", ".hold2", ".hold", ".double", ".triple"]
+                                          ".hold3", ".hold2", ".hold", ".double", ".triple", ".tap"]
 
     /// `button.playPause.hold2` → `button.playPause`.
     private static func baseKey(_ key: String) -> String {
