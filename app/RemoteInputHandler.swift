@@ -756,16 +756,30 @@ class RemoteInputHandler {
         // fire NOTHING, so a brush of the button can't latch the dictation toggle on.
         if !pressed, let pending = pushToTalkPending.removeValue(forKey: buttonName) {
             pending.cancel()   // released before activation → a quick tap, dictation not opened
-            // A quick tap still feeds DOUBLE-TAP: two within `doubleTapWindow` fire the `.double`
-            // binding (Enter). A lone quick tap does nothing — a push-to-talk button has no single-tap
-            // action — so there is no window-wait latency here; only the 2nd tap acts.
+            // A push-to-talk button's BASE key IS the hold (dictation) binding, so its quick-tap
+            // actions live on explicit suffixes: `<key>.tap` (single) and `<key>.double`.
             let now = CACurrentMediaTime()
-            if let last = pushToTalkTapTime[buttonName], now - last < doubleTapWindow {
-                pushToTalkTapTime[buttonName] = nil
-                let dbl = tapVariant(tapKey, 2)
-                if controller.handle(InputEvent(key: dbl)) { print("🔘 \(dbl) (pushToTalk double)") }
+            if controller.hasBinding(for: tapVariant(tapKey, 2)) {
+                // `.double` is bound → two quick taps within `doubleTapWindow` fire it; a LONE quick
+                // tap does nothing. (Firing a single immediately would leak on the 1st half of every
+                // double, and deferring it a whole window to disambiguate is latency we don't add
+                // here — so on a push-to-talk button `.tap` and `.double` are mutually exclusive:
+                // bind one or the other.)
+                if let last = pushToTalkTapTime[buttonName], now - last < doubleTapWindow {
+                    pushToTalkTapTime[buttonName] = nil
+                    let dbl = tapVariant(tapKey, 2)
+                    if controller.handle(InputEvent(key: dbl)) { print("🔘 \(dbl) (pushToTalk double)") }
+                } else {
+                    pushToTalkTapTime[buttonName] = now
+                }
             } else {
-                pushToTalkTapTime[buttonName] = now
+                // No `.double` to disambiguate from → a lone quick tap fires `<key>.tap` immediately,
+                // with zero window latency (e.g. Enter). The 0.2 s activation delay already separates
+                // this quick tap from a hold (which opens dictation), so short- and long-press never
+                // collide.
+                pushToTalkTapTime[buttonName] = nil
+                let tap = tapKey + ".tap"
+                if controller.handle(InputEvent(key: tap)) { print("🔘 \(tap) (pushToTalk tap)") }
             }
             return
         }
