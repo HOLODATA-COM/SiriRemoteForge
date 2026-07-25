@@ -6,6 +6,8 @@ set -e
 
 APP_NAME="HyperVibe"
 APP_BUNDLE="${APP_NAME}.app"
+APP_VERSION="${SRM_APP_VERSION:-1.0}"
+APP_BUILD="${SRM_APP_BUILD:-1}"
 
 if [ ! -f "$APP_NAME" ]; then
     echo "Error: $APP_NAME executable not found."
@@ -96,9 +98,9 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleVersion</key>
-	<string>1.0</string>
+	<string>$APP_BUILD</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$APP_VERSION</string>
 	<key>CFBundleIconFile</key>
 	<string>HyperVibe</string>
 	<key>NSHumanReadableCopyright</key>
