@@ -21,6 +21,8 @@ final class MacActionExecutor: ActionExecutor {
     func execute(_ action: Action, payload: EventPayload?) {
         rmDebug("⚙️ action: \(action)")
         switch action {
+        case .disabled:
+            break
         case .keystroke(let keys):
             Keys.synthesize(keys)
         case .media(let key):

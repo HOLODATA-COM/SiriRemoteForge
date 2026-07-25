@@ -12,6 +12,17 @@ public struct Config: Equatable {
         public var swipeVelocity: Double
         public var cursorSpeed: Double
         public var cursorDeadzone: Double
+        /// When true, one-finger movement scrolls instead of moving the pointer.
+        public var touchMovesScroll: Bool
+        /// Linear one/two-finger scroll scale in pixels per normalized movement unit.
+        public var touchScrollSpeed: Double
+        /// Add velocity gain to linear touch scrolling. Off preserves the old 1:1 response.
+        public var touchScrollAcceleration: Bool
+        /// A process-level reservation that toggles one-finger movement between pointer and scroll.
+        /// The user's binding for this physical button stage remains untouched underneath it.
+        public var touchModeSwitchEnabled: Bool
+        public var touchModeSwitchButton: String?
+        public var touchModeSwitchTrigger: String
         public var circularScroll: CircularScrollConfig
         // Multi-stage long-press thresholds (seconds). Stage 1 = holdThreshold (`<key>.hold`),
         // stage 2 = holdThreshold2 (`<key>.hold2`), stage 3 = holdThreshold3 (`<key>.hold3`).
@@ -42,6 +53,8 @@ public struct Config: Equatable {
         public var spacesModeWindow: Double
         // Find-my-cursor: show a highlight when the cursor is shaken (rapid back-and-forth).
         public var findCursorEnabled: Bool
+        /// 0...1: higher accepts slower movement and a longer back-and-forth shake.
+        public var findCursorSensitivity: Double
         /// Focus the app under the cursor, but ONLY when its window is fullscreen — a fullscreen
         /// window owns its whole Space, so focusing it raises nothing and disturbs no window
         /// stack. Off by default: it changes which app receives input.
@@ -216,13 +229,16 @@ extension Config: Decodable {
 
 extension Config.Settings: Decodable {
     private enum K: String, CodingKey {
-        case defaultMode, swipeVelocity, cursorSpeed, cursorDeadzone, circularScroll, holdThreshold
+        case defaultMode, swipeVelocity, cursorSpeed, cursorDeadzone
+        case touchMovesScroll, touchScrollSpeed, touchScrollAcceleration
+        case touchModeSwitchEnabled, touchModeSwitchButton, touchModeSwitchTrigger
+        case circularScroll, holdThreshold
         case holdThreshold2, holdThreshold3, holdCancelGrace, appWheel
         case clickRiseThreshold, pressMoveMax
         case accelMin, accelMax, accelLowSpeed, accelHighSpeed
         case doubleTapWindow
         case spacesModeWindow
-        case findCursorEnabled
+        case findCursorEnabled, findCursorSensitivity
         case focusFollowsCursor
     }
     public init(from decoder: Decoder) throws {
@@ -231,6 +247,16 @@ extension Config.Settings: Decodable {
         swipeVelocity = try c.decodeIfPresent(Double.self, forKey: .swipeVelocity) ?? 0.5
         cursorSpeed = try c.decodeIfPresent(Double.self, forKey: .cursorSpeed) ?? 0.6
         cursorDeadzone = try c.decodeIfPresent(Double.self, forKey: .cursorDeadzone) ?? 0.006
+        touchMovesScroll = try c.decodeIfPresent(Bool.self, forKey: .touchMovesScroll) ?? false
+        touchScrollSpeed = try c.decodeIfPresent(Double.self, forKey: .touchScrollSpeed) ?? 300
+        touchScrollAcceleration =
+            try c.decodeIfPresent(Bool.self, forKey: .touchScrollAcceleration) ?? false
+        touchModeSwitchEnabled =
+            try c.decodeIfPresent(Bool.self, forKey: .touchModeSwitchEnabled) ?? false
+        touchModeSwitchButton =
+            try c.decodeIfPresent(String.self, forKey: .touchModeSwitchButton)
+        touchModeSwitchTrigger =
+            try c.decodeIfPresent(String.self, forKey: .touchModeSwitchTrigger) ?? "tap"
         circularScroll = try c.decodeIfPresent(CircularScrollConfig.self, forKey: .circularScroll)
             ?? .default
         holdThreshold = try c.decodeIfPresent(Double.self, forKey: .holdThreshold) ?? 0.5
@@ -247,6 +273,8 @@ extension Config.Settings: Decodable {
         doubleTapWindow = try c.decodeIfPresent(Double.self, forKey: .doubleTapWindow) ?? 0.3
         spacesModeWindow = try c.decodeIfPresent(Double.self, forKey: .spacesModeWindow) ?? 5.0
         findCursorEnabled = try c.decodeIfPresent(Bool.self, forKey: .findCursorEnabled) ?? true
+        findCursorSensitivity =
+            try c.decodeIfPresent(Double.self, forKey: .findCursorSensitivity) ?? 0.5
         focusFollowsCursor = try c.decodeIfPresent(Bool.self, forKey: .focusFollowsCursor) ?? false
     }
 }
@@ -304,6 +332,12 @@ extension Config.Settings: Encodable {
         try c.encode(swipeVelocity, forKey: .swipeVelocity)
         try c.encode(cursorSpeed, forKey: .cursorSpeed)
         try c.encode(cursorDeadzone, forKey: .cursorDeadzone)
+        try c.encode(touchMovesScroll, forKey: .touchMovesScroll)
+        try c.encode(touchScrollSpeed, forKey: .touchScrollSpeed)
+        try c.encode(touchScrollAcceleration, forKey: .touchScrollAcceleration)
+        try c.encode(touchModeSwitchEnabled, forKey: .touchModeSwitchEnabled)
+        try c.encodeIfPresent(touchModeSwitchButton, forKey: .touchModeSwitchButton)
+        try c.encode(touchModeSwitchTrigger, forKey: .touchModeSwitchTrigger)
         try c.encode(circularScroll, forKey: .circularScroll)
         try c.encode(holdThreshold, forKey: .holdThreshold)
         try c.encode(holdThreshold2, forKey: .holdThreshold2)
@@ -319,6 +353,7 @@ extension Config.Settings: Encodable {
         try c.encode(doubleTapWindow, forKey: .doubleTapWindow)
         try c.encode(spacesModeWindow, forKey: .spacesModeWindow)
         try c.encode(findCursorEnabled, forKey: .findCursorEnabled)
+        try c.encode(findCursorSensitivity, forKey: .findCursorSensitivity)
         try c.encode(focusFollowsCursor, forKey: .focusFollowsCursor)
     }
 }

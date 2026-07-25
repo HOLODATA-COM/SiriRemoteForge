@@ -15,6 +15,9 @@ import UniformTypeIdentifiers
 
 struct LayoutView: View {
     let config: Config
+    /// A process-local feature reservation. The saved mapping remains visible underneath but its
+    /// exact slot is locked while the reservation is active.
+    var reservedEventKey: String? = nil
     /// Persist an edited config (writes config.jsonc → hot-reloads). Nil = read-only (snapshots).
     var onSave: ((Config) -> Void)? = nil
 
@@ -57,8 +60,11 @@ struct LayoutView: View {
     /// ImageRenderer snapshots (a ScrollView measures as empty when rendered headless).
     var scrolls: Bool = true
 
-    init(config: Config, onSave: ((Config) -> Void)? = nil, scrolls: Bool = true, initialSelected: String? = nil) {
+    init(config: Config, reservedEventKey: String? = nil,
+         onSave: ((Config) -> Void)? = nil, scrolls: Bool = true,
+         initialSelected: String? = nil) {
         self.config = config
+        self.reservedEventKey = reservedEventKey
         self.onSave = onSave
         self.scrolls = scrolls
         _selectedKey = State(initialValue: initialSelected)
@@ -438,7 +444,7 @@ struct LayoutView: View {
             InputRow(key: "ring.left",    name: "Ring ←"),
             InputRow(key: "ring.right",   name: "Ring →"),
             InputRow(key: "select",       name: "Center click"),
-            InputRow(key: "touch",        name: "Touch surface"),
+            InputRow(key: "touch",        name: "Touch movement"),
         ]),
         InputGroup(name: "Buttons", rows: [
             InputRow(key: "button.siri",       name: "Siri / voice"),
@@ -452,6 +458,7 @@ struct LayoutView: View {
             InputRow(key: "button.power",      name: "Power"),
         ]),
         InputGroup(name: "Gestures", rows: [
+            InputRow(key: "tap.one",     name: "Light touch tap"),
             InputRow(key: "swipe.up",    name: "Swipe ↑"),
             InputRow(key: "swipe.down",  name: "Swipe ↓"),
             InputRow(key: "swipe.left",  name: "Swipe ←"),
@@ -464,7 +471,8 @@ struct LayoutView: View {
     private static func nativeLabel(_ key: String) -> String {
         switch key {
         case "select":            return "Click"
-        case "touch":             return "Move · Scroll · Swipe"
+        case "touch":             return "Configure in Tuning"
+        case "tap.one":           return "Click"
         case "button.siri":       return "Siri"
         case "button.playPause":  return "Play / Pause"
         case "button.mute":       return "Mute"
@@ -538,7 +546,7 @@ struct LayoutView: View {
 
     private struct Slot { let slotKey: String; let label: String }
     private func slots(for base: String) -> [Slot] {
-        if base.hasPrefix("ring.") || base.hasPrefix("button.") {
+        if base.hasPrefix("ring.") || base.hasPrefix("button.") || base == "select" {
             return [
                 Slot(slotKey: base,             label: "Tap"),
                 Slot(slotKey: base + ".double", label: "Double-tap"),
@@ -552,7 +560,7 @@ struct LayoutView: View {
             ]
         }
         // Swipes / two-finger tap are one-shot gesture events — a single action, no hold/double.
-        if base.hasPrefix("swipe.") || base == "tap.two" {
+        if base.hasPrefix("swipe.") || base == "tap.one" || base == "tap.two" {
             return [Slot(slotKey: base, label: "Action")]
         }
         return []
@@ -598,6 +606,7 @@ struct LayoutView: View {
             } else {
                 ForEach(Array(theSlots.enumerated()), id: \.element.slotKey) { idx, slot in
                     if idx > 0 { Divider() }
+                    let reserved = reservedEventKey == slot.slotKey
                     HStack(spacing: 12) {
                         Text(slot.label).font(.system(size: 13, weight: .medium))
                             .frame(width: 92, alignment: .leading)
@@ -607,8 +616,19 @@ struct LayoutView: View {
                             onChange: { saveSlot(slot.slotKey, $0) }
                         )
                         .id("\(mode)/\(editLayer ?? "-")/\(slot.slotKey)")
+                        .disabled(reserved)
+                        .opacity(reserved ? 0.42 : 1)
+                        if reserved {
+                            Label("Used by Touch switch", systemImage: "lock.fill")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer(minLength: 0)
                     }
+                    .contentShape(Rectangle())
+                    .help(reserved
+                          ? "This action is occupied by Touch Surface mode switching. Disable it or choose Release in Tuning → Touch Surface to restore this mapping."
+                          : "")
                     .padding(.horizontal, 16).padding(.vertical, 9)
                 }
             }
@@ -627,7 +647,8 @@ private struct ActionSlotEditor: View {
     let onChange: (Action?) -> Void
 
     enum Kind: String, CaseIterable, Identifiable {
-        case none = "None", keystroke = "Keystroke", pushToTalk = "Push to talk",
+        case none = "Inherit / System", disabled = "Disabled",
+             keystroke = "Keystroke", pushToTalk = "Push to talk",
              media = "Media", mouse = "Mouse",
              launchApp = "Launch app", openURL = "Open URL", shell = "Shell",
              applescript = "AppleScript", space = "Switch space", brightness = "Brightness",
@@ -662,6 +683,7 @@ private struct ActionSlotEditor: View {
                 if newKind == .none || build() != nil { commit() }
             })) {
                 Text(Kind.none.rawValue).tag(Kind.none)
+                Text(Kind.disabled.rawValue).tag(Kind.disabled)
                 Section("Keys & media") {
                     Text(Kind.keystroke.rawValue).tag(Kind.keystroke)
                     Text(Kind.pushToTalk.rawValue).tag(Kind.pushToTalk)
@@ -696,7 +718,9 @@ private struct ActionSlotEditor: View {
     @ViewBuilder private var param: some View {
         switch kind {
         case .none:
-            Text("does nothing").foregroundStyle(.secondary).font(.system(size: 12))
+            Text("remove this override and fall back").foregroundStyle(.secondary).font(.system(size: 12))
+        case .disabled:
+            Text("consume this input without an action").foregroundStyle(.secondary).font(.system(size: 12))
         case .fullscreen:
             Text("toggles the frontmost window").foregroundStyle(.secondary).font(.system(size: 12))
         case .minimize:
@@ -706,12 +730,12 @@ private struct ActionSlotEditor: View {
         case .appWheel:
             Text("opens the radial launcher (settings.appWheel)").foregroundStyle(.secondary).font(.system(size: 12))
         case .keystroke, .repeatKey:
-            TextField("cmd+shift+t", text: $text).textFieldStyle(.roundedBorder).frame(width: 170)
-                .focused($focused).onSubmit(commit)
+            ShortcutRecorder(value: $text, onRecord: commitRecordedShortcut)
+                .frame(width: 190, height: 24)
         case .pushToTalk:
             HStack(spacing: 8) {
-                TextField("cmd+shift+t", text: $text).textFieldStyle(.roundedBorder).frame(width: 170)
-                    .focused($focused).onSubmit(commit)
+                ShortcutRecorder(value: $text, onRecord: commitRecordedShortcut)
+                    .frame(width: 190, height: 24)
                 Text("fires on press AND on release")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
@@ -758,6 +782,7 @@ private struct ActionSlotEditor: View {
     private func load() {
         guard let a = action else { kind = .none; return }
         switch a {
+        case .disabled:                    kind = .disabled
         case .keystroke(let k):       kind = .keystroke; text = k
         case .pushToTalk(let k):      kind = .pushToTalk; text = k
         case .media(let k):           kind = .media; pick = k
@@ -784,6 +809,7 @@ private struct ActionSlotEditor: View {
     private func resetParamsForKind() {
         text = ""; altLaunch = ""; repDelay = 0.3; repInterval = 0.045; value = 0
         switch kind {
+        case .disabled:     pick = ""
         case .media:        pick = "playpause"
         case .mouse:        pick = "click"
         case .space:        pick = "left"
@@ -794,12 +820,19 @@ private struct ActionSlotEditor: View {
 
     private func commit() { onChange(build()) }
 
-    private func build() -> Action? {
+    private func commitRecordedShortcut(_ shortcut: String) {
+        text = shortcut
+        onChange(build(textOverride: shortcut))
+    }
+
+    private func build(textOverride: String? = nil) -> Action? {
+        let entered = textOverride ?? text
         switch kind {
         case .none:        return nil
-        case .keystroke:   return text.isEmpty ? nil : .keystroke(keys: text)
-        case .pushToTalk:  return text.isEmpty ? nil : .pushToTalk(keys: text)
-        case .repeatKey:   return text.isEmpty ? nil : .repeatKey(keys: text, delay: repDelay, interval: repInterval)
+        case .disabled:    return .disabled
+        case .keystroke:   return entered.isEmpty ? nil : .keystroke(keys: entered)
+        case .pushToTalk:  return entered.isEmpty ? nil : .pushToTalk(keys: entered)
+        case .repeatKey:   return entered.isEmpty ? nil : .repeatKey(keys: entered, delay: repDelay, interval: repInterval)
         case .media:       return .media(key: pick.isEmpty ? "playpause" : pick)
         case .mouse:       return .mouse(op: pick.isEmpty ? "click" : pick)
         case .launchApp:   return text.isEmpty ? nil : .launch(app: text, url: altLaunch.isEmpty ? nil : altLaunch)

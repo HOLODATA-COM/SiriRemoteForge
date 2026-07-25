@@ -6,6 +6,8 @@ set -e
 
 APP_NAME="HyperVibe"
 APP_BUNDLE="${APP_NAME}.app"
+APP_VERSION="${SRM_APP_VERSION:-1.0}"
+APP_BUILD="${SRM_APP_BUILD:-1}"
 
 if [ ! -f "$APP_NAME" ]; then
     echo "Error: $APP_NAME executable not found."
@@ -51,6 +53,31 @@ if [ -d "Resources" ]; then
     echo "Menu bar icons added to app bundle"
 fi
 
+# Build and embed the repair/install payload used by the in-app "Setup & Permissions" window.
+# This keeps the end-user path inside HyperVibe: after PacketLogger is present, one button installs
+# the virtual mic, router and daemon with one standard macOS administrator prompt.
+#
+# Development-only escape hatch: SRM_SKIP_MIC_PAYLOAD=1 ./create_app_bundle.sh
+if [ "${SRM_SKIP_MIC_PAYLOAD:-0}" != "1" ]; then
+    echo "Building Siri Remote Mic setup payload..."
+    (cd "../mic/router" && ./build.sh)
+    (cd "../mic/driver" && ./build.sh)
+    (cd "../mic/captured" && ./build.sh)
+
+    MIC_PAYLOAD="${APP_BUNDLE}/Contents/Resources/MicrophoneSetup"
+    rm -rf "$MIC_PAYLOAD"
+    mkdir -p "$MIC_PAYLOAD"
+    cp -R "../mic/driver/SiriRemoteMic.driver" "$MIC_PAYLOAD/"
+    cp "../mic/router/srm_router" "$MIC_PAYLOAD/"
+    cp "../mic/captured/srm_captured" "$MIC_PAYLOAD/"
+    cp "../mic/captured/au.holodata.SiriRemoteMic.captured.plist" "$MIC_PAYLOAD/"
+    cp "../dist/install_mic_components.sh" "$MIC_PAYLOAD/"
+    chmod 755 "$MIC_PAYLOAD/install_mic_components.sh"
+    echo "Siri Remote Mic setup payload embedded"
+else
+    echo "Skipping Siri Remote Mic setup payload (SRM_SKIP_MIC_PAYLOAD=1)"
+fi
+
 # Create proper Info.plist with all required keys
 echo "Creating Info.plist..."
 cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
@@ -71,9 +98,9 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleVersion</key>
-	<string>1.0</string>
+	<string>$APP_BUILD</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$APP_VERSION</string>
 	<key>CFBundleIconFile</key>
 	<string>HyperVibe</string>
 	<key>NSHumanReadableCopyright</key>

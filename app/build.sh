@@ -7,6 +7,12 @@ set -e
 
 echo "Building HyperVibe..."
 
+# Keep Swift/Clang's generated module cache out of user-global cache directories. This makes the
+# canonical build work from sandboxed development tools and avoids stale cross-project modules.
+HYPERVIBE_MODULE_CACHE="${CLANG_MODULE_CACHE_PATH:-/private/tmp/hypervibe-module-cache}"
+mkdir -p "$HYPERVIBE_MODULE_CACHE"
+export CLANG_MODULE_CACHE_PATH="$HYPERVIBE_MODULE_CACHE"
+
 SWIFT_FILES=(
     "main.swift"
     "SiriRemoteApp.swift"
@@ -16,6 +22,10 @@ SWIFT_FILES=(
     "GATTDiagnostics.swift"
     "NativePushToTalk.swift"
     "BuiltinMicFeeder.swift"
+    "SetupStatus.swift"
+    "SetupWindow.swift"
+    "PacketLoggerGuideWindow.swift"
+    "PacketLoggerDropTarget.swift"
     "CursorController.swift"
     "FocusFollowsCursor.swift"
     "MediaController.swift"
@@ -39,6 +49,7 @@ SWIFT_FILES=(
     "SettingsWindow.swift"
     "RemoteView.swift"
     "LayoutView.swift"
+    "ShortcutRecorder.swift"
     # --- Config engine integration (this fork) ---
     "KeyMap.swift"
     "MacActionExecutor.swift"
@@ -62,8 +73,9 @@ SWIFT_FILES=(
     "../SiriRemoteCore/Sources/SiriRemoteCore/Placeholder.swift"
 )
 
-# Find SDK path
-SDK_PATH=$(xcrun --show-sdk-path --sdk macosx 2>/dev/null || echo "")
+# Find SDK path. Respect SDKROOT so builds can select a compatible SDK when
+# multiple Command Line Tools SDKs are installed.
+SDK_PATH="${SDKROOT:-$(xcrun --show-sdk-path --sdk macosx 2>/dev/null || echo "")}"
 
 if [ -z "$SDK_PATH" ]; then
     echo "Error: macOS SDK not found. Please install Xcode Command Line Tools:"

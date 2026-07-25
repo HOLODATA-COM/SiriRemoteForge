@@ -66,8 +66,27 @@ enum KeyMap {
             return (CGKeyCode(kVK_Shift), flag(.maskShift, 0x2))          // NX_DEVICELSHIFTKEYMASK
         case "rshift":
             return (CGKeyCode(kVK_RightShift), flag(.maskShift, 0x4))      // NX_DEVICERSHIFTKEYMASK
+        case "fn", "function":
+            return (CGKeyCode(kVK_Function), .maskSecondaryFn)
         default:
             return nil
+        }
+    }
+
+    /// Physical modifier key → stable config token. Used by the shortcut recorder so left/right
+    /// variants survive recording and replay.
+    static func modifierToken(for keyCode: UInt16) -> String? {
+        switch Int(keyCode) {
+        case kVK_Command:      return "lcmd"
+        case kVK_RightCommand: return "rcmd"
+        case kVK_Control:      return "lctrl"
+        case kVK_RightControl: return "rctrl"
+        case kVK_Option:       return "lopt"
+        case kVK_RightOption:  return "ropt"
+        case kVK_Shift:        return "lshift"
+        case kVK_RightShift:   return "rshift"
+        case kVK_Function:     return "fn"
+        default:               return nil
         }
     }
 
@@ -80,7 +99,25 @@ enum KeyMap {
             if let c = letters[ch] { return c }
             if let d = digits[ch] { return d }
         }
+        // Lossless fallback emitted by the recorder for physical keys not yet named here (for
+        // example JIS/ISO-specific keys). Keeping the hardware key code makes capture/replay
+        // layout-independent without waiting for a new token-table release.
+        if token.hasPrefix("keycode"),
+           let raw = Int(token.dropFirst("keycode".count)),
+           (0...Int(UInt16.max)).contains(raw) {
+            return raw
+        }
         return named[token]
+    }
+
+    /// Physical main key → stable config token. Key codes are layout-independent, matching
+    /// Karabiner-style recording: the same physical key replays even when the input source changes.
+    static func token(for keyCode: UInt16) -> String? {
+        let code = Int(keyCode)
+        if let pair = letters.first(where: { $0.value == code }) { return String(pair.key) }
+        if let pair = digits.first(where: { $0.value == code }) { return String(pair.key) }
+        if let named = preferredNamed.first(where: { $0.value == code })?.key { return named }
+        return "keycode\(code)"
     }
 
     private static let letters: [Character: Int] = [
@@ -105,9 +142,61 @@ enum KeyMap {
         "enter": kVK_Return, "return": kVK_Return,
         "space": kVK_Space, "tab": kVK_Tab,
         "delete": kVK_Delete, "backspace": kVK_Delete,
+        "forwarddelete": kVK_ForwardDelete,
         "home": kVK_Home, "end": kVK_End,
         "pageup": kVK_PageUp, "pagedown": kVK_PageDown,
+        "help": kVK_Help,
+        "capslock": kVK_CapsLock,
+        "f1": kVK_F1, "f2": kVK_F2, "f3": kVK_F3, "f4": kVK_F4,
+        "f5": kVK_F5, "f6": kVK_F6, "f7": kVK_F7, "f8": kVK_F8,
+        "f9": kVK_F9, "f10": kVK_F10, "f11": kVK_F11, "f12": kVK_F12,
+        "f13": kVK_F13, "f14": kVK_F14, "f15": kVK_F15, "f16": kVK_F16,
+        "f17": kVK_F17, "f18": kVK_F18, "f19": kVK_F19, "f20": kVK_F20,
+        "mute": kVK_Mute, "volumeup": kVK_VolumeUp, "volumedown": kVK_VolumeDown,
+        "keypad0": kVK_ANSI_Keypad0, "keypad1": kVK_ANSI_Keypad1,
+        "keypad2": kVK_ANSI_Keypad2, "keypad3": kVK_ANSI_Keypad3,
+        "keypad4": kVK_ANSI_Keypad4, "keypad5": kVK_ANSI_Keypad5,
+        "keypad6": kVK_ANSI_Keypad6, "keypad7": kVK_ANSI_Keypad7,
+        "keypad8": kVK_ANSI_Keypad8, "keypad9": kVK_ANSI_Keypad9,
+        "keypaddecimal": kVK_ANSI_KeypadDecimal,
+        "keypadmultiply": kVK_ANSI_KeypadMultiply,
+        "keypadplus": kVK_ANSI_KeypadPlus,
+        "keypadclear": kVK_ANSI_KeypadClear,
+        "keypaddivide": kVK_ANSI_KeypadDivide,
+        "keypadenter": kVK_ANSI_KeypadEnter,
+        "keypadminus": kVK_ANSI_KeypadMinus,
+        "keypadequals": kVK_ANSI_KeypadEquals,
+        "section": kVK_ISO_Section,
         // Punctuation. Braces { } are Shift + [ ] — write them as e.g. "cmd+shift+[".
+        "[": kVK_ANSI_LeftBracket, "]": kVK_ANSI_RightBracket,
+        "-": kVK_ANSI_Minus, "=": kVK_ANSI_Equal, "`": kVK_ANSI_Grave,
+        ";": kVK_ANSI_Semicolon, "'": kVK_ANSI_Quote, "\\": kVK_ANSI_Backslash,
+        ",": kVK_ANSI_Comma, ".": kVK_ANSI_Period, "/": kVK_ANSI_Slash,
+    ]
+
+    /// One canonical token per physical key for recording (aliases such as escape/return omitted).
+    private static let preferredNamed: [String: Int] = [
+        "up": kVK_UpArrow, "down": kVK_DownArrow, "left": kVK_LeftArrow, "right": kVK_RightArrow,
+        "esc": kVK_Escape, "enter": kVK_Return, "space": kVK_Space, "tab": kVK_Tab,
+        "delete": kVK_Delete, "forwarddelete": kVK_ForwardDelete,
+        "home": kVK_Home, "end": kVK_End, "pageup": kVK_PageUp, "pagedown": kVK_PageDown,
+        "help": kVK_Help, "capslock": kVK_CapsLock,
+        "f1": kVK_F1, "f2": kVK_F2, "f3": kVK_F3, "f4": kVK_F4,
+        "f5": kVK_F5, "f6": kVK_F6, "f7": kVK_F7, "f8": kVK_F8,
+        "f9": kVK_F9, "f10": kVK_F10, "f11": kVK_F11, "f12": kVK_F12,
+        "f13": kVK_F13, "f14": kVK_F14, "f15": kVK_F15, "f16": kVK_F16,
+        "f17": kVK_F17, "f18": kVK_F18, "f19": kVK_F19, "f20": kVK_F20,
+        "mute": kVK_Mute, "volumeup": kVK_VolumeUp, "volumedown": kVK_VolumeDown,
+        "keypad0": kVK_ANSI_Keypad0, "keypad1": kVK_ANSI_Keypad1,
+        "keypad2": kVK_ANSI_Keypad2, "keypad3": kVK_ANSI_Keypad3,
+        "keypad4": kVK_ANSI_Keypad4, "keypad5": kVK_ANSI_Keypad5,
+        "keypad6": kVK_ANSI_Keypad6, "keypad7": kVK_ANSI_Keypad7,
+        "keypad8": kVK_ANSI_Keypad8, "keypad9": kVK_ANSI_Keypad9,
+        "keypaddecimal": kVK_ANSI_KeypadDecimal, "keypadmultiply": kVK_ANSI_KeypadMultiply,
+        "keypadplus": kVK_ANSI_KeypadPlus, "keypadclear": kVK_ANSI_KeypadClear,
+        "keypaddivide": kVK_ANSI_KeypadDivide, "keypadenter": kVK_ANSI_KeypadEnter,
+        "keypadminus": kVK_ANSI_KeypadMinus, "keypadequals": kVK_ANSI_KeypadEquals,
+        "section": kVK_ISO_Section,
         "[": kVK_ANSI_LeftBracket, "]": kVK_ANSI_RightBracket,
         "-": kVK_ANSI_Minus, "=": kVK_ANSI_Equal, "`": kVK_ANSI_Grave,
         ";": kVK_ANSI_Semicolon, "'": kVK_ANSI_Quote, "\\": kVK_ANSI_Backslash,

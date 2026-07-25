@@ -35,6 +35,8 @@ final class MenuBarManager {
 
     /// Set by the AppDelegate to open the SwiftUI settings window.
     var onOpenSettings: (() -> Void)?
+    /// Opens the launch-time readiness scan again without requiring a relaunch.
+    var onOpenSetup: (() -> Void)?
 
     init(statusItem: NSStatusItem) {
         self.statusItem = statusItem
@@ -102,6 +104,14 @@ final class MenuBarManager {
         menu.addItem(statusMenuItem)
 
         menu.addItem(.separator())
+        let setupItem = NSMenuItem(
+            title: "Setup & Permissions…",
+            action: #selector(openSetup),
+            keyEquivalent: ""
+        )
+        setupItem.target = self
+        menu.addItem(setupItem)
+
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -113,6 +123,7 @@ final class MenuBarManager {
     }
 
     @objc private func openSettings() { onOpenSettings?() }
+    @objc private func openSetup() { onOpenSetup?() }
 
     func updateConnectionStatus(connected: Bool) {
         DispatchQueue.main.async { [weak self] in

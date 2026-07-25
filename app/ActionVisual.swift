@@ -153,6 +153,7 @@ enum ActionVisual {
     /// A reasonable symbol per action kind, so nothing ever shows up blank.
     private static func defaultSymbolName(_ action: Action) -> String {
         switch action {
+        case .disabled:    return "nosign"
         case .keystroke:   return "keyboard"
         case .pushToTalk:  return "mic.fill"
         case .media:       return "playpause.fill"
