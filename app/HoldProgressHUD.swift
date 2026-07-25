@@ -190,15 +190,24 @@ final class HoldProgressHUD: NSObject {
 
     // MARK: - Public API
 
-    func begin(base: Face?, stages: [Stage]) {
-        let sorted = stages.sorted { $0.threshold < $1.threshold }
+    func begin(startedAt: CFTimeInterval = CACurrentMediaTime(), base: Face?, stages: [Stage]) {
+        // Preserve the caller's display order for equal thresholds. Swift's `sorted` is not stable,
+        // and reordering a tie here would make the displayed face disagree with the input handler's
+        // zero-based stage position on release.
+        let sorted = stages.enumerated().sorted {
+            $0.element.threshold == $1.element.threshold
+                ? $0.offset < $1.offset
+                : $0.element.threshold < $1.element.threshold
+        }.map(\.element)
         guard !sorted.isEmpty else { return }
         onMain { [weak self] in
             guard let self = self else { return }
             self.cancelPendingAppear()
             self.base = base
             self.stages = sorted
-            self.startTime = CACurrentMediaTime()
+            // The input state machine supplies its monotonic press anchor. Sharing it is what makes
+            // the face shown here and the action selected on release cross thresholds together.
+            self.startTime = startedAt
             self.lastTick = self.startTime
             self.shownStage = -1
             self.displayLevel = 0
