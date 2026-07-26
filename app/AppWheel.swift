@@ -25,6 +25,9 @@ final class AppWheelModel: ObservableObject {
     @Published var icons: [String: NSImage] = [:]
     /// Index of the sector the pointer is over, or nil while it is in the dead zone.
     @Published private(set) var highlighted: Int?
+    /// Set when a committed pick turns out not to be installed: the centre flashes this name as
+    /// "not installed" instead of the wheel silently doing nothing. Cleared on the next summon.
+    @Published private(set) var failure: String?
     /// The angle the highlight is travelling toward, UNWRAPPED — it keeps accumulating past ±π so
     /// that moving from the last sector to the first sweeps the short way round instead of unwinding
     /// the long way. Kept when the highlight clears, so the wedge fades out where it was rather than
@@ -43,9 +46,17 @@ final class AppWheelModel: ObservableObject {
         wedgeAngle = target
     }
 
+    /// A committed pick that isn't installed: name it as unavailable and drop the highlight, so the
+    /// centre reads the failure rather than the (now moot) selection.
+    func flagNotInstalled(_ name: String) {
+        failure = name
+        highlighted = nil
+    }
+
     /// Reset for a fresh summon: start the wedge under wherever the first highlight will be.
     func resetHighlight() {
         highlighted = nil
+        failure = nil
         wedgeAngle = .pi / 2
     }
 
@@ -164,7 +175,13 @@ struct AppWheelView: View {
             // The middle names what is about to happen, so the wheel never launches something the
             // user did not read. On its own pill so it stays legible over the icons behind it.
             Group {
-                if let i = model.highlighted, i < model.apps.count {
+                if let failed = model.failure {
+                    // The pick isn't installed — say so where the name would have been, in a warning
+                    // tint, rather than collapsing as if nothing was pressed.
+                    Text("『\(failed)』未安装")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.orange)
+                } else if let i = model.highlighted, i < model.apps.count {
                     Text(model.apps[i])
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
@@ -301,21 +318,36 @@ final class AppWheelController {
         return true
     }
 
-    /// Launch whatever is highlighted, if anything, then close.
+    /// Launch whatever is highlighted, if anything, then close. A highlighted pick that isn't
+    /// installed does NOT fail silently — `reportNotInstalled` flashes "not installed" in the wheel's
+    /// centre and beeps before it collapses, so the press never reads as the app being frozen.
     func commit() {
         guard isOpen else { return }
         let choice = model.highlighted.flatMap { $0 < model.apps.count ? model.apps[$0] : nil }
-        close()
         guard let app = choice else {
             rmDebug("🎡 app wheel: nothing highlighted, cancelled")
+            close()
+            return
+        }
+        guard let url = ActionVisual.applicationURL(named: app) else {
+            rmDebug("🎡 app wheel: \(app) not installed")
+            reportNotInstalled(app)
             return
         }
         rmDebug("🎡 app wheel: launching \(app)")
-        guard let url = ActionVisual.applicationURL(named: app) else {
-            rmDebug("🎡 app wheel: cannot locate \(app)")
-            return
-        }
+        close()
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    /// Feedback for a not-installed pick: freeze the selection (the outcome is decided), name it as
+    /// unavailable in the centre, beep, and let the wheel linger a moment before collapsing so the
+    /// message is actually seen. A button pressed in the meantime still closes it early via `cancel`.
+    private func reportNotInstalled(_ app: String) {
+        followTimer?.invalidate()
+        followTimer = nil
+        model.flagNotInstalled(app)
+        NSSound.beep()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in self?.close() }
     }
 
     private func close() {
