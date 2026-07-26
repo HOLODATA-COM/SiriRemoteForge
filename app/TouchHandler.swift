@@ -16,6 +16,12 @@ enum SwipeDirection: String, CaseIterable {
     case up, down, left, right
 }
 
+/// Output axis for the iPod-style outer-ring gesture.
+enum CircularScrollAxis {
+    case vertical
+    case horizontal
+}
+
 private func touchCallback(device: MTDevice?,
                            touches: UnsafeMutablePointer<MTTouch>?,
                            numTouches: Int,
@@ -90,6 +96,8 @@ class TouchHandler {
     var circularConfig: CircularScrollConfig = .default {
         didSet { circularDetector.update(config: circularConfig) }
     }
+    /// The base layer scrolls vertically. AppDelegate switches this to horizontal while L1 is active.
+    var circularScrollAxis: CircularScrollAxis = .vertical
     private let circularDetector = CircularScrollDetector(config: .default)
     private var circularActive = false
     /// Whether THIS contact is allowed to become a circular scroll at all, decided once when the
@@ -108,6 +116,16 @@ class TouchHandler {
     /// Set once this touch scrolls (circular or two-finger). A scrolling touch can NEVER also
     /// fire a swipe or tap — scroll and swipe are mutually exclusive within one touch.
     private var didScroll = false
+    /// Whether this Layer 1 circular contact has emitted its `.began` event. Native horizontal
+    /// scrollers require a complete began → changed → ended gesture stream.
+    private var circularScrollPhaseStarted = false
+    /// Layer 1's output axis is captured when its fluid gesture starts. Layer 0 intentionally
+    /// remains on the original stateless vertical-wheel path.
+    private var activeCircularScrollAxis: CircularScrollAxis?
+    /// Native horizontal shelves consume the same pixel stream more conservatively than the
+    /// established Layer 0 vertical path. This is a small final-output speed adjustment only;
+    /// both layers still share the exact acceleration curve calculated upstream.
+    private let layer1HorizontalSpeedScale: Double = 1.3
     /// Sub-pixel accumulator so smooth continuous rotation emits whole scroll pixels as they add up.
     private var scrollRemainder: Double = 0
     /// Press-to-click freeze: pressing to click makes contact (zTotal) spike upward. A per-frame
@@ -466,6 +484,8 @@ class TouchHandler {
             hadMultipleFingersInSession = false
             circularActive = false
             didScroll = false
+            circularScrollPhaseStarted = false
+            activeCircularScrollAxis = nil
             scrollRemainder = 0
             rotationTotal = 0
             scrollEmitted = 0
@@ -601,6 +621,7 @@ class TouchHandler {
         // Hard rule: if this touch scrolled (circular ring or two-finger), it is ONLY a scroll —
         // never also a swipe or tap. Scroll and swipe are mutually exclusive within one touch.
         if didScroll {
+            endCircularScrollGestureIfNeeded()
             didScroll = false
             circularActive = false
             return
@@ -704,13 +725,41 @@ class TouchHandler {
     /// Emit smooth circular scroll: carry the sub-pixel remainder so a steady rotation scrolls
     /// evenly instead of stepping between whole pixels.
     private func emitCircularScroll(pixels: Double) {
-        scrollRemainder += pixels
+        let axis = activeCircularScrollAxis ?? circularScrollAxis
+        let outputScale = axis == .horizontal ? layer1HorizontalSpeedScale : 1.0
+        scrollRemainder += pixels * outputScale
         let whole = scrollRemainder.rounded(.towardZero)
         guard whole != 0 else { return }
         scrollRemainder -= whole
-        let dy = Int32(whole)
+        let delta = Int32(whole)
+        switch axis {
+        case .vertical:
+            // This is the exact pre-L1 Layer 0 event path. Do not add phase or continuous-gesture
+            // state here: its established behavior is the reference that L1 must follow.
+            DispatchQueue.main.async { [weak self] in
+                self?.cursorController.scroll(deltaX: 0, deltaY: delta)
+            }
+        case .horizontal:
+            let phase: ContinuousScrollPhase = circularScrollPhaseStarted ? .changed : .began
+            if !circularScrollPhaseStarted {
+                circularScrollPhaseStarted = true
+                activeCircularScrollAxis = .horizontal
+            }
+            DispatchQueue.main.async { [weak self] in
+                // Core Graphics' fluid horizontal axis has the opposite visual direction from the
+                // established Layer 0 wheel path. Flip only the final X-axis projection; the
+                // shared acceleration/easing value (`delta`) itself remains unchanged.
+                self?.cursorController.scrollContinuousHorizontal(deltaX: -delta, phase: phase)
+            }
+        }
+    }
+
+    private func endCircularScrollGestureIfNeeded() {
+        guard circularScrollPhaseStarted else { return }
+        circularScrollPhaseStarted = false
+        activeCircularScrollAxis = nil
         DispatchQueue.main.async { [weak self] in
-            self?.cursorController.scroll(deltaX: 0, deltaY: dy)
+            self?.cursorController.scrollContinuousHorizontal(deltaX: 0, phase: .ended)
         }
     }
 

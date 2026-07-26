@@ -83,6 +83,22 @@ final class ControllerTests: XCTestCase {
         XCTAssertFalse(c.hasBinding(for: "button.tv.hold"))
     }
 
+    func testLayerChangeObserverTracksEffectiveLayer() throws {
+        let c = try makeController(cfg, SpyExecutor())
+        var changes: [String?] = []
+        c.onLayerChanged = { changes.append($0) }
+
+        c.pushLayer("L1")
+        c.pushLayer("L1") // Re-applying the same effective layer is not a state change.
+        c.pushLayer("L2")
+        c.popLayer()
+
+        XCTAssertEqual(changes.count, 3)
+        XCTAssertEqual(changes[0], "L1")
+        XCTAssertEqual(changes[1], "L2")
+        XCTAssertNil(changes[2])
+    }
+
     // MARK: - Momentary layer (Feature: LAYER)
 
     private let layerCfg = """

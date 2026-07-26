@@ -14,7 +14,16 @@ public final class Controller {
     /// apps (e.g. `L1.ring.left` = switch tab in a terminal mode, something else in a browser mode).
     /// It then falls back to the standalone layer mode `<layer>` for app-agnostic layer bindings,
     /// and finally to the key's UNLAYERED binding in the current app — see `site`.
-    private var activeLayer: String?
+    private var activeLayer: String? {
+        didSet {
+            guard activeLayer != oldValue else { return }
+            onLayerChanged?(activeLayer)
+        }
+    }
+
+    /// Notifies app-level features whenever the effective layer changes. This covers both sticky
+    /// toggles and momentary holds because every layer transition flows through `pushLayer`/`popLayer`.
+    public var onLayerChanged: ((String?) -> Void)?
 
     public init(engine: MappingEngine, executor: ActionExecutor) {
         self.engine = engine
