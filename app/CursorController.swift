@@ -10,6 +10,16 @@ import CoreFoundation
 import Foundation
 import AppKit
 
+/// Values required by `CGEventField.scrollWheelEventScrollPhase`.
+///
+/// These are deliberately not `NSEvent.Phase.rawValue`: AppKit uses different bit positions
+/// (`changed == 4`, for example), while Core Graphics defines began/changed/ended as 1/2/4.
+enum ContinuousScrollPhase: Int64 {
+    case began = 1
+    case changed = 2
+    case ended = 4
+}
+
 class CursorController {
     var isDragging: Bool = false
     var isClickActive: Bool = false
@@ -205,10 +215,34 @@ class CursorController {
         event.post(tap: CGEventTapLocation.cghidEventTap)
     }
 
+    /// Preserve the original scroll event path used by base-layer circular scrolling and
+    /// two-finger scrolling. Native-horizontal compatibility must not change this behavior.
     func scroll(deltaX: Int32, deltaY: Int32) {
         guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: deltaY, wheel2: deltaX, wheel3: 0) else {
             return
         }
+        event.post(tap: CGEventTapLocation.cghidEventTap)
+    }
+
+    /// A separate fluid event path used only by Layer 1's horizontal circular gesture. Layer 0
+    /// deliberately stays on the original `scroll(deltaX:deltaY:)` path above.
+    func scrollContinuousHorizontal(deltaX: Int32, phase: ContinuousScrollPhase) {
+        guard let event = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: 0,
+            wheel2: deltaX,
+            wheel3: 0
+        ) else {
+            return
+        }
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
+        event.setIntegerValueField(
+            .scrollWheelEventScrollPhase,
+            value: phase.rawValue
+        )
         event.post(tap: CGEventTapLocation.cghidEventTap)
     }
 }

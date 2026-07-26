@@ -280,9 +280,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         print("🧩 siriRemote config engine active — \(ConfigStore.path.path)")
 
         // Start touch handler for trackpad (before remote detection so we can wire the callback)
-        touchHandler = TouchHandler(cursorController: cursorController)
-        touchHandler?.scrollScale = menuBarManager.scrollSpeed.scale
-        touchHandler?.onSwipe = { [weak self] direction in
+        let touch = TouchHandler(cursorController: cursorController)
+        touchHandler = touch
+        touch.scrollScale = menuBarManager.scrollSpeed.scale
+        // The outer-ring gesture is vertical in the base layer and horizontal in Layer 1. Listen to
+        // Controller rather than only the sticky-layer HUD callback so momentary L1 holds work too.
+        engineController.onLayerChanged = { [weak touch] layer in
+            touch?.circularScrollAxis = layer == "L1" ? .horizontal : .vertical
+        }
+        touch.onSwipe = { [weak self] direction in
             // Swipes are config-driven only. An unbound swipe does nothing — no native fallback,
             // so HyperVibe's Claude-Code default swipe keys (e.g. right = Shift+Tab) no longer
             // fire and cause the system beep. Bind swipe.<dir> in the config to use them.
@@ -292,7 +298,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 print("👆 \(key) (config)")
             }
         }
-        touchHandler?.onTwoFingerTap = { [weak self] in
+        touch.onTwoFingerTap = { [weak self] in
             // Config-driven only: unbound two-finger tap does nothing. Bind tap.two to use it.
             self?.remoteInputHandler?.noteLayerUsedByOtherInput()
             if self?.controller?.handle(InputEvent(key: "tap.two")) == true {
