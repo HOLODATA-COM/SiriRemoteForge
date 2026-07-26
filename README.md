@@ -56,8 +56,9 @@ which also means an agent or a script can reconfigure the whole device by editin
 
 > **Scope.** macOS only, and it uses private frameworks (MultitouchSupport, SkyLight) to reach the
 > trackpad and Spaces — so it is not sandboxed and can never ship on the App Store. Build it
-> yourself; there is no signed release. This is a power tool, and it asks for the permissions one
-> needs: Accessibility and Input Monitoring.
+> yourself or use a beta GitHub Release when available. Release builds are ad-hoc signed, not
+> Apple-notarized, and need a one-time right-click → Open. This is a power tool, and it asks for the
+> permissions it needs: Accessibility and Input Monitoring.
 
 ---
 
@@ -130,6 +131,24 @@ older DriverKit experiment:
 **No third-party tools.** Animated Space switching was once routed through BetterTouchTool; it now
 goes through System Events, which needs Automation permission (macOS asks once) — see the `space`
 action.
+
+---
+
+## Install a beta build
+
+Published beta builds on the
+[Releases page](https://github.com/HOLODATA-COM/SiriRemoteForge/releases) provide two Apple-silicon
+downloads:
+
+- **App only** — unzip `HyperVibe-…-macOS-arm64.zip`, move `HyperVibe.app` to Applications, then
+  right-click → **Open** once.
+- **Full Setup (advanced)** — adds the Siri Remote Mic system components and
+  `HyperVibe Uninstall.app`. It asks for an administrator password, briefly restarts system audio,
+  and runs a 25-second `coreaudiod` safety check with automatic plug-in rollback.
+
+Both require macOS 13+ and are currently arm64-only. Source builds can still be made locally. The
+beta archives are ad-hoc signed rather than Apple-notarized because the hardened runtime terminates
+the private MultitouchSupport callback used by the remote trackpad.
 
 ---
 
@@ -233,11 +252,14 @@ serves that ring — or the built-in-mic fallback ring — to CoreAudio, crossfa
 > [!IMPORTANT]
 > **This half is power-user territory and has real caveats:**
 > - It requires Apple's **PacketLogger** (free, in [*Additional Tools for Xcode*](https://developer.apple.com/download/all/?q=Additional+Tools+for+Xcode)) at `/Applications/PacketLogger.app` — it is **not** bundled.
-> - It installs a HAL plug-in into `coreaudiod` and a root daemon, and it enables Bluetooth HCI debug traces. This is a system-level change; read `mic/README.md` first.
+> - It installs a HAL plug-in into `coreaudiod` and a root daemon. When PacketLogger is available,
+>   the daemon enables Bluetooth HCI debug traces for capture; without PacketLogger it leaves those
+>   traces unchanged. This is a system-level feature; read `mic/README.md` first.
 > - It works by **interoperating with Apple's undocumented remote-voice protocol** (reverse-engineered). It's a research/interop feature, is fragile across macOS versions, and carries a small (~1–2 s) switch latency.
 
-Setup lives in [`mic/README.md`](mic/README.md) and the per-component `install.sh` scripts. A
-one-double-click installer that bundles everything is in [`dist/`](dist/README.md).
+The advanced Full Setup Release asset installs the complete stack behind a watchdog and adds a
+dedicated uninstaller. Development setup and component-level details live in
+[`mic/README.md`](mic/README.md); release packaging lives in [`dist/`](dist/README.md).
 
 ---
 
@@ -490,7 +512,7 @@ SiriRemoteForge/
 │   ├── router/            # srm_router — decode BLE voice notifications → shared-memory ring
 │   ├── captured/          # on-demand root LaunchDaemon (runs PacketLogger + router)
 │   └── README.md
-├── dist/                  # one-double-click installer that bundles all components
+├── dist/                  # safe, versioned app-only + Full Setup Release packaging
 └── driverkit/             # earlier Siri Remote microphone DEXT proof of concept (superseded by mic/)
     ├── SiriRemoteMicDriver.xcodeproj
     ├── Host/               # separate OSSystemExtensionRequest host

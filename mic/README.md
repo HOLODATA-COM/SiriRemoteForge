@@ -1,16 +1,18 @@
-# Voice pipeline (WIP — reproducing the Siri Remote mic on pure macOS)
+# Voice pipeline — Siri Remote Mic on pure macOS
 
-**Status: offline pipeline green; the HAL virtual device is now VALIDATED on the real host
-(2026-07-23, post-fix) — installed, stable, audio flows, no storm; not yet wired to the live router
-or integrated into the shipping app.** This directory is the staging
-area for reproducing — in our own code — the microphone path that the dissected `RemotePilot.app`
-uses (see HANDOFF "Microphone — SOLVED on macOS (2026-07-23)"). It builds independently of the main
-app so the app's green build is never at risk until the whole pipeline is validated.
+**Current status:** the full pipeline is implemented and integrated. The HAL device, live
+PacketLogger router, on-demand capture daemon, and built-in-microphone fallback are built by
+`dist/build-release.sh` and shipped in the advanced Full Setup asset. The fixed HAL plug-in passed
+real-host validation under an automatic `coreaudiod` rollback watchdog. This remains experimental:
+it depends on undocumented Bluetooth behavior and a separately downloaded Apple tool.
 
-The goal: expose one system-wide **Siri Remote Mic** input device. While Siri is held it carries the
-remote's voice. Inactive behavior is currently silence. Built-in-microphone fallback is only a
-future option and is not required by the implementation; no built-in-microphone setting or driver
-has been changed. Pure Mac, no ESP32 or private entitlement.
+The result is one system-wide **Siri Remote Mic** input device. While Siri is held it carries the
+remote's voice; when that stream becomes stale, the device crossfades to the Mac's built-in
+microphone. The built-in device's driver, format, and default-device selection are not changed.
+Pure Mac, no ESP32 or DriverKit entitlement.
+
+> This file began as the implementation lab notebook. Dated validation and incident sections below
+> are retained as engineering evidence; older milestone wording is historical, not current status.
 
 ## The pipeline
 
@@ -36,9 +38,10 @@ BlackHole because we want one branded device with the fallback built in, not a v
   needs no DriverKit entitlement/provisioning** — the exact wall that killed the earlier
   `SiriRemoteMicDriver` DEXT (personal team lacks DriverKit HID). Ad-hoc signing works for a local
   install; BlackHole is the proof-of-pattern.
-- **Fallback remains undecided and unimplemented.** The safe current behavior is silence when the
-  remote is inactive. A later mixer may read the built-in mic normally through AVAudioEngine only
-  while demanded, but it must never alter that device's driver, format or default setting.
+- **Fallback is implemented.** The shipping app demand-gates a built-in-microphone feeder and writes
+  a second shared-memory ring. The HAL plug-in selects fresh remote voice first, otherwise the
+  built-in ring, and linearly crossfades every hand-over. If neither producer is available it emits
+  silence.
 - **IPC**: the plugin runs inside `coreaudiod`, our capture app runs separately, so decoded PCM crosses
   to the plugin over a lock-free **POSIX shared-memory ring buffer** (`/SiriRemoteMicAudio`).
 - **Demand detection**: the router observes CoreAudio's
@@ -55,29 +58,29 @@ budget for it; it is the main engineering risk of choosing B over A.
 ### System-install safety boundary
 
 An installed test on 2026-07-23 caused a CoreAudio property-notification/reconciliation storm:
-`coreaudiod` exceeded 100% CPU and the Mac became nearly unusable. The plug-in was removed; a reboot
-cleared the storm. The plug-in is currently **not installed**. The system audio preference plist
-still records `SiriRemoteMic_UID` as preferred input index 0 and has intentionally not been edited.
+`coreaudiod` exceeded 100% CPU and the Mac became nearly unusable. During that incident the plug-in
+was removed and a reboot cleared the storm; the system audio preference plist still recorded
+`SiriRemoteMic_UID` as preferred input index 0 and was intentionally not edited.
 
-**Post-fix system validation now PASSED (2026-07-23).** The fixed bundle was installed under an
+**Post-fix system validation PASSED (2026-07-23).** The fixed bundle was installed under an
 auto-rollback watchdog (auto-uninstall on `coreaudiod` ≥85% sustained). Load reconciliation settled to
 idle in ~2 s; the client-open IO path — what stormed before — peaked at only **6%**; a CoreAudio
 consumer received 147,456 non-silent samples through the shared ring; the device did not become the
-default input. The bundle is currently installed and stable (`coreaudiod` ~3% idle). The earlier storm
-is fixed, not merely avoided. `install.sh` remains fail-closed by default; the recommended install path
-is `mic/driver/install-watchdog.sh`, which installs and then auto-uninstalls if `coreaudiod` storms.
+default input. The test host remained stable (`coreaudiod` ~3% idle). The earlier storm is fixed,
+not merely avoided. Public installation goes through the watchdog-protected Full Setup app;
+component development uses `mic/driver/install-watchdog.sh`.
 
 - The virtual device is a **persistent system component** (admin to install, `killall coreaudiod` to
   load — brief audio interruption machine-wide, survives reboot). Not install-per-use.
 - No future system test should occur without a separate explicit user decision, an automatic
   rollback/watchdog, a bounded duration and independent `coreaudiod` monitoring.
 
-### Current build order
+### Current release boundary
 
-The real-capture parser/decoder/router and the process-local HAL contract are green. Remaining order:
-clock-drift/jitter hardening → safe system validation on a disposable/test Mac → live PacketLogger
-pipe → optional inactive-source policy → integration into the main app. Built-in fallback is not a
-prerequisite; silence is acceptable.
+The real-capture parser/decoder/router, HAL contract and I/O simulations, live PacketLogger pipe,
+on-demand supervisor, and inactive built-in source are green. Full Setup retains the 25-second
+watchdog on every install. Further work is production hardening across more macOS versions and
+remote firmware, especially long-running clock drift and changes to Apple's private trace format.
 
 ## What is DONE and validated (2026-07-23, offline)
 
@@ -119,12 +122,13 @@ Definitive GO. Concretely, from one live capture:
 Reproduce offline from a capture: `tmp/decode_voice.py` (ctypes → libopus) parses `mic_raw.txt` and
 writes a WAV. That script + `OpusVoiceDecoder.swift` together are stages ②–④, now validated on real data.
 
-## Virtual device — mechanism proven, system integration blocked (2026-07-23)
+## Virtual device — validation history (2026-07-23)
 
 - An earlier bounded test proved the shared-memory mechanism end to end:
   **144,384 samples, RMS 0.162295, peak 0.25**, against source RMS 0.178589.
-- A later installed-device test caused the severe CoreAudio storm described above. Therefore the
-  old “M2 COMPLETE” label was wrong; the device is not production-safe and is not installed.
+- An installed-device test of the earlier implementation caused the severe CoreAudio storm
+  described above. The subsequent fixes passed both offline and bounded real-host validation; the
+  release installer retains automatic rollback because HAL plug-ins remain system-level code.
 - Confirmed offline fixes include the input-only timestamp anchor, UID qualifier checks, static
   one-device/no-Box object graph, rejection of inherited hidden/output objects, property-size
   correctness, mono/input-only capability reporting and clock-control mutability.
@@ -150,9 +154,10 @@ steps ①–② without the Siri hold:
 
 ## Build dependency
 
-`brew install opus` (BSD-licensed, GPL-3.0-compatible). Headers/lib resolved via `brew --prefix opus`
-in `build-test.sh`; the main app's `build.sh` will gain `-I…/include -L…/lib -lopus` only when the
-pipeline is integrated.
+Local component builds use `brew install opus` (BSD-licensed, GPL-3.0-compatible). Release builds
+instead download checksum-pinned official source and compile it for the macOS 13 deployment target;
+the router links it statically, so destination Macs do not need Homebrew. The Opus
+binary-distribution notice is retained in `router/Opus-LICENSE.txt` and in the Full Setup payload.
 
 ## Caveats (why this is a hack, carried from HANDOFF)
 

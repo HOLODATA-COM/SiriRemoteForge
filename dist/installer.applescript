@@ -3,9 +3,11 @@
 -- through the permissions macOS forbids an app from granting itself. AppleScript so it is a real
 -- double-clickable .app with a native password prompt and no Terminal.
 
+use scripting additions
+
 on fileExists(p)
 	try
-		do shell script "/bin/test -e " & quoted form of p
+		do shell script ("/bin/test -e " & quoted form of p)
 		return true
 	on error
 		return false
@@ -16,27 +18,28 @@ on run
 	set myPath to POSIX path of (path to me)
 	set payload to myPath & "Contents/Resources/payload"
 
-	display dialog "HyperVibe 安装器" & return & return & ¬
+	display dialog ("HyperVibe 安装器" & return & return & ¬
 		"将安装:" & return & ¬
 		"• HyperVibe(菜单栏 App)" & return & ¬
-		"• 虚拟麦克风插件 + 后台采集服务" & return & return & ¬
-		"需要一次管理员密码,并会短暂重启系统音频。" ¬
+		"• 虚拟麦克风插件 + 后台采集服务" & return & ¬
+		"• HyperVibe Uninstall 卸载器" & return & return & ¬
+		"需要一次管理员密码并短暂重启系统音频。安装器随后会进行约 25 秒安全监测；若 coreaudiod 异常，会自动恢复旧插件。") ¬
 		buttons {"取消", "开始安装"} default button "开始安装" with title "HyperVibe Setup" with icon note
 
-	-- Privileged install — one password prompt. (Installs the bundled PacketLogger too, if present.)
+	-- Privileged install — one password prompt plus a watchdog-protected HAL load.
 	try
-		do shell script "/bin/bash " & quoted form of (payload & "/do_install.sh") & " " & quoted form of payload with administrator privileges
+		do shell script ("/bin/bash " & quoted form of (payload & "/do_install.sh") & " " & quoted form of payload) with administrator privileges
 	on error errMsg
-		display dialog "安装失败:" & return & return & errMsg buttons {"好"} default button "好" with icon stop
+		display dialog ("安装失败:" & return & return & errMsg) buttons {"好"} default button "好" with icon stop
 		return
 	end try
 
-	-- PacketLogger check AFTER install: if this build bundled it, it is now present and we say
-	-- nothing. Only if it is still missing (a clean/redistributable build) do we point to the download.
+	-- PacketLogger check AFTER install: personal packages may bundle and install it. Public Release
+	-- assets never do, so point to Apple's own download when it is still missing.
 	if not fileExists("/Applications/PacketLogger.app") then
-		set r to display dialog "未检测到 PacketLogger.app。" & return & return & ¬
+		set r to display dialog ("未检测到 PacketLogger.app。" & return & return & ¬
 			"遥控器麦克风语音功能需要它 —— 这是 Apple 的免费工具,需登录 Apple ID 从开发者网站的 “Additional Tools for Xcode” 里下载,下完把 PacketLogger.app 拖到 应用程序 文件夹。" & return & return & ¬
-			"其它功能不受影响。现在打开下载页吗?" ¬
+			"其它功能不受影响。现在打开下载页吗?") ¬
 			buttons {"跳过", "打开下载页"} default button "打开下载页" with title "HyperVibe Setup"
 		if button returned of r is "打开下载页" then
 			open location "https://developer.apple.com/download/all/?q=Additional+Tools+for+Xcode"
@@ -46,14 +49,14 @@ on run
 	-- Default config for THIS user, without clobbering an existing one.
 	set cfgDir to (POSIX path of (path to home folder)) & ".config/siriremote"
 	if not fileExists(cfgDir & "/config.jsonc") then
-		do shell script "/bin/mkdir -p " & quoted form of cfgDir & ¬
-			" && /bin/cp " & quoted form of (payload & "/config.jsonc") & " " & quoted form of (cfgDir & "/config.jsonc")
+		do shell script ("/bin/mkdir -p " & quoted form of cfgDir & ¬
+			" && /bin/cp " & quoted form of (payload & "/config.jsonc") & " " & quoted form of (cfgDir & "/config.jsonc"))
 	end if
 
 	-- The three permissions macOS will not let an app grant itself: open each pane, guide the toggle.
-	display dialog "系统组件已安装 ✅" & return & return & ¬
+	display dialog ("系统组件已安装 ✅" & return & return & ¬
 		"接下来需要你手动开启 3 个权限(macOS 不允许 App 自己开)。" & return & ¬
-		"我会依次打开对应设置页,请把 HyperVibe 的开关打开。" ¬
+		"我会依次打开对应设置页,请把 HyperVibe 的开关打开。") ¬
 		buttons {"继续"} default button "继续" with title "HyperVibe Setup"
 
 	open location "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
@@ -64,9 +67,10 @@ on run
 	display dialog "③ 麦克风(Microphone)" & return & "打开 HyperVibe 的开关(内置麦回退 / 采集需要;首次运行也会自动弹窗)。" buttons {"完成"} default button "完成" with title "权限 3/3"
 
 	do shell script "/usr/bin/open -a /Applications/HyperVibe.app"
-	display dialog "安装完成 🎉" & return & return & ¬
+	display dialog ("安装完成 🎉" & return & return & ¬
 		"HyperVibe 已启动(看菜单栏图标)。" & return & ¬
+		"卸载器位于“应用程序”文件夹。" & return & ¬
 		"在 蓝牙 设置里配对你的 Siri Remote 即可使用。" & return & return & ¬
-		"若遥控器麦克风没声音:确认已装 PacketLogger,并重启一次电脑。" ¬
+		"若遥控器麦克风没声音:确认已装 PacketLogger,然后重新打开正在使用麦克风的 App。") ¬
 		buttons {"好"} default button "好" with title "HyperVibe Setup"
 end run
