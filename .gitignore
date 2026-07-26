@@ -33,9 +33,9 @@ mic/router/MonitorAudioRing.o
 mic/router/test_monitor_ring
 app/BuiltinMicRingWriter.o
 
-# Installer build output — contains the bundled personal config AND (with SRM_BUNDLE_PACKETLOGGER)
-# Apple's PacketLogger. NEVER publish: personal data + redistributing Apple's tool would violate its
-# license. The dist/*.sh + dist/*.applescript source stay tracked; only the generated output is ignored.
+# Installer build output. Public builds are sanitized by default; personal mode can still contain a
+# private config and PacketLogger, so generated output remains local-only and is uploaded explicitly
+# only after the release audit passes.
 dist/build/
 
 # Local product-film production files and rendered media.

@@ -9,9 +9,21 @@ SDK="$(xcrun --show-sdk-path --sdk macosx)"
 DRIVER="SiriRemoteMic.driver"
 EXE="SiriRemoteMic"
 CAPTURE_APP="SiriRemoteMicCaptureTest.app"
+MACOS_MIN="${HYPERVIBE_MACOS_MIN:-13.0}"
+DRIVER_VERSION="${HYPERVIBE_VERSION:-0.1.0}"
+BUILD_NUMBER="${HYPERVIBE_BUILD_NUMBER:-1}"
 # Optional stable signing identity for the capture-test app (keeps its microphone TCC grant across
 # rebuilds). Set SRM_CAPTURE_SIGN_IDENTITY to your own "Apple Development: …" identity; unset → ad-hoc.
 CAPTURE_SIGN_IDENTITY="${SRM_CAPTURE_SIGN_IDENTITY:-}"
+
+if ! [[ "$DRIVER_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+    echo "invalid HYPERVIBE_VERSION: $DRIVER_VERSION" >&2
+    exit 2
+fi
+if ! [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+    echo "invalid HYPERVIBE_BUILD_NUMBER: $BUILD_NUMBER" >&2
+    exit 2
+fi
 
 rm -rf "$DRIVER"
 rm -rf "$CAPTURE_APP"
@@ -19,10 +31,19 @@ mkdir -p "$DRIVER/Contents/MacOS"
 mkdir -p "$CAPTURE_APP/Contents/MacOS"
 cp Info.plist "$DRIVER/Contents/Info.plist"
 cp CaptureTest-Info.plist "$CAPTURE_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $DRIVER_VERSION" \
+    "$DRIVER/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" \
+    "$DRIVER/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion $MACOS_MIN" \
+    "$DRIVER/Contents/Info.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string $MACOS_MIN" \
+        "$DRIVER/Contents/Info.plist"
 
 clang -bundle -O2 \
     -Wall -Wextra -Werror \
     -isysroot "$SDK" \
+    -mmacosx-version-min="$MACOS_MIN" \
     -include SiriRemoteMic.config.h \
     SiriRemoteMic.c \
     -framework CoreFoundation -framework CoreAudio -framework Accelerate \

@@ -41,3 +41,10 @@ and continues to apply to the portions of this software that originate there.
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
+
+The Siri Remote Mic HAL plug-in is based on BlackHole by Existential Audio Inc.
+Its GPL-3.0 license and copyright notice are retained in
+mic/driver/vendor/BlackHole-LICENSE.txt.
+
+The Siri Remote Mic router links Opus by Xiph.Org and contributors. Its BSD
+license and patent notice are retained in mic/router/Opus-LICENSE.txt.

@@ -482,6 +482,7 @@ int main(int argc, char **argv)
     if (run_phase(driver, &phase2) != 0) { return 2; }
     {
         const size_t total = (size_t)phase2.totalCycles * kCycleFrames;
+        const size_t resumeFrame = (size_t)phase2.remoteResumeCycle * kCycleFrames;
         const StreamStats s = analyze_stream(phase2.stream, total);
         printf("io sim: phase2 served=%zu silent=%zu full-scale=%zu discontinuities=%zu "
                "idempotency: %u of %u differ\n",
@@ -489,8 +490,12 @@ int main(int argc, char **argv)
                phase2.idemMismatches, phase2.comparedWindows);
         check_sign_window("phase2", "remote before release", phase2.stream,
                           12000, 22500, 1, 0.95);
+        // The producer is deliberately re-enabled at resumeFrame. Depending on the producer
+        // thread's 10 ms deadline phase, the driver's ready gate and fade may begin shortly after
+        // that exact point. Assert the entire pre-resume gap, never a hard-coded window extending
+        // into the legitimate resumed stream.
         check_all_silent("phase2", "(e) gap with no built-in ring is clean silence",
-                         phase2.stream, 36100, 60200);
+                         phase2.stream, 36100, resumeFrame);
         check_sign_window("phase2", "remote after re-press", phase2.stream,
                           67500, total, 1, 0.95);
         CHECK(s.fullScale == 0, "phase2: %zu full-scale samples", s.fullScale);

@@ -2,8 +2,8 @@
 
 A virtual audio **input** device named "Siri Remote Mic" (manufacturer *Holodata.au*) intended for
 explicit selection by apps. When a consumer opens it, the router feeds it decoded Siri Remote voice;
-without a producer it returns silence. Built-in-microphone fallback is not implemented or required,
-and this code does not alter the built-in device.
+when remote voice is stale, it crossfades to the built-in-microphone ring fed by the shipping app.
+Without either producer it returns silence. It does not replace or reconfigure the built-in device.
 
 This is the "own device" path (B), not reusing BlackHole at runtime. **BlackHole is used only as the
 implementation base** — it is a proven, GPL-3.0 AudioServerPlugIn that loads on macOS 26, so we build
@@ -38,8 +38,8 @@ pipeline still needs libopus + PacketLogger; that is separate from this device.)
   **147,456 non-silent samples** from the test producer (`PASS — shared-memory audio reached a
   CoreAudio consumer`). The device is mono/48 k/input-only and did **not** hijack the default input
   (built-in mic remained default; `kCanBeDefaultDevice=false` held). `coreaudiod` idle ~3% after.
-- **System state:** the fixed bundle is currently **installed** at `/Library/Audio/Plug-Ins/HAL/` and
-  stable. `./uninstall.sh` removes it. It produces safe silence when no producer is feeding the ring.
+- **Shipping integration:** Full Setup installs the fixed bundle with the same 25-second watchdog,
+  preserves any previous plug-in for rollback, and includes a dedicated uninstaller.
 - **The earlier storm (for history):** a test of the *unfixed* bundle drove `coreaudiod` over 100% CPU
   and needed a reboot; that is what motivated the 10 HAL fixes below. It is fixed, not merely avoided.
 - **Mechanism proven:** the shared-memory IPC transport (also independently 144,384 samples earlier).
@@ -49,8 +49,7 @@ pipeline still needs libopus + PacketLogger; that is separate from this device.)
   cycles pass in a fake-host process. ASan and UBSan also pass.
 - **Router offline PASS:** the real 3,071-line trace yields 804/804 decoded frames, 771,840 samples,
   RMS 3232.3, peak 32767, no decode errors.
-- **Blocked:** no post-fix real-host test, no built-in fallback, no full clock-drift correction and no
-  shipping-app integration.
+- **Remaining risk:** broader macOS/firmware coverage and full long-running clock-drift hardening.
 
 `install.sh` intentionally requires an explicit system-audio risk token, refuses to overwrite an
 installed bundle, and separately refuses while the stale preferred UID remains. Do not bypass these

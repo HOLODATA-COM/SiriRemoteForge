@@ -48,6 +48,7 @@ extern char **environ;
 static pid_t g_packetlogger = -1;
 static pid_t g_router = -1;
 static int   g_pipeline_up = 0;
+static int   g_hci_ready = 0;
 static dispatch_source_t g_stop_timer = NULL;
 
 static void logmsg(const char *fmt, ...)
@@ -84,6 +85,11 @@ static void spawn_and_wait(const char *path, char *const argv[])
     if (pid > 0) waitpid(pid, NULL, 0);
 }
 
+static int packetlogger_available(void)
+{
+    return access(PACKETLOGGER, X_OK) == 0;
+}
+
 // Enable the Bluetooth HCI debug traces PacketLogger needs to see the remote's voice notifications
 // (RawAudioTrace) and defeat the profile-required wall (HCISkipAuth). These reset on reboot, so the
 // daemon re-asserts them; SIGUSR1 (-30) makes bluetoothd reload debug config WITHOUT disconnecting.
@@ -102,6 +108,7 @@ static void ensure_hci_traces(void)
     spawn_and_wait("/usr/bin/defaults", dargs);
     char *kargs[] = { "killall", "-30", "bluetoothd", NULL };
     spawn_and_wait("/usr/bin/killall", kargs);
+    g_hci_ready = 1;
     logmsg("HCI debug traces asserted");
 }
 
@@ -136,6 +143,14 @@ static void prewarm_packetlogger(void)
 static void start_pipeline(void)
 {
     if (g_pipeline_up) return;
+    if (!packetlogger_available()) {
+        logmsg("PacketLogger missing — remote voice capture remains disabled");
+        return;
+    }
+    // Full Setup never bundles PacketLogger. If the user installs it after this daemon starts,
+    // prepare HCI capture lazily on the first real demand; no reboot or daemon reload is required.
+    if (!g_hci_ready) ensure_hci_traces();
+
     g_pipeline_up = 1;
     logmsg("demand active → starting capture pipeline");
 
@@ -215,8 +230,12 @@ int main(void)
     signal(SIGPIPE, SIG_IGN);
 
     logmsg("starting");
-    ensure_hci_traces();
-    prewarm_packetlogger();
+    if (packetlogger_available()) {
+        ensure_hci_traces();
+        prewarm_packetlogger();
+    } else {
+        logmsg("PacketLogger not installed — leaving Bluetooth HCI debug traces unchanged");
+    }
 
     // Reap any child that dies on its own (e.g. PacketLogger quitting) so it can't linger as a
     // zombie; if it was our live pipeline, drop our bookkeeping so the next demand edge restarts it.

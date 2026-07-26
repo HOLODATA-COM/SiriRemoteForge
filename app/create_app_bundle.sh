@@ -5,15 +5,26 @@
 set -e
 
 APP_NAME="HyperVibe"
-APP_BUNDLE="${APP_NAME}.app"
+APP_BUNDLE="${HYPERVIBE_APP_BUNDLE_PATH:-${APP_NAME}.app}"
+BINARY_PATH="${HYPERVIBE_BINARY_PATH:-$APP_NAME}"
+APP_VERSION="${HYPERVIBE_VERSION:-1.0.0}"
+BUILD_NUMBER="${HYPERVIBE_BUILD_NUMBER:-1}"
+SIGN_MODE="${HYPERVIBE_SIGN_MODE:-stable}"
 
-if [ ! -f "$APP_NAME" ]; then
-    echo "Error: $APP_NAME executable not found."
-    echo "Please build first with: ./build.sh"
+if ! [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+    echo "Error: HYPERVIBE_VERSION must be numeric (for example 0.1.0), got: $APP_VERSION"
+    exit 1
+fi
+if ! [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+    echo "Error: HYPERVIBE_BUILD_NUMBER must be an integer, got: $BUILD_NUMBER"
     exit 1
 fi
 
-BINARY_NAME="$APP_NAME"
+if [ ! -f "$BINARY_PATH" ]; then
+    echo "Error: $BINARY_PATH executable not found."
+    echo "Please build first with: ./build.sh"
+    exit 1
+fi
 
 echo "Creating app bundle: $APP_BUNDLE"
 
@@ -22,7 +33,7 @@ mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
 
 # Copy executable
-cp "$BINARY_NAME" "${APP_BUNDLE}/Contents/MacOS/$APP_NAME"
+cp "$BINARY_PATH" "${APP_BUNDLE}/Contents/MacOS/$APP_NAME"
 
 # Generate the app icon if it's missing (it's a build artifact — .icns is git-ignored).
 if [ ! -f "HyperVibe.icns" ] && [ -f "tools/make_app_icon.swift" ]; then
@@ -71,9 +82,9 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleVersion</key>
-	<string>1.0</string>
+	<string>$BUILD_NUMBER</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$APP_VERSION</string>
 	<key>CFBundleIconFile</key>
 	<string>HyperVibe</string>
 	<key>NSHumanReadableCopyright</key>
@@ -96,6 +107,14 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
+# Keep the license with every binary distribution, including the app-only Release asset.
+if [ -f "../LICENSE" ]; then
+    cp "../LICENSE" "${APP_BUNDLE}/Contents/Resources/LICENSE.txt"
+fi
+if [ -f "../NOTICE" ]; then
+    cp "../NOTICE" "${APP_BUNDLE}/Contents/Resources/NOTICE.txt"
+fi
+
 # Make executable
 chmod +x "${APP_BUNDLE}/Contents/MacOS/$APP_NAME"
 
@@ -111,13 +130,14 @@ if [ -f "HyperVibe.entitlements" ]; then
     # macOS treats each build as a new app, forcing re-approval. Fall back to ad-hoc if absent.
     SIGN_ID="siriRemote Local Signing"
     SIGN_KC="$HOME/Library/Keychains/siriremote-signing.keychain-db"
-    if [ -f "$SIGN_KC" ] && security find-identity -p codesigning "$SIGN_KC" 2>/dev/null | grep -q "$SIGN_ID"; then
+    if [ "$SIGN_MODE" = "stable" ] && [ -f "$SIGN_KC" ] \
+        && security find-identity -p codesigning "$SIGN_KC" 2>/dev/null | grep -q "$SIGN_ID"; then
         echo "Signing with stable local identity ($SIGN_ID)..."
         security unlock-keychain -p siriremote-local "$SIGN_KC" 2>/dev/null || true
         codesign --force --entitlements "HyperVibe.entitlements" \
             --sign "$SIGN_ID" --keychain "$SIGN_KC" "${APP_BUNDLE}"
     else
-        echo "Ad-hoc signing (no stable identity found; TCC will re-prompt on each rebuild)..."
+        echo "Ad-hoc signing (public build or no stable identity found)..."
         codesign --force --entitlements "HyperVibe.entitlements" --sign - "${APP_BUNDLE}"
     fi
     codesign -dvv "${APP_BUNDLE}" 2>&1 | grep -E "(Authority|flags|Identifier)" || true
