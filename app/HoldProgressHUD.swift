@@ -143,10 +143,12 @@ final class HoldProgressHUD: NSObject {
         var misc: SIMD4<Float>
     }
 
-    private var metalLayer: CAMetalLayer?
+    /// The shader/pipeline are shared; each physical display owns its own drawable layer and
+    /// window. Compiling once keeps adding a second or third screen cheap.
+    private var metalDevice: MTLDevice?
     private var commandQueue: MTLCommandQueue?
     private var pipeline: MTLRenderPipelineState?
-    private var halfPixel: Float = 0.25      // ½ device pixel in points; the shader's AA width
+    private var rendererAttempted = false
     private let passDescriptor: MTLRenderPassDescriptor = {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].loadAction = .clear     // belt & braces; the triangle covers all
@@ -154,7 +156,25 @@ final class HoldProgressHUD: NSObject {
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         return pass
     }()
-    private var flatFill: CALayer?           // no-Metal fallback: a flat, waveless fill
+
+    /// `.canJoinAllSpaces` does not mirror one window onto every display. Each Surface is one
+    /// synchronized copy of the HUD on one physical screen.
+    private final class Surface {
+        let window: NSWindow
+        let iconView: NSImageView
+        let metalLayer: CAMetalLayer?
+        let flatFill: CALayer?
+        var halfPixel: Float = 0.25          // ½ device pixel in points; shader AA width
+
+        init(window: NSWindow, iconView: NSImageView,
+             metalLayer: CAMetalLayer?, flatFill: CALayer?) {
+            self.window = window
+            self.iconView = iconView
+            self.metalLayer = metalLayer
+            self.flatFill = flatFill
+        }
+    }
+    private var surfaces: [CGDirectDisplayID: Surface] = [:]
 
     // Water colours as uniform values; `setWaterColor` swaps them for the cancel greys.
     private var topColor = SIMD4<Float>(0, 0, 0, 0)
@@ -165,9 +185,6 @@ final class HoldProgressHUD: NSObject {
     // deployment floor is 13, so it is stored untyped with a CVDisplayLink understudy beside it.
     private var caLink: AnyObject?
     private var cvLink: CVDisplayLink?
-
-    private var window: NSWindow?
-    private var iconView: NSImageView?
 
     private var stages: [Stage] = []
     private var base: Face?
@@ -232,7 +249,7 @@ final class HoldProgressHUD: NSObject {
             if firedIndex >= 1, firedIndex <= self.stages.count {
                 let face = self.stages[firedIndex - 1].face
                 self.confirming = true
-                self.iconView?.image = face.image
+                for surface in self.surfaces.values { surface.iconView.image = face.image }
                 self.setWaterColor(cancel: face.isCancel)
                 self.envelope = max(self.envelope, 2.2)      // a swell as the choice locks in
                 self.popIcon(from: 0.86)
@@ -250,28 +267,27 @@ final class HoldProgressHUD: NSObject {
 
     private func reveal() {
         appearWork = nil
-        ensureWindow()
-        positionWindow()
-        updateDrawableScale()
-        render(elapsed: CACurrentMediaTime() - startTime, force: true)
+        syncSurfaces()
+        guard !surfaces.isEmpty else { return }
 
         fadeToken += 1
-        if !isShowing {
-            isShowing = true
-            window?.alphaValue = 0
-            window?.orderFrontRegardless()
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.16
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                window?.animator().alphaValue = 1
-            }
-        } else if (window?.alphaValue ?? 1) < 1 {
-            // Re-shown mid-fade-out (a new hold within the confirm flash): pull the alpha back up,
-            // or the in-flight animator would land the "visible" HUD at 0.
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.12
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                window?.animator().alphaValue = 1
+        let wasShowing = isShowing
+        isShowing = true
+        // Always order every mirror, even while our logical state says "showing". A Space change
+        // can remove a cached NSWindow from the visible list without changing that boolean.
+        for surface in surfaces.values {
+            if !wasShowing { surface.window.alphaValue = 0 }
+            surface.window.orderFrontRegardless()
+        }
+        // A CAMetalLayer is not guaranteed to vend a drawable while its window is ordered out.
+        // Put every mirror on screen (still transparent on first appearance) before the first
+        // render, so no display begins with a blank vessel and waits for the second vsync.
+        render(elapsed: CACurrentMediaTime() - startTime, force: true)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = wasShowing ? 0.12 : 0.16
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            for surface in surfaces.values {
+                surface.window.animator().alphaValue = 1
             }
         }
         startTicking()
@@ -284,7 +300,7 @@ final class HoldProgressHUD: NSObject {
     private func startTicking() {
         stopTicking()
         lastTick = CACurrentMediaTime()
-        if #available(macOS 14.0, *), let view = window?.contentView {
+        if #available(macOS 14.0, *), let view = surfaces.values.first?.window.contentView {
             let link = view.displayLink(target: self, selector: #selector(step(_:)))
             // Ask for the panel's full rate: ProMotion displays schedule true 120 Hz callbacks
             // instead of the power-saving default; fixed-rate panels just give their native rate.
@@ -330,11 +346,13 @@ final class HoldProgressHUD: NSObject {
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.15
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            window?.animator().alphaValue = 0
+            for surface in surfaces.values {
+                surface.window.animator().alphaValue = 0
+            }
         }, completionHandler: { [weak self] in
             guard let self = self, self.fadeToken == token else { return }
             self.isShowing = false
-            self.window?.orderOut(nil)
+            for surface in self.surfaces.values { surface.window.orderOut(nil) }
         })
     }
 
@@ -397,7 +415,7 @@ final class HoldProgressHUD: NSObject {
             let crossedForward = stage > shownStage && shownStage >= 0
             shownStage = stage
             let face: Face? = stage == 0 ? base : stages[stage - 1].face
-            iconView?.image = face?.image
+            for surface in surfaces.values { surface.iconView.image = face?.image }
             setWaterColor(cancel: face?.isCancel ?? false)
             if crossedForward {
                 popIcon(from: 0.82)
@@ -453,31 +471,40 @@ final class HoldProgressHUD: NSObject {
             phase[i] = Float(w.phase.truncatingRemainder(dividingBy: 2 * .pi))
             amp[i] = Float(w.amp * (1 + 0.35 * sin(w.driftPhase)) * envelope * calm)
         }
-        var u = Uniforms(freq: freq, phase: phase, amp: amp,
-                         top: topColor, bot: botColor, crest: crestColor,
-                         misc: SIMD4<Float>(Float(side * displayLevel), Float(side),
-                                            displayLevel > 0.02 ? 1 : 0, halfPixel))
-
-        guard let layer = metalLayer, let queue = commandQueue, let pipeline = pipeline else {
-            // Degraded no-GPU path: a flat, waveless fill — still a correct progress readout.
+        // Keep any no-GPU surfaces functional. In normal use either every surface is Metal-backed
+        // or every surface is flat, but updating both makes display hot-plug reconciliation safe.
+        if surfaces.values.contains(where: { $0.flatFill != nil }) {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            flatFill?.frame = CGRect(x: 0, y: 0, width: side, height: side * displayLevel)
+            for surface in surfaces.values {
+                surface.flatFill?.frame = CGRect(x: 0, y: 0,
+                                                 width: side, height: side * displayLevel)
+            }
             CATransaction.commit()
-            return
         }
-        // A nil drawable (all of them in flight) is skipped, never waited for — the next vsync
-        // catches up. At one frame per refresh it does not happen in practice.
-        guard let drawable = layer.nextDrawable(),
+
+        guard let queue = commandQueue, let pipeline = pipeline,
               let commands = queue.makeCommandBuffer() else { return }
-        passDescriptor.colorAttachments[0].texture = drawable.texture
-        guard let encoder = commands.makeRenderCommandEncoder(descriptor: passDescriptor) else { return }
-        encoder.setRenderPipelineState(pipeline)
-        encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        encoder.endEncoding()
-        commands.present(drawable)
-        commands.commit()
+        var encodedAny = false
+        for surface in surfaces.values {
+            guard let layer = surface.metalLayer, let drawable = layer.nextDrawable() else { continue }
+            var u = Uniforms(freq: freq, phase: phase, amp: amp,
+                             top: topColor, bot: botColor, crest: crestColor,
+                             misc: SIMD4<Float>(Float(side * displayLevel), Float(side),
+                                                displayLevel > 0.02 ? 1 : 0,
+                                                surface.halfPixel))
+            passDescriptor.colorAttachments[0].texture = drawable.texture
+            guard let encoder = commands.makeRenderCommandEncoder(descriptor: passDescriptor) else {
+                continue
+            }
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            encoder.endEncoding()
+            commands.present(drawable)
+            encodedAny = true
+        }
+        if encodedAny { commands.commit() }
     }
 
     private func setWaterColor(cancel: Bool) {
@@ -489,11 +516,13 @@ final class HoldProgressHUD: NSObject {
             botColor = rgba(NSColor.controlAccentColor.withAlphaComponent(0.97))
         }
         crestColor = SIMD4<Float>(1, 1, 1, cancel ? 0.35 : 0.6)
-        if let flat = flatFill {
+        let flats = surfaces.values.compactMap(\.flatFill)
+        if !flats.isEmpty {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            flat.backgroundColor = cancel ? NSColor(calibratedWhite: 0.45, alpha: 0.93).cgColor
-                                          : NSColor.controlAccentColor.withAlphaComponent(0.97).cgColor
+            let color = cancel ? NSColor(calibratedWhite: 0.45, alpha: 0.93).cgColor
+                               : NSColor.controlAccentColor.withAlphaComponent(0.97).cgColor
+            for flat in flats { flat.backgroundColor = color }
             CATransaction.commit()
         }
     }
@@ -506,39 +535,82 @@ final class HoldProgressHUD: NSObject {
     }
 
     private func popIcon(from: CGFloat) {
-        guard let layer = iconView?.layer else { return }
-        let a = CAKeyframeAnimation(keyPath: "transform.scale")
-        a.values = [from, 1.08, 1.0]
-        a.keyTimes = [0, 0.7, 1]
-        a.duration = 0.28
-        a.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        layer.add(a, forKey: "pop")
+        for surface in surfaces.values {
+            guard let layer = surface.iconView.layer else { continue }
+            let a = CAKeyframeAnimation(keyPath: "transform.scale")
+            a.values = [from, 1.08, 1.0]
+            a.keyTimes = [0, 0.7, 1]
+            a.duration = 0.28
+            a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            layer.add(a, forKey: "pop")
+        }
     }
 
     // MARK: - Layout
 
-    private func positionWindow() {
-        guard let window = window else { return }
-        let screen = NSScreen.main ?? NSScreen.screens.first
-        guard let vf = screen?.visibleFrame else { return }
+    /// Reconcile one mirrored surface per display before every appearance. `NSScreen` objects and
+    /// coordinates can change after hot-plug or rearrangement, so positions are refreshed even for
+    /// surfaces that already exist.
+    private func syncSurfaces() {
+        prepareRenderer()
+        let screens = NSScreen.screens
+        let activeIDs = Set(screens.map(\.hudDisplayID))
+        for id in Array(surfaces.keys) where !activeIDs.contains(id) {
+            surfaces.removeValue(forKey: id)?.window.orderOut(nil)
+        }
+        for screen in screens {
+            let id = screen.hudDisplayID
+            let surface: Surface
+            if let existing = surfaces[id] {
+                surface = existing
+            } else {
+                surface = makeSurface()
+                surfaces[id] = surface
+            }
+            position(surface.window, on: screen)
+            updateDrawableScale(for: surface, on: screen)
+        }
+    }
+
+    private func position(_ window: NSWindow, on screen: NSScreen) {
+        let vf = screen.visibleFrame
         window.setFrameOrigin(NSPoint(x: vf.midX - winSide / 2,
                                       y: vf.minY + vf.height * 0.18 - pad))
     }
 
-    /// Match the drawable to the backing scale of whichever screen the window landed on. Called
-    /// after positioning, before the first frame; a no-op when nothing changed.
-    private func updateDrawableScale() {
-        guard let layer = metalLayer, let win = window else { return }
-        let scale = max(win.backingScaleFactor, 1)
+    /// Match each drawable to its own display. Mixed Retina/non-Retina setups therefore keep the
+    /// same physical card size and a crisp one-device-pixel water edge on every screen.
+    private func updateDrawableScale(for surface: Surface, on screen: NSScreen) {
+        guard let layer = surface.metalLayer else { return }
+        let scale = max(screen.backingScaleFactor, 1)
         let size = CGSize(width: side * scale, height: side * scale)
         guard layer.drawableSize != size else { return }
         layer.contentsScale = scale
         layer.drawableSize = size
-        halfPixel = Float(0.5 / scale)
+        surface.halfPixel = Float(0.5 / scale)
     }
 
-    private func ensureWindow() {
-        guard window == nil else { return }
+    /// Compile the shader once. Every display's CAMetalLayer uses this same device, queue and
+    /// pipeline; only its drawable and backing scale differ.
+    private func prepareRenderer() {
+        guard !rendererAttempted else { return }
+        rendererAttempted = true
+        guard let device = MTLCreateSystemDefaultDevice(),
+              let library = try? device.makeLibrary(source: Self.waterShader, options: nil),
+              let vertexFn = library.makeFunction(name: "water_vertex"),
+              let fragmentFn = library.makeFunction(name: "water_fragment"),
+              let queue = device.makeCommandQueue() else { return }
+        let desc = MTLRenderPipelineDescriptor()
+        desc.vertexFunction = vertexFn
+        desc.fragmentFunction = fragmentFn
+        desc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        guard let state = try? device.makeRenderPipelineState(descriptor: desc) else { return }
+        metalDevice = device
+        commandQueue = queue
+        pipeline = state
+    }
+
+    private func makeSurface() -> Surface {
         let winRect = NSRect(x: 0, y: 0, width: winSide, height: winSide)
         let cardRect = NSRect(x: pad, y: pad, width: side, height: side)
 
@@ -574,38 +646,26 @@ final class HoldProgressHUD: NSObject {
                         NSColor(calibratedWhite: 0.13, alpha: 0.98).cgColor]
         card.layer?.addSublayer(glass)
 
-        // The water: a Metal surface the size of the card, clipped to the vessel by the card's
-        // rounded-corner mask exactly as the old gradient stack was. Compiling the shader from
-        // source happens once, here, on first show — a few ms, never on the frame path.
-        if let device = MTLCreateSystemDefaultDevice(),
-           let library = try? device.makeLibrary(source: Self.waterShader, options: nil),
-           let vertexFn = library.makeFunction(name: "water_vertex"),
-           let fragmentFn = library.makeFunction(name: "water_fragment"),
-           let queue = device.makeCommandQueue() {
-            let desc = MTLRenderPipelineDescriptor()
-            desc.vertexFunction = vertexFn
-            desc.fragmentFunction = fragmentFn
-            desc.colorAttachments[0].pixelFormat = .bgra8Unorm
-            if let state = try? device.makeRenderPipelineState(descriptor: desc) {
-                let water = CAMetalLayer()
-                water.device = device
-                water.pixelFormat = .bgra8Unorm
-                water.framebufferOnly = true
-                water.isOpaque = false
-                water.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
-                water.frame = card.bounds
-                card.layer?.addSublayer(water)
-                metalLayer = water
-                commandQueue = queue
-                pipeline = state
-            }
+        // The water: one drawable layer per screen, all driven by the shared timeline and shader.
+        var water: CAMetalLayer?
+        var flat: CALayer?
+        if let device = metalDevice, pipeline != nil, commandQueue != nil {
+            let layer = CAMetalLayer()
+            layer.device = device
+            layer.pixelFormat = .bgra8Unorm
+            layer.framebufferOnly = true
+            layer.isOpaque = false
+            layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+            layer.frame = card.bounds
+            card.layer?.addSublayer(layer)
+            water = layer
         }
-        if metalLayer == nil {
+        if water == nil {
             // No Metal device (a stripped-down VM, in practice): a flat accent fill keeps the HUD
             // functional — level, drain, overflow and colours all still read; only the waves go.
-            let flat = CALayer()
-            card.layer?.addSublayer(flat)
-            flatFill = flat
+            let layer = CALayer()
+            card.layer?.addSublayer(layer)
+            flat = layer
         }
 
         let rim = CALayer()
@@ -629,9 +689,7 @@ final class HoldProgressHUD: NSObject {
 
         container.addSubview(card)
         win.contentView = container
-
-        window = win
-        iconView = icon
+        return Surface(window: win, iconView: icon, metalLayer: water, flatFill: flat)
     }
 
     private func onMain(_ work: @escaping () -> Void) {
