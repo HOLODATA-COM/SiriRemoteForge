@@ -26,6 +26,7 @@ SWIFT_FILES=(
     "AppWheel.swift"
     "CursorHighlighter.swift"
     "DragIndicator.swift"
+    "HUDScreen.swift"
     "LayerHUD.swift"
     "HoldProgressHUD.swift"
     "ActionVisual.swift"

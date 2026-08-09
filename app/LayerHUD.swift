@@ -22,11 +22,26 @@ final class LayerHUD {
     private let corner: CGFloat = 34
     private var winSide: CGFloat { card + pad * 2 }
 
-    private var window: NSWindow?
-    private var gradient: CAGradientLayer?
-    private var iconView: NSImageView?
-    private var titleLabel: NSTextField?
-    private var subtitleLabel: NSTextField?
+    /// `.canJoinAllSpaces` mirrors a window across Spaces, not across physical displays. Keep one
+    /// real window per display so the confirmation is visible regardless of which screen the user
+    /// is looking at. The windows share state and animate together.
+    private final class Surface {
+        let window: NSWindow
+        let gradient: CAGradientLayer
+        let iconView: NSImageView
+        let titleLabel: NSTextField
+        let subtitleLabel: NSTextField
+
+        init(window: NSWindow, gradient: CAGradientLayer, iconView: NSImageView,
+             titleLabel: NSTextField, subtitleLabel: NSTextField) {
+            self.window = window
+            self.gradient = gradient
+            self.iconView = iconView
+            self.titleLabel = titleLabel
+            self.subtitleLabel = subtitleLabel
+        }
+    }
+    private var surfaces: [CGDirectDisplayID: Surface] = [:]
 
     private let holdDuration: TimeInterval = 0.9
     private var hideTimer: Timer?
@@ -73,21 +88,29 @@ final class LayerHUD {
     private func show(symbol: String, title: String, subtitle: String, tint: NSColor) {
         onMain { [weak self] in
             guard let self = self else { return }
-            self.ensureWindow()
-            self.applyAppearanceColors()
-            self.configure(symbol: symbol, title: title, subtitle: subtitle, tint: tint)
+            self.syncSurfaces()
+            guard !self.surfaces.isEmpty else { return }
+            for surface in self.surfaces.values {
+                self.applyAppearanceColors(to: surface)
+                self.configure(surface, symbol: symbol, title: title, subtitle: subtitle, tint: tint)
+            }
             self.fadeToken += 1
-            self.positionWindow()
-            if !self.isShowing {
-                self.isShowing = true
-                self.window?.alphaValue = 0
-                self.window?.orderFrontRegardless()
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.14
-                    self.window?.animator().alphaValue = 1
+            let wasShowing = self.isShowing
+            self.isShowing = true
+
+            // Always re-order every mirror. A cached window can be removed from the visible window
+            // list by a Space/full-screen transition while `isShowing` is still true; only ordering
+            // on the false→true transition made later notifications silently stay hidden.
+            for surface in self.surfaces.values {
+                if !wasShowing { surface.window.alphaValue = 0 }
+                surface.window.orderFrontRegardless()
+            }
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = wasShowing ? 0.10 : 0.14
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                for surface in self.surfaces.values {
+                    surface.window.animator().alphaValue = 1
                 }
-            } else {
-                self.window?.animator().alphaValue = 1
             }
             self.resetHideTimer()
         }
@@ -109,47 +132,68 @@ final class LayerHUD {
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.38
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            window?.animator().alphaValue = 0
+            for surface in surfaces.values {
+                surface.window.animator().alphaValue = 0
+            }
         }, completionHandler: { [weak self] in
             guard let self = self, self.fadeToken == token else { return }
             self.isShowing = false
-            self.window?.orderOut(nil)
+            for surface in self.surfaces.values { surface.window.orderOut(nil) }
         })
     }
 
     // MARK: - Content
 
-    private func configure(symbol: String, title: String, subtitle: String, tint: NSColor) {
+    private func configure(_ surface: Surface, symbol: String, title: String,
+                           subtitle: String, tint: NSColor) {
         let cfg = NSImage.SymbolConfiguration(pointSize: 62, weight: .medium)
             .applying(.init(paletteColors: [tint]))
-        iconView?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
+        surface.iconView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
             .withSymbolConfiguration(cfg)
-        titleLabel?.stringValue = title.isEmpty ? subtitle : title
-        subtitleLabel?.stringValue = title.isEmpty ? "" : subtitle
+        surface.titleLabel.stringValue = title.isEmpty ? subtitle : title
+        surface.subtitleLabel.stringValue = title.isEmpty ? "" : subtitle
     }
 
     /// Light card in light mode, dark card in dark mode (a subtle top→bottom gradient either way).
-    private func applyAppearanceColors() {
-        let dark = window?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    private func applyAppearanceColors(to surface: Surface) {
+        let dark = surface.window.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let top = dark ? NSColor(calibratedWhite: 0.26, alpha: 1) : NSColor(calibratedWhite: 0.99, alpha: 1)
         let bot = dark ? NSColor(calibratedWhite: 0.18, alpha: 1) : NSColor(calibratedWhite: 0.93, alpha: 1)
-        gradient?.colors = [top.cgColor, bot.cgColor]
+        surface.gradient.colors = [top.cgColor, bot.cgColor]
     }
 
     // MARK: - Window
 
-    private func positionWindow() {
-        guard let window = window else { return }
-        let screen = NSScreen.main ?? NSScreen.screens.first
-        guard let vf = screen?.visibleFrame else { return }
+    /// Reconcile mirrors against the displays connected right now. This runs before every show, so
+    /// unplugging, reconnecting or rearranging displays cannot strand the HUD on a stale screen.
+    private func syncSurfaces() {
+        let screens = NSScreen.screens
+        let activeIDs = Set(screens.map(\.hudDisplayID))
+        for id in Array(surfaces.keys) where !activeIDs.contains(id) {
+            surfaces.removeValue(forKey: id)?.window.orderOut(nil)
+        }
+        for screen in screens {
+            let id = screen.hudDisplayID
+            let surface: Surface
+            if let existing = surfaces[id] {
+                surface = existing
+            } else {
+                surface = makeSurface()
+                surfaces[id] = surface
+            }
+            position(surface.window, on: screen)
+        }
+    }
+
+    private func position(_ window: NSWindow, on screen: NSScreen) {
+        let vf = screen.visibleFrame
         // Horizontal center, lower third — where the system volume/brightness HUD sits.
         let x = vf.midX - winSide / 2
         let y = vf.minY + vf.height * 0.18 - pad
         window.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
-    private func ensureWindow() {
-        guard window == nil else { return }
+    private func makeSurface() -> Surface {
         let winRect = NSRect(x: 0, y: 0, width: winSide, height: winSide)
         let cardRect = NSRect(x: pad, y: pad, width: card, height: card)
 
@@ -213,12 +257,8 @@ final class LayerHUD {
 
         container.addSubview(cardView)
         win.contentView = container
-
-        window = win
-        gradient = grad
-        iconView = icon
-        titleLabel = label
-        subtitleLabel = sub
+        return Surface(window: win, gradient: grad, iconView: icon,
+                       titleLabel: label, subtitleLabel: sub)
     }
 
     private func onMain(_ work: @escaping () -> Void) {
