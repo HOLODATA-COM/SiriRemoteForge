@@ -29,6 +29,10 @@ public struct Config: Equatable {
         /// Apps on the radial launcher, in clockwise order from the top. Summoned by holding the
         /// layer key; empty disables it. Names as they appear in /Applications, e.g. "Google Chrome".
         public var appWheel: [String]
+        /// Ordered layer cycle. `BASE` represents the ordinary, unlayered bindings; every other id
+        /// names a mode in `modes`. The layer key walks this array and wraps at the end. Presentation
+        /// lives beside identity so reordering, renaming, and recolouring a layer is one edit.
+        public var layers: [LayerDefinition]
         public var clickRiseThreshold: Double
         public var pressMoveMax: Double
         // Velocity-based cursor acceleration (layered on top of cursorSpeed).
@@ -36,12 +40,22 @@ public struct Config: Equatable {
         public var accelMax: Double
         public var accelLowSpeed: Double
         public var accelHighSpeed: Double
+        /// Dimensionless exponent applied after smoothstep. 1 = symmetric, >1 keeps the precise
+        /// end longer, <1 reaches the fast end sooner.
+        public var accelCurve: Double
+        /// Settings-UI preference. When true, pointer and circular scroll keep the same
+        /// dimensionless `accelCurve`; their gains, thresholds, and base speeds remain independent.
+        public var accelerationCurvesLinked: Bool
         // Double-tap: window for a 2nd tap to fire a `<key>.double` binding.
         public var doubleTapWindow: Double
         // Spaces Mode: inactivity window (seconds) after which armed desktop-switching disarms.
         public var spacesModeWindow: Double
         // Find-my-cursor: show a highlight when the cursor is shaken (rapid back-and-forth).
         public var findCursorEnabled: Bool
+        /// Optional always-on desktop widget that shows the active layer while idle and briefly
+        /// animates the most recent app/action. Off by default so upgrades never add new chrome
+        /// until the user asks for it.
+        public var statusWidgetEnabled: Bool
         /// Focus the app under the cursor, but ONLY when its window is fullscreen — a fullscreen
         /// window owns its whole Space, so focusing it raises nothing and disturbs no window
         /// stack. Off by default: it changes which app receives input.
@@ -83,6 +97,31 @@ public struct Config: Equatable {
             self.icon = icon
         }
     }
+
+    /// One entry in the ordered layer cycle. `name` and `color` are presentation-only; `id` is the
+    /// stable value used for binding resolution (`BASE`, `L1`, ...). The app accepts system colour
+    /// names and #RRGGBB/#RRGGBBAA while the core deliberately keeps the value platform-neutral.
+    public struct LayerDefinition: Codable, Equatable {
+        public var id: String
+        public var name: String?
+        public var color: String?
+        public init(id: String, name: String? = nil, color: String? = nil) {
+            self.id = id
+            self.name = name
+            self.color = color
+        }
+    }
+
+    /// Decode-only compatibility with the short-lived `settings.layerHUD` dictionary schema.
+    /// ConfigWriter emits the ordered `layers` form, so the next UI save upgrades old files.
+    public struct LayerHUDStyle: Codable, Equatable {
+        public var label: String?
+        public var color: String?
+        public init(label: String? = nil, color: String? = nil) {
+            self.label = label
+            self.color = color
+        }
+    }
 }
 
 // MARK: - Editing (value-semantic mutators; each returns a new Config for the editor to save)
@@ -121,6 +160,27 @@ public extension Config {
         return copy
     }
 
+    /// Add a mode and append it to the ordered layer cycle. The editor uses this instead of
+    /// `addMode` for its Layer path so a newly-created layer is immediately selectable and
+    /// cycleable. Invalid/reserved/duplicate ids and an 11th entry are safe no-ops.
+    func addLayer(id: String, name: String? = nil, color: String? = nil,
+                  inherits: String?) -> Config {
+        guard id != "BASE", !id.isEmpty,
+              id == id.trimmingCharacters(in: .whitespacesAndNewlines),
+              !settings.layers.contains(where: { $0.id.caseInsensitiveCompare(id) == .orderedSame })
+        else { return self }
+        var copy = self
+        if copy.settings.layers.isEmpty {
+            copy.settings.layers = [LayerDefinition(id: "BASE", name: "Layer 1", color: "green")]
+        }
+        guard copy.settings.layers.count < 10 else { return self }
+        if copy.modes[id] == nil {
+            copy.modes[id] = Mode(inherits: inherits, bindings: [:])
+        }
+        copy.settings.layers.append(LayerDefinition(id: id, name: name, color: color))
+        return copy
+    }
+
     /// Remove a mode, the appProfiles pointing at it, and any dangling `inherits` references to it
     /// (other modes that inherited it are re-parented to nil, so the result still loads). Refuses to
     /// remove the default mode — deleting it would leave the config with no valid default.
@@ -128,6 +188,9 @@ public extension Config {
         guard name != settings.defaultMode else { return self }
         var copy = self
         copy.modes.removeValue(forKey: name)
+        copy.settings.layers.removeAll {
+            $0.id.caseInsensitiveCompare(name) == .orderedSame && $0.id != "BASE"
+        }
         for (bundle, m) in copy.appProfiles where m == name { copy.appProfiles.removeValue(forKey: bundle) }
         for (other, mode) in copy.modes where mode.inherits == name { copy.modes[other]?.inherits = nil }
         return copy
@@ -217,12 +280,14 @@ extension Config: Decodable {
 extension Config.Settings: Decodable {
     private enum K: String, CodingKey {
         case defaultMode, swipeVelocity, cursorSpeed, cursorDeadzone, circularScroll, holdThreshold
-        case holdThreshold2, holdThreshold3, holdCancelGrace, appWheel
+        case holdThreshold2, holdThreshold3, holdCancelGrace, appWheel, layers, layerHUD
         case clickRiseThreshold, pressMoveMax
-        case accelMin, accelMax, accelLowSpeed, accelHighSpeed
+        case accelMin, accelMax, accelLowSpeed, accelHighSpeed, accelCurve
+        case accelerationCurvesLinked
         case doubleTapWindow
         case spacesModeWindow
         case findCursorEnabled
+        case statusWidgetEnabled
         case focusFollowsCursor
     }
     public init(from decoder: Decoder) throws {
@@ -238,16 +303,58 @@ extension Config.Settings: Decodable {
         holdThreshold3 = try c.decodeIfPresent(Double.self, forKey: .holdThreshold3) ?? 1.6
         holdCancelGrace = try c.decodeIfPresent(Double.self, forKey: .holdCancelGrace) ?? 1.0
         appWheel = try c.decodeIfPresent([String].self, forKey: .appWheel) ?? []
+        if let ordered = try c.decodeIfPresent([Config.LayerDefinition].self, forKey: .layers) {
+            layers = ordered
+        } else if let legacy = try c.decodeIfPresent([String: Config.LayerHUDStyle].self,
+                                                     forKey: .layerHUD) {
+            layers = Self.migrateLegacyLayerHUD(legacy)
+        } else {
+            layers = []
+        }
         clickRiseThreshold = try c.decodeIfPresent(Double.self, forKey: .clickRiseThreshold) ?? 0.1
         pressMoveMax = try c.decodeIfPresent(Double.self, forKey: .pressMoveMax) ?? 0.025
         accelMin = try c.decodeIfPresent(Double.self, forKey: .accelMin) ?? 0.4
         accelMax = try c.decodeIfPresent(Double.self, forKey: .accelMax) ?? 2.6
         accelLowSpeed = try c.decodeIfPresent(Double.self, forKey: .accelLowSpeed) ?? 0.008
         accelHighSpeed = try c.decodeIfPresent(Double.self, forKey: .accelHighSpeed) ?? 0.06
+        accelCurve = try c.decodeIfPresent(Double.self, forKey: .accelCurve) ?? 1.0
+        accelerationCurvesLinked = try c.decodeIfPresent(Bool.self,
+                                                         forKey: .accelerationCurvesLinked) ?? false
         doubleTapWindow = try c.decodeIfPresent(Double.self, forKey: .doubleTapWindow) ?? 0.3
         spacesModeWindow = try c.decodeIfPresent(Double.self, forKey: .spacesModeWindow) ?? 5.0
         findCursorEnabled = try c.decodeIfPresent(Bool.self, forKey: .findCursorEnabled) ?? true
+        statusWidgetEnabled = try c.decodeIfPresent(Bool.self, forKey: .statusWidgetEnabled) ?? false
         focusFollowsCursor = try c.decodeIfPresent(Bool.self, forKey: .focusFollowsCursor) ?? false
+    }
+
+    /// Dictionaries have no user-authored order, so legacy entries receive the only deterministic
+    /// ordering their ids imply: BASE, numbered L layers, then any custom ids alphabetically.
+    private static func migrateLegacyLayerHUD(
+        _ legacy: [String: Config.LayerHUDStyle]
+    ) -> [Config.LayerDefinition] {
+        func rank(_ raw: String) -> (group: Int, number: Int) {
+            let value = raw.uppercased()
+            if value == "BASE" { return (0, 0) }
+            if value.hasPrefix("L"), let number = Int(value.dropFirst()), number > 0 {
+                return (1, number)
+            }
+            return (2, 0)
+        }
+        let ids = legacy.keys.sorted { lhs, rhs in
+            let a = rank(lhs), b = rank(rhs)
+            if a.group != b.group { return a.group < b.group }
+            if a.number != b.number { return a.number < b.number }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+        var migrated = ids.map { rawID in
+            let style = legacy[rawID]!
+            let id = rawID.caseInsensitiveCompare("BASE") == .orderedSame ? "BASE" : rawID
+            return Config.LayerDefinition(id: id, name: style.label, color: style.color)
+        }
+        if !migrated.isEmpty, migrated[0].id != "BASE" {
+            migrated.insert(Config.LayerDefinition(id: "BASE"), at: 0)
+        }
+        return migrated
     }
 }
 
@@ -310,15 +417,19 @@ extension Config.Settings: Encodable {
         try c.encode(holdThreshold3, forKey: .holdThreshold3)
         try c.encode(holdCancelGrace, forKey: .holdCancelGrace)
         try c.encode(appWheel, forKey: .appWheel)
+        try c.encode(layers, forKey: .layers)
         try c.encode(clickRiseThreshold, forKey: .clickRiseThreshold)
         try c.encode(pressMoveMax, forKey: .pressMoveMax)
         try c.encode(accelMin, forKey: .accelMin)
         try c.encode(accelMax, forKey: .accelMax)
         try c.encode(accelLowSpeed, forKey: .accelLowSpeed)
         try c.encode(accelHighSpeed, forKey: .accelHighSpeed)
+        try c.encode(accelCurve, forKey: .accelCurve)
+        try c.encode(accelerationCurvesLinked, forKey: .accelerationCurvesLinked)
         try c.encode(doubleTapWindow, forKey: .doubleTapWindow)
         try c.encode(spacesModeWindow, forKey: .spacesModeWindow)
         try c.encode(findCursorEnabled, forKey: .findCursorEnabled)
+        try c.encode(statusWidgetEnabled, forKey: .statusWidgetEnabled)
         try c.encode(focusFollowsCursor, forKey: .focusFollowsCursor)
     }
 }

@@ -22,8 +22,8 @@ final class SettingsWindowController {
     func show() {
         if window == nil {
             let hosting = NSHostingController(rootView: SettingsView(model: model))
-            // Track the SwiftUI content's fitting size so the window grows/shrinks when the
-            // Layout tab (wider) is selected vs. the Tuning tab.
+            // Track the SwiftUI workspace's fitting size. Tuning is intentionally a wide,
+            // two-column Mac layout; Layout gets a little more room for its binding matrix.
             hosting.sizingOptions = [.preferredContentSize]
             let win = NSWindow(contentViewController: hosting)
             win.title = "siriRemote Settings"
@@ -32,7 +32,7 @@ final class SettingsWindowController {
             win.titleVisibility = .hidden
             win.isMovableByWindowBackground = true
             win.isReleasedWhenClosed = false
-            win.contentMinSize = NSSize(width: 452, height: 480)
+            win.contentMinSize = NSSize(width: 820, height: 620)
             win.center()
             // Don't open taller than the screen (a 13" display has ~900pt usable).
             if let vis = win.screen?.visibleFrame ?? NSScreen.main?.visibleFrame,

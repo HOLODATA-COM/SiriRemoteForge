@@ -22,6 +22,32 @@ public enum ConfigLoader {
         guard c.modes[c.settings.defaultMode] != nil else {
             throw ConfigError.validation("defaultMode '\(c.settings.defaultMode)' not in modes")
         }
+        let layers = c.settings.layers
+        let usesLayerCycle = c.modes.values.contains { mode in
+            mode.bindings.values.contains { $0 == .layerCycle }
+        }
+        guard layers.count <= 10 else {
+            throw ConfigError.validation("settings.layers supports at most 10 layers")
+        }
+        if !layers.isEmpty {
+            guard layers[0].id == "BASE" else {
+                throw ConfigError.validation("settings.layers must start with id 'BASE'")
+            }
+            var seen = Set<String>()
+            for layer in layers {
+                let id = layer.id.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !id.isEmpty, id == layer.id else {
+                    throw ConfigError.validation("settings.layers contains an empty or padded id")
+                }
+                let canonical = id.lowercased()
+                guard seen.insert(canonical).inserted else {
+                    throw ConfigError.validation("settings.layers contains duplicate id '\(id)'")
+                }
+                if usesLayerCycle, id != "BASE", c.modes[id] == nil {
+                    throw ConfigError.validation("settings.layers id '\(id)' is not in modes")
+                }
+            }
+        }
         for (app, mode) in c.appProfiles where c.modes[mode] == nil {
             throw ConfigError.validation("appProfiles['\(app)'] -> unknown mode '\(mode)'")
         }

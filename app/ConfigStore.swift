@@ -82,16 +82,27 @@ enum ConfigStore {
       //     ".triple" delays THAT key's double by one doubleTapWindow (a 3rd tap may still be
       //     coming); nothing else is affected and the plain tap is never delayed.
       // Actions: keystroke(keys) media(key) mouse(op) launch(app|url)
-      //          shell(command) applescript(script) mode(to) layer(to)
+      //          shell(command) applescript(script) mode(to) layer(to) layerCycle
       //   layer(to): the bound key becomes a layer key — TAP it to toggle that mode sticky
       //     (persists until tapped again), or HOLD it and press other keys for momentary use.
       // A binding OVERRIDES native behavior; unbound buttons stay native.
       "settings": {
         "defaultMode": "global",
+        // Ordered layer cycle (max 10). First id is BASE; every later id names a mode below.
+        // Bind a key to { "action": "layerCycle" } to walk this order and loop at the end.
+        // `name` is arbitrary; colour accepts system names or #RRGGBB / #RRGGBBAA.
+        "layers": [
+          { "id": "BASE", "name": "Layer 1", "color": "green" },
+          { "id": "L1",   "name": "Layer 2", "color": "blue" },
+          { "id": "L2",   "name": "Layer 3", "color": "purple" }
+        ],
         "cursorSpeed": 0.6,          // lower = slower / less sensitive
         "cursorDeadzone": 0.006,     // higher = more jitter ignored, easier to hold & click
+        "accelCurve": 1.0,           // pointer curve bend: 1 = symmetric, >1 stays precise longer
+        "accelerationCurvesLinked": false, // link pointer/scroll bend only; scales stay independent
         "clickRiseThreshold": 0.1,   // contact rise counted as a press (lower = freezes more readily)
         "pressMoveMax": 0.025,       // finger move above this cancels a stray press-freeze
+        "statusWidgetEnabled": false, // optional draggable always-on Layer/action status card
         "holdThreshold": 0.5,        // seconds held → stage 1 (".hold"). Fires on RELEASE (release-to-select).
         "holdThreshold2": 1.0,       // seconds held → stage 2 (".hold2"), a deeper hold
         "holdThreshold3": 1.6,       // seconds held → stage 3 (".hold3"), the deepest hold
@@ -118,10 +129,12 @@ enum ConfigStore {
         "global": {
           // "ring.up":     { "action": "keystroke", "keys": "up" },
           // "ring.down":   { "action": "keystroke", "keys": "down" },
-          // "button.tv":   { "action": "shell", "command": "open -a Safari" },
+          // "button.tv":   { "action": "layerCycle" },
           // "swipe.left":  { "action": "keystroke", "keys": "cmd+[" },
           // "swipe.right": { "action": "keystroke", "keys": "cmd+]" }
-        }
+        },
+        "L1": { "inherits": "global" },
+        "L2": { "inherits": "global" }
         // Per-app example (uncomment, and add the bundle id to appProfiles above):
         // ,"vscode": { "inherits": "global",
         //   "ring.up": { "action": "keystroke", "keys": "cmd+p" } }

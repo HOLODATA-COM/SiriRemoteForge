@@ -28,6 +28,7 @@ SWIFT_FILES=(
     "DragIndicator.swift"
     "HUDScreen.swift"
     "LayerHUD.swift"
+    "StatusWidget.swift"
     "HoldProgressHUD.swift"
     "ActionVisual.swift"
     # --- Settings UI (SwiftUI) ---

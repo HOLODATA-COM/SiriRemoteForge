@@ -19,6 +19,8 @@
     "accelMax": 6.0,             // quick flick → reach (higher: compensates the removed 2x double-scale)
     "accelLowSpeed": 0.007,      // per-frame speed below which accel = accelMin (narrow precise zone; only the genuinely slow)
     "accelHighSpeed": 0.06,      // per-frame speed above which accel = accelMax (a quick flick)
+    "accelCurve": 1.0,           // 1 = symmetric; >1 stays precise longer, <1 reaches sooner
+    "accelerationCurvesLinked": false, // UI lock: share only curve bend with circular scroll
     "clickRiseThreshold": 0.1,   // contact rise counted as a press (lower = freezes more readily)
     "pressMoveMax": 0.025,       // finger move above this cancels a stray press-freeze
     "holdThreshold": 0.5,        // seconds held → stage 1 (".hold"). Release-to-select: fires on RELEASE, not at the threshold.
@@ -33,10 +35,18 @@
     // centred on the pointer. Move the cursor toward one and press Select to open it; any
     // other button cancels. Clockwise from the top. Names as in /Applications.
     "appWheel": ["WeChat", "Google Chrome", "Music", "Warp"],       // seconds held → stage 3 (".hold3") — the deepest hold; deepest stage reached fires on release
+    // Ordered layer cycle (1–10 entries). `id` is BASE or a mode below; `name` and `color` are
+    // what the HUD shows. TV walks this exact order and wraps from the last entry to the first.
+    "layers": [
+      { "id": "BASE", "name": "Layer 1", "color": "green" },
+      { "id": "L1",   "name": "Layer 2", "color": "blue" },
+      { "id": "L2",   "name": "Layer 3", "color": "purple" }
+    ],
     "doubleTapWindow": 0.2,      // seconds from the first RELEASE to the second press. Measured from the release, not the
                                  // press, so holding the first tap longer no longer eats the window.
     "spacesModeWindow": 5.0,     // Spaces Mode: seconds without a left/right switch before it disarms
     "findCursorEnabled": true,   // shake the cursor (rapid back-and-forth) to flash a locate highlight
+    "statusWidgetEnabled": true, // always show Layer at rest; animate the current app/action briefly
     // Rest the cursor on an app that FILLS a display (fullscreen or just maximised) and it becomes
     // frontmost, so keystroke bindings land where you are pointing. Only apps covering >=90% of a
     // display: raising one of those changes nothing you can see, whereas doing this to overlapping
@@ -121,10 +131,9 @@
       // Double-tap Mute → Spotlight.
       "button.mute.double": { "action": "keystroke", "keys": "cmd+space",
                             "label": "Spotlight", "icon": "magnifyingglass" },
-      // TV button (to the right of Back) → toggle LAYER L1. TAP once to switch to L1 (sticky, stays
-      // until you tap again); tap again to switch back. (Holding it + pressing other keys = momentary
-      // L1.) An on-screen HUD confirms the switch. Add L1-specific bindings in the "L1" mode below.
-      "button.tv": { "action": "layer", "to": "L1" },
+      // TV follows settings.layers in order and loops forever. Adding/removing/reordering layers
+      // needs no matching TV bindings in their mode blocks.
+      "button.tv": { "action": "layerCycle" },
       // Hold the layer key → the radial app launcher (apps listed in settings.appWheel). An
       // ordinary hold binding, so it gets the same progress card as every other hold; a layer key
       // that carries hold stages falls through to the normal machinery instead of consuming its
@@ -172,19 +181,14 @@
                           "label": "Minimise", "icon": "arrow.down.right.and.arrow.up.left" },
       "ring.left":    { "action": "keystroke", "keys": "left" },
       "ring.right":   { "action": "keystroke", "keys": "right" },
-      // --- What LAYER L1 does. "L1.<key>" here = the DEFAULT for every app; override it per-app by
-      //     adding "L1.<key>" to that app's own mode (e.g. "browser" below). Edit these in the app:
-      //     Settings → Layout → pick an app chip + "Editing: layer L1".
-      "L1.ring.left":         { "action": "keystroke", "keys": "cmd+shift+left" },   // prev tab
-      "L1.ring.right":        { "action": "keystroke", "keys": "cmd+shift+right" },  // next tab
-      // DOUBLE-tap ring LEFT/RIGHT switches desktop in L1 too, matching the base layer. Needed
-      // explicitly: L1 binds ring.left/right (prev/next tab), so it CLAIMS the key, and the double
-      // no longer falls through to the base ring.left/right.double. (Single tab-switch gains one
-      // doubleTapWindow of latency here, the usual cost of adding a double.)
-      "L1.ring.left.double":  { "action": "space", "to": "left",
-                                "label": "Space ←", "icon": "rectangle.split.3x1" },
-      "L1.ring.right.double": { "action": "space", "to": "right",
-                                "label": "Space →", "icon": "rectangle.split.3x1" },
+      // LAYER L1 ring LEFT/RIGHT → switch desktop on a SINGLE press, in every app. Desktop
+      // switching used to live on the base-layer double press; that made the very common base
+      // single (tab switching) wait for doubleTapWindow. Keeping no left/right double variants
+      // makes every base-layer tab/track/arrow action fire immediately.
+      "L1.ring.left":  { "action": "space", "to": "left",
+                         "label": "Space ←", "icon": "rectangle.split.3x1" },
+      "L1.ring.right": { "action": "space", "to": "right",
+                         "label": "Space →", "icon": "rectangle.split.3x1" },
       "L1.button.volumeUp":   { "action": "keystroke", "keys": "cmd+=" },            // zoom in
       "L1.button.volumeDown": { "action": "keystroke", "keys": "cmd+-" },            // zoom out
       // The two lower-left buttons become copy/paste while L1 is held. Without these they were not
@@ -201,17 +205,10 @@
       "L1.button.mute":       { "action": "keystroke", "keys": "cmd+v",
                                 "label": "Paste", "icon": "doc.on.clipboard" },
       // Long-press ring UP → open Mission Control (single tap still sends ↑ on release):
-      "ring.up.hold": { "action": "shell", "command": "open -a 'Mission Control'" },
-      // A single tap stays ←/→ but is held ~doubleTapWindow to disambiguate from the double.
-      // DOUBLE-tap ring LEFT/RIGHT → switch desktop, animated, in ANY app. No third-party tool:
-      // the `space` action drives System Events, the only route measured to actually move a Space.
-      "ring.left.double":  { "action": "space", "to": "left",
-                             "label": "Space \u2190", "icon": "rectangle.split.3x1" },
-      "ring.right.double": { "action": "space", "to": "right",
-                             "label": "Space \u2192", "icon": "rectangle.split.3x1" }
+      "ring.up.hold": { "action": "shell", "command": "open -a 'Mission Control'" }
     },
     // In Chrome / Safari, the Back button (reports as button.menu on this remote) = Back in history
-    // Chrome / Safari. BASE ring left/right = prev/next tab; in LAYER L1 they become plain arrows.
+    // Chrome / Safari. BASE ring left/right = prev/next tab; L1 inherits desktop switching.
     "browser": {
       "inherits":     "global",
       // Back button (button.menu) → history Back (Cmd+[).
@@ -219,9 +216,6 @@
       // BASE (no layer): ring left/right = prev/next TAB (Cmd+Option+←/→).
       "ring.left":     { "action": "keystroke", "keys": "cmd+opt+left" },
       "ring.right":    { "action": "keystroke", "keys": "cmd+opt+right" },
-      // In LAYER L1: ring left/right = plain arrows (overrides the global L1 default), for Chrome & Safari.
-      "L1.ring.left":  { "action": "keystroke", "keys": "left" },
-      "L1.ring.right": { "action": "keystroke", "keys": "right" },
       // Double-tap ring-DOWN → close tab (Cmd+W); double-tap ring-UP → reopen last closed tab (Cmd+Shift+T).
       "ring.down.double": { "action": "keystroke", "keys": "cmd+w" },
       "ring.up.double":   { "action": "keystroke", "keys": "cmd+shift+t" }
@@ -245,25 +239,30 @@
     // hold-to-repeat superseded it, and dropping the override lets tap-then-hold work here too.)
     "terminal": {
       "inherits":    "global",
-      // Ring left/right are SWAPPED relative to global here: in a terminal you change tabs far more
-      // often than you arrow sideways, so tabs get the base layer and the arrows move into L1.
+      // In a terminal you change tabs far more often than you arrow sideways, so tabs stay on the
+      // immediate base-layer single press. L1 is reserved for desktop switching everywhere.
       // BASE (no layer): prev/next TAB.
       "ring.left":     { "action": "keystroke", "keys": "cmd+shift+left" },
       "ring.right":    { "action": "keystroke", "keys": "cmd+shift+right" },
-      // In LAYER L1: plain arrows (overrides the global L1 default, which is the tab switch).
-      "L1.ring.left":  { "action": "keystroke", "keys": "left" },
-      "L1.ring.right": { "action": "keystroke", "keys": "right" },
       // Double-tap ring-DOWN → close tab/pane (Cmd+W); double-tap ring-UP → reopen closed tab
-      // (Cmd+Shift+T). Both are BASE-layer (no "L1." prefix). Double-tap ring-left/right stay the
-      // global switch-desktop.
+      // (Cmd+Shift+T). Both are BASE-layer (no "L1." prefix).
       "ring.down.double": { "action": "keystroke", "keys": "cmd+w" },
       "ring.up.double":   { "action": "keystroke", "keys": "cmd+shift+t" }
     },
-    // L1: the LAYER toggled by the TV button (see button.tv above). Its bindings live as "L1.<key>"
-    // in the app modes (global = default; per-app overrides in each app's mode). This mode itself is
-    // just a marker so the layer exists; keep it (inherits global for pass-through of unbound keys).
+    // L1: the second user-facing layer. The global layerCycle/App-wheel bindings fall through here.
     "L1": {
       "inherits": "global"
+    },
+    // L2: the third user-facing layer. Unbound buttons fall through to BASE in the current app, so
+    // it copies the first layer automatically. The four ring directions are deliberately claimed
+    // here and become immediate plain arrow keys, with no BASE hold/double variants leaking through.
+    // The next layerCycle tap wraps from L2 back to BASE.
+    "L2": {
+      "inherits": "global",
+      "ring.up":    { "action": "keystroke", "keys": "up" },
+      "ring.down":  { "action": "keystroke", "keys": "down" },
+      "ring.left":  { "action": "keystroke", "keys": "left" },
+      "ring.right": { "action": "keystroke", "keys": "right" }
     }
   }
 }

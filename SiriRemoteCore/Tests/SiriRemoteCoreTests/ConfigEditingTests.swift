@@ -57,6 +57,32 @@ final class ConfigEditingTests: XCTestCase {
         assertReloads(c)
     }
 
+    func testAddAndRemoveOrderedLayerStayValid() throws {
+        var c = try base().addLayer(id: "EDIT", name: "Editing", color: "orange",
+                                    inherits: "global")
+        XCTAssertEqual(c.settings.layers.map(\.id), ["BASE", "EDIT"])
+        XCTAssertEqual(c.settings.layers[1].name, "Editing")
+        XCTAssertEqual(c.modes["EDIT"]?.inherits, "global")
+        assertReloads(c)
+
+        c = c.removeMode("EDIT")
+        XCTAssertEqual(c.settings.layers.map(\.id), ["BASE"])
+        XCTAssertNil(c.modes["EDIT"])
+        assertReloads(c)
+    }
+
+    func testAddLayerHonoursTenLayerLimit() throws {
+        var c = try base()
+        for i in 1...9 {
+            c = c.addLayer(id: "L\(i)", name: nil, color: nil, inherits: "global")
+        }
+        XCTAssertEqual(c.settings.layers.count, 10)
+        let unchanged = c.addLayer(id: "L10", name: nil, color: nil, inherits: "global")
+        XCTAssertEqual(unchanged, c)
+        XCTAssertNil(unchanged.modes["L10"])
+        assertReloads(unchanged)
+    }
+
     func testWithSettingsUpdatedRoundTrips() throws {
         let c = try base().withSettingsUpdated { s in
             s.cursorSpeed = 2.5

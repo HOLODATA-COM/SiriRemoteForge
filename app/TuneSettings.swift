@@ -15,6 +15,9 @@ struct TuneSettings: Codable, Equatable {
     var accelMax: Double
     var accelLowSpeed: Double
     var accelHighSpeed: Double
+    var accelCurve: Double
+    /// Links only the dimensionless curve bend. Each input keeps its own gain/speed scales.
+    var accelerationCurvesLinked: Bool
     var clickRiseThreshold: Double
     var pressMoveMax: Double
     var holdThreshold: Double
@@ -24,6 +27,7 @@ struct TuneSettings: Codable, Equatable {
     var doubleTapWindow: Double
     var spacesModeWindow: Double
     var findCursorEnabled: Bool
+    var statusWidgetEnabled: Bool
     var focusFollowsCursor: Bool
     var circularEnabled: Bool
     var circularMinRadius: Double
@@ -40,9 +44,12 @@ struct TuneSettings: Codable, Equatable {
 
     static let `default` = TuneSettings(
         cursorSpeed: 0.6, cursorDeadzone: 0.006, accelMin: 0.4, accelMax: 2.6,
-        accelLowSpeed: 0.008, accelHighSpeed: 0.06, clickRiseThreshold: 0.1, pressMoveMax: 0.025,
+        accelLowSpeed: 0.008, accelHighSpeed: 0.06, accelCurve: 1.0,
+        accelerationCurvesLinked: false,
+        clickRiseThreshold: 0.1, pressMoveMax: 0.025,
         holdThreshold: 0.5, holdThreshold2: 1.0, holdThreshold3: 1.6, holdCancelGrace: 1.0,
         doubleTapWindow: 0.3, spacesModeWindow: 5.0, findCursorEnabled: true,
+        statusWidgetEnabled: false,
         focusFollowsCursor: false,
         circularEnabled: true,
         circularMinRadius: 0.35, circularStartThreshold: 0.35, circularPixelsPerRadian: 75,
@@ -59,6 +66,8 @@ struct TuneSettings: Codable, Equatable {
         accelMax = s.accelMax
         accelLowSpeed = s.accelLowSpeed
         accelHighSpeed = s.accelHighSpeed
+        accelCurve = s.accelCurve
+        accelerationCurvesLinked = s.accelerationCurvesLinked
         clickRiseThreshold = s.clickRiseThreshold
         pressMoveMax = s.pressMoveMax
         holdThreshold = s.holdThreshold
@@ -68,6 +77,7 @@ struct TuneSettings: Codable, Equatable {
         doubleTapWindow = s.doubleTapWindow
         spacesModeWindow = s.spacesModeWindow
         findCursorEnabled = s.findCursorEnabled
+        statusWidgetEnabled = s.statusWidgetEnabled
         focusFollowsCursor = s.focusFollowsCursor
         circularEnabled = s.circularScroll.enabled
         circularMinRadius = s.circularScroll.minRadius
@@ -83,11 +93,13 @@ struct TuneSettings: Codable, Equatable {
     }
 
     init(cursorSpeed: Double, cursorDeadzone: Double, accelMin: Double, accelMax: Double,
-         accelLowSpeed: Double, accelHighSpeed: Double, clickRiseThreshold: Double,
+         accelLowSpeed: Double, accelHighSpeed: Double, accelCurve: Double,
+         accelerationCurvesLinked: Bool, clickRiseThreshold: Double,
          pressMoveMax: Double, holdThreshold: Double, holdThreshold2: Double, holdThreshold3: Double,
          holdCancelGrace: Double,
          doubleTapWindow: Double,
-         spacesModeWindow: Double, findCursorEnabled: Bool, focusFollowsCursor: Bool,
+         spacesModeWindow: Double, findCursorEnabled: Bool, statusWidgetEnabled: Bool,
+         focusFollowsCursor: Bool,
          circularEnabled: Bool,
          circularMinRadius: Double, circularStartThreshold: Double, circularPixelsPerRadian: Double,
          circularScrollEase: Double, circularInvert: Bool,
@@ -100,6 +112,8 @@ struct TuneSettings: Codable, Equatable {
         self.accelMax = accelMax
         self.accelLowSpeed = accelLowSpeed
         self.accelHighSpeed = accelHighSpeed
+        self.accelCurve = accelCurve
+        self.accelerationCurvesLinked = accelerationCurvesLinked
         self.clickRiseThreshold = clickRiseThreshold
         self.pressMoveMax = pressMoveMax
         self.holdThreshold = holdThreshold
@@ -109,6 +123,7 @@ struct TuneSettings: Codable, Equatable {
         self.doubleTapWindow = doubleTapWindow
         self.spacesModeWindow = spacesModeWindow
         self.findCursorEnabled = findCursorEnabled
+        self.statusWidgetEnabled = statusWidgetEnabled
         self.focusFollowsCursor = focusFollowsCursor
         self.circularEnabled = circularEnabled
         self.circularMinRadius = circularMinRadius

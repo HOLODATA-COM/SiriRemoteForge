@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var touchHandler: TouchHandler?
     private var cursorHighlighter: CursorHighlighter?
     private var layerHUD: LayerHUD?
+    private var statusWidget: StatusWidgetController?
     private var appWheel: AppWheelController?
     private var dragIndicator: DragIndicator?
     private var touchMonitor: TouchMonitorWindowController?
@@ -77,15 +78,79 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Headless visual QC: `--test-layer-hud` shows the layer HUD (on, then off) so it can be
-        // screenshotted, then exits — without seizing the remote or wiring up the rest of the app.
+        // Headless visual QC: `--test-layer-hud` walks the complete three-layer cycle while the card
+        // stays visible, exercising tint morphing and in-place transitions without seizing remote IO.
         if CommandLine.arguments.contains("--test-layer-hud") {
             NSApp.setActivationPolicy(.accessory)
-            let hud = LayerHUD()
+            let hud = LayerHUD(layers: ConfigStore.loadConfig().settings.layers)
             layerHUD = hud
-            hud.showOn("L1")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { hud.showOff("L1") }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { exit(0) }
+            hud.showOff("L2")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { hud.showOn("L1") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.30) { hud.showOn("L2") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.95) { hud.showOff("L2") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { exit(0) }
+            return
+        }
+
+        // Headless visual QC for the optional persistent status surface. It cycles through the
+        // resting Layer, a real Music app icon, a track action, and another Layer without touching
+        // the remote, rcd, Accessibility, or any input device.
+        if CommandLine.arguments.contains("--test-status-widget") {
+            NSApp.setActivationPolicy(.accessory)
+            let config = ConfigStore.loadConfig()
+            let widget = StatusWidgetController(layers: config.settings.layers, enabled: true)
+            statusWidget = widget
+            widget.setLayer(nil, animated: false)
+            let slowVisualQC = CommandLine.arguments.contains("--test-status-widget-long")
+            let beat: TimeInterval = slowVisualQC ? 10.0 : 3.0
+            // Pin one requested face for deterministic pixel inspection. This exists because
+            // screenshot permission round-trips can outlast the production sub-second dwell.
+            if let stateIndex = CommandLine.arguments.firstIndex(of: "--test-status-widget-state"),
+               stateIndex + 1 < CommandLine.arguments.count {
+                let dwell: TimeInterval = slowVisualQC ? 55.0 : 12.0
+                switch CommandLine.arguments[stateIndex + 1].lowercased() {
+                case "music":
+                    widget.showApplication(bundleID: "com.apple.Music", duration: dwell)
+                case "next":
+                    widget.showAction(.init(key: "button.nextTrack.double",
+                                            action: .media(key: "next"),
+                                            presentation: .init(label: "Next Track", icon: nil)),
+                                      durationOverride: dwell)
+                case "voice":
+                    widget.showAction(.init(key: "button.siri.hold2",
+                                            action: .pushToTalk(keys: "rctrl+rcmd+ropt"),
+                                            presentation: .init(label: "Voice Input", icon: "waveform")),
+                                      durationOverride: dwell)
+                case "layer2":
+                    widget.setLayer("L1")
+                default:
+                    break
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + dwell + 1.0) { exit(0) }
+                return
+            }
+            // Deliberately spacious beats: tool-driven screenshots have to survive permission/UI
+            // round trips, while the real widget's per-action dwell remains sub-second.
+            DispatchQueue.main.asyncAfter(deadline: .now() + beat) {
+                widget.showApplication(bundleID: "com.apple.Music",
+                                       duration: slowVisualQC ? beat * 0.8 : 0.90)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + beat * 2) {
+                widget.showAction(.init(key: "button.nextTrack.double",
+                                        action: .media(key: "next"),
+                                        presentation: .init(label: "Next Track", icon: nil)),
+                                  durationOverride: slowVisualQC ? beat * 0.8 : nil)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + beat * 3) {
+                widget.setLayer("L1")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + beat * 4) {
+                widget.showAction(.init(key: "button.siri.hold2",
+                                        action: .pushToTalk(keys: "rctrl+rcmd+ropt"),
+                                        presentation: .init(label: "Voice Input", icon: "waveform")),
+                                  durationOverride: slowVisualQC ? beat * 0.8 : nil)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + (slowVisualQC ? 60.0 : 15.2)) { exit(0) }
             return
         }
 
@@ -224,6 +289,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         //     unbound buttons fall through to HyperVibe's native mapping. ---
         let config = ConfigStore.loadConfig()
 
+        let persistentStatus = StatusWidgetController(
+            layers: config.settings.layers,
+            enabled: config.settings.statusWidgetEnabled
+        )
+        statusWidget = persistentStatus
+
         // Tuning: config.jsonc's `settings` block is the source of truth — always seed from it (a
         // stale saved tune no longer shadows config edits), and re-seed on every hot-reload below.
         let model = SettingsModel(initial: TuneSettings(seed: config.settings))
@@ -250,9 +321,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         controller = engineController
         remoteInputHandler?.controller = engineController
-        appWatcher = AppWatcher { [weak engineController] bundleID in
+        engineController.onActionHandled = { [weak persistentStatus] handled in
+            persistentStatus?.showAction(handled)
+        }
+        appWatcher = AppWatcher { [weak engineController, weak persistentStatus] bundleID in
             rmDebug("🎯 frontmost app → \(bundleID)")
             engineController?.frontmostAppChanged(bundleID: bundleID)
+            persistentStatus?.showApplication(bundleID: bundleID)
         }
         configWatcher = ConfigFileWatcher(url: ConfigStore.path) { [weak self] in
             let reloaded = ConfigStore.loadConfig()
@@ -271,6 +346,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self?.settingsModel?.config = reloaded   // keep the Layout tab in sync on hot-reload
             self?.appWheel?.configure(apps: reloaded.settings.appWheel)   // and the launcher's app list
+            self?.layerHUD?.configure(layers: reloaded.settings.layers) // order/names/colours too
+            self?.statusWidget?.configure(layers: reloaded.settings.layers,
+                                          enabled: reloaded.settings.statusWidgetEnabled)
             // Live-tune: re-seed tuning from the config's `settings` so editing config.jsonc updates
             // cursor feel / thresholds immediately. The @Published didSet applies it (→ applyTune)
             // only when the values actually changed, so mapping-only edits don't churn.
@@ -285,8 +363,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         touch.scrollScale = menuBarManager.scrollSpeed.scale
         // The outer-ring gesture is vertical in the base layer and horizontal in Layer 1. Listen to
         // Controller rather than only the sticky-layer HUD callback so momentary L1 holds work too.
-        engineController.onLayerChanged = { [weak touch] layer in
+        engineController.onLayerChanged = { [weak touch, weak persistentStatus] layer in
             touch?.circularScrollAxis = layer == "L1" ? .horizontal : .vertical
+            persistentStatus?.setLayer(layer)
         }
         touch.onSwipe = { [weak self] direction in
             // Swipes are config-driven only. An unbound swipe does nothing — no native fallback,
@@ -308,7 +387,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Find-my-cursor: a cursor shake flashes a highlight. Gated on the enabled setting
         // (`findCursorEnabled`, kept in sync by applyTune) so it can be toggled live.
         // Layer HUD: show a macOS-style overlay when a sticky layer toggles on/off.
-        let hud = LayerHUD()
+        let hud = LayerHUD(layers: config.settings.layers)
         layerHUD = hud
         remoteInputHandler?.onLayerToggle = { on, name in
             on ? hud.showOn(name) : hud.showOff(name)
@@ -457,6 +536,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         touchHandler?.accelMax = CGFloat(t.accelMax)
         touchHandler?.accelLowSpeed = CGFloat(t.accelLowSpeed)
         touchHandler?.accelHighSpeed = CGFloat(t.accelHighSpeed)
+        touchHandler?.accelCurve = CGFloat(t.accelCurve)
         touchHandler?.clickRiseThreshold = t.clickRiseThreshold
         touchHandler?.pressMoveMax = t.pressMoveMax
         touchHandler?.circularConfig = t.circularConfig
@@ -467,6 +547,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         remoteInputHandler?.doubleTapWindow = t.doubleTapWindow
         remoteInputHandler?.spacesModeWindow = t.spacesModeWindow
         findCursorEnabled = t.findCursorEnabled
+        statusWidget?.setEnabled(t.statusWidgetEnabled)
         focusFollower?.enabled = t.focusFollowsCursor
     }
 
@@ -491,6 +572,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             s.accelMax = t.accelMax
             s.accelLowSpeed = t.accelLowSpeed
             s.accelHighSpeed = t.accelHighSpeed
+            s.accelCurve = t.accelCurve
+            s.accelerationCurvesLinked = t.accelerationCurvesLinked
             s.clickRiseThreshold = t.clickRiseThreshold
             s.pressMoveMax = t.pressMoveMax
             s.holdThreshold = t.holdThreshold
@@ -500,6 +583,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             s.doubleTapWindow = t.doubleTapWindow
             s.spacesModeWindow = t.spacesModeWindow
             s.findCursorEnabled = t.findCursorEnabled
+            s.statusWidgetEnabled = t.statusWidgetEnabled
             s.focusFollowsCursor = t.focusFollowsCursor
             s.circularScroll = t.circularConfig
         }

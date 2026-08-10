@@ -89,6 +89,9 @@ class TouchHandler {
     var accelMax: CGFloat = 2.6
     var accelLowSpeed: CGFloat = 0.008
     var accelHighSpeed: CGFloat = 0.06
+    /// Bends the normalised smoothstep ramp. Kept separate from the gain/speed scales so it can be
+    /// linked to circular scroll without mixing pointer delta/frame with ring radians/frame.
+    var accelCurve: CGFloat = 1.0
     /// Per-frame jitter deadzone (config: settings.cursorDeadzone). Movement below this
     /// (normalized) is ignored so resting/pressing a finger doesn't drift the cursor.
     var cursorDeadzone: CGFloat = 0.006
@@ -674,7 +677,8 @@ class TouchHandler {
         // as the deadzone). This is the ONLY place the delta is scaled (CursorController no longer
         // double-scales), so the accel curve fully controls the feel.
         let v = hypot(deltaX, deltaY)
-        let t = smoothstep(v, accelLowSpeed, accelHighSpeed)
+        var t = smoothstep(v, accelLowSpeed, accelHighSpeed)
+        if accelCurve != 1, t > 0 { t = pow(t, accelCurve) }
         let accelMul = accelMin + (accelMax - accelMin) * t
         let effectiveSpeed = cursorSpeed * accelMul
         let scaledX = deltaX * cursorScale * effectiveSpeed

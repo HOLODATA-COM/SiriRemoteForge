@@ -30,6 +30,8 @@ struct LayoutView: View {
     @State private var showAdd = false
     @State private var addIsLayer = false
     @State private var addName = ""
+    @State private var addLayerTitle = ""
+    @State private var addLayerColor = ""
     @State private var addTargetMode = "global"
 
     // The mode currently being viewed (falls back to the default if the selection is gone
@@ -44,13 +46,32 @@ struct LayoutView: View {
         editLayer.map { "\($0).\(base)" } ?? base
     }
 
-    /// Layer names referenced by any `.layer` binding — the layers you can scope editing to.
+    /// The authored cycle supplies both membership and order. Keep manually-targeted `.layer`
+    /// actions visible too for backwards compatibility, appending only ids not already listed.
     private var layerNames: [String] {
-        var set = Set<String>()
-        for (_, m) in config.modes {
-            for (_, action) in m.bindings { if case let .layer(n) = action { set.insert(n) } }
+        var result: [String] = []
+        var seen = Set<String>()
+        for layer in config.settings.layers where layer.id != "BASE" {
+            if seen.insert(layer.id).inserted { result.append(layer.id) }
         }
-        return set.sorted()
+        var legacy: [String] = []
+        for (_, m) in config.modes {
+            for (_, action) in m.bindings {
+                if case let .layer(name) = action, seen.insert(name).inserted { legacy.append(name) }
+            }
+        }
+        return result + legacy.sorted()
+    }
+
+    private func layerTitle(_ id: String) -> String {
+        if let index = config.settings.layers.firstIndex(where: { $0.id == id }) {
+            let configured = config.settings.layers[index].name?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let configured = configured, !configured.isEmpty { return configured }
+            return "Layer \(index + 1)"
+        }
+        if id == "BASE" { return "Layer 1" }
+        return id
     }
 
     /// When false, the content is laid out without a ScrollView — needed for offscreen
@@ -105,13 +126,15 @@ struct LayoutView: View {
                     .font(.system(size: 11)).foregroundStyle(editLayer == nil ? .secondary : Color.accentColor)
                 Text("Editing").font(.system(size: 11.5)).foregroundStyle(.secondary)
                 Picker("", selection: $editLayer) {
-                    Text("base bindings").tag(String?.none)
-                    ForEach(layerNames, id: \.self) { Text("layer \($0)").tag(String?.some($0)) }
+                    Text(layerTitle("BASE")).tag(String?.none)
+                    ForEach(layerNames, id: \.self) { id in
+                        Text(layerTitle(id)).tag(String?.some(id))
+                    }
                 }
                 .labelsHidden().fixedSize()
                 Text(editLayer == nil
                      ? "for \(mode == config.defaultModeName ? "Global" : mode)"
-                     : "→ what layer \(editLayer!) does in \(mode == config.defaultModeName ? "Global" : mode)")
+                     : "→ what \(layerTitle(editLayer!)) does in \(mode == config.defaultModeName ? "Global" : mode)")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
             }
@@ -193,7 +216,8 @@ struct LayoutView: View {
 
     private var addChip: some View {
         Button {
-            addName = ""; addIsLayer = false; addTargetMode = config.defaultModeName; showAdd = true
+            addName = ""; addLayerTitle = ""; addLayerColor = ""
+            addIsLayer = false; addTargetMode = config.defaultModeName; showAdd = true
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "plus")
@@ -220,8 +244,11 @@ struct LayoutView: View {
                 Text("Layer").tag(true)
             }.pickerStyle(.segmented).labelsHidden()
             if addIsLayer {
-                TextField("Layer name (e.g. tvLayer)", text: $addName).textFieldStyle(.roundedBorder)
-                Text("A layer is a mode you activate by holding a key (the Layer action). It inherits Global.")
+                TextField("Internal id (e.g. L3)", text: $addName).textFieldStyle(.roundedBorder)
+                TextField("Display name (e.g. Editing)", text: $addLayerTitle).textFieldStyle(.roundedBorder)
+                TextField("Colour (e.g. orange or #FF9500)", text: $addLayerColor)
+                    .textFieldStyle(.roundedBorder)
+                Text("Added to the end of settings.layers and inherited from Global. \(config.settings.layers.count)/10 layers used.")
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 HStack(spacing: 6) {
@@ -242,7 +269,7 @@ struct LayoutView: View {
                 Button("Cancel") { showAdd = false }
                 Button("Create") { createAdd() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(addName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(!canCreateAdd)
             }
         }
         .padding(16).frame(width: 300)
@@ -265,13 +292,29 @@ struct LayoutView: View {
         let name = addName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, let onSave = onSave else { showAdd = false; return }
         if addIsLayer {
-            onSave(config.addMode(name, inherits: config.defaultModeName))
-            selectedMode = name
+            let title = addLayerTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            let color = addLayerColor.trimmingCharacters(in: .whitespacesAndNewlines)
+            onSave(config.addLayer(id: name,
+                                   name: title.isEmpty ? nil : title,
+                                   color: color.isEmpty ? nil : color,
+                                   inherits: config.defaultModeName))
+            selectedMode = config.defaultModeName
+            editLayer = name
         } else {
             onSave(config.setAppProfile(bundleID: name, mode: addTargetMode))
             selectedMode = addTargetMode
         }
         showAdd = false
+    }
+
+    private var canCreateAdd: Bool {
+        let name = addName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return false }
+        if !addIsLayer { return true }
+        guard name != "BASE", config.settings.layers.count < 10 else { return false }
+        return !config.settings.layers.contains {
+            $0.id.caseInsensitiveCompare(name) == .orderedSame
+        }
     }
 
     // MARK: - Legend
@@ -631,7 +674,7 @@ private struct ActionSlotEditor: View {
              media = "Media", mouse = "Mouse",
              launchApp = "Launch app", openURL = "Open URL", shell = "Shell",
              applescript = "AppleScript", space = "Switch space", brightness = "Brightness",
-             layer = "Layer", mode = "Mode", repeatKey = "Repeat key",
+             layer = "Layer", layerCycle = "Layer cycle", mode = "Mode", repeatKey = "Repeat key",
              fullscreen = "Full screen", minimize = "Minimise",
              closeWindow = "Close window", appWheel = "App wheel"
         var id: String { rawValue }
@@ -681,6 +724,7 @@ private struct ActionSlotEditor: View {
                 Section("Modes & layers") {
                     Text(Kind.mode.rawValue).tag(Kind.mode)
                     Text(Kind.layer.rawValue).tag(Kind.layer)
+                    Text(Kind.layerCycle.rawValue).tag(Kind.layerCycle)
                     Text(Kind.space.rawValue).tag(Kind.space)
                 }
             }
@@ -737,6 +781,9 @@ private struct ActionSlotEditor: View {
                 Text("tap = toggle · hold = momentary")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
+        case .layerCycle:
+            Text("cycles settings.layers in order")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
         case .brightness:
             HStack(spacing: 6) {
                 // Commit only when the drag ends (onEditingChanged → false), not on every tick —
@@ -769,6 +816,7 @@ private struct ActionSlotEditor: View {
         case .applescript(let s):     kind = .applescript; text = s
         case .mode(let to):           kind = .mode; pick = to
         case .layer(let n):           kind = .layer; pick = n
+        case .layerCycle:             kind = .layerCycle
         case .space(let d):           kind = .space; pick = d < 0 ? "left" : "right"
         case .fullscreen:             kind = .fullscreen
         case .minimize:               kind = .minimize
@@ -812,6 +860,7 @@ private struct ActionSlotEditor: View {
         case .closeWindow: return .closeWindow
         case .appWheel:    return .appWheel
         case .layer:       return pick.isEmpty ? nil : .layer(pick)
+        case .layerCycle:  return .layerCycle
         case .mode:        return pick.isEmpty ? nil : .mode(to: pick)
         case .brightness:  return .brightness(value)
         }
