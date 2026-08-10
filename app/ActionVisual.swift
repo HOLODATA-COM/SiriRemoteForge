@@ -34,7 +34,8 @@ enum ActionVisual {
     private static let soloSize: CGFloat = 44
     private static let inlineSize: CGFloat = 28
 
-    static func resolve(_ action: Action, _ presentation: Config.Presentation?) -> Visual {
+    static func resolve(_ action: Action, _ presentation: Config.Presentation?,
+                        prefersTargetAppIcon: Bool = true) -> Visual {
         let named = presentation?.label.flatMap { $0.isEmpty ? nil : $0 }
 
         // A custom SF Symbol always wins, and always keeps its label — it was chosen deliberately.
@@ -55,13 +56,15 @@ enum ActionVisual {
         // An action AIMED at an app (rather than one that opens it) still shows that app's icon —
         // far more recognisable than the generic per-kind symbol — but keeps its label, because
         // "tell Music to playpause" is not "open Music" and must not read as though it were.
-        if let app = targetedAppName(action), let icon = appIcon(named: app) {
+        if prefersTargetAppIcon,
+           let app = targetedAppName(action), let icon = appIcon(named: app) {
             icon.size = NSSize(width: inlineSize, height: inlineSize)
             return Visual(label: named ?? fallbackLabel(action), image: icon, iconOnly: false)
         }
 
         return Visual(label: named ?? fallbackLabel(action),
-                      image: symbol(defaultSymbolName(action), size: inlineSize),
+                      image: symbol(defaultSymbolName(action), size: inlineSize)
+                          ?? symbol("command", size: inlineSize),
                       iconOnly: false)
     }
 
@@ -155,20 +158,41 @@ enum ActionVisual {
         switch action {
         case .keystroke:   return "keyboard"
         case .pushToTalk:  return "mic.fill"
-        case .media:       return "playpause.fill"
-        case .mouse:       return "cursorarrow.click"
+        case .media(let key):
+            switch key.lowercased() {
+            case "next": return "forward.end.fill"
+            case "previous", "prev": return "backward.end.fill"
+            case "volup", "volumeup": return "speaker.wave.3.fill"
+            case "voldown", "volumedown": return "speaker.wave.1.fill"
+            case "mute": return "speaker.slash.fill"
+            default: return "playpause.fill"
+            }
+        case .mouse(let op):
+            switch op.lowercased() {
+            case "move": return "cursorarrow.motionlines"
+            case "scroll": return "arrow.up.and.down"
+            case "rightclick": return "cursorarrow.click.2"
+            default: return "cursorarrow.click"
+            }
         case .launch:      return "arrow.up.forward.app"
         case .shell:       return "terminal"
-        case .applescript: return "applescript"
+        case .applescript(let script):
+            let lower = script.lowercased()
+            if lower.contains("next track") { return "forward.end.fill" }
+            if lower.contains("previous track") { return "backward.end.fill" }
+            if lower.contains("playpause") || lower.contains("play pause") {
+                return "playpause.fill"
+            }
+            return "applescript"
         case .mode:        return "rectangle.on.rectangle"
-        case .layer:       return "square.stack.3d.up.fill"
-        case .space:       return "rectangle.split.3x1"
+        case .layer, .layerCycle: return "square.stack.3d.up.fill"
+        case .space(let direction): return direction < 0 ? "arrow.left.square.fill" : "arrow.right.square.fill"
         case .fullscreen:  return "arrow.up.left.and.arrow.down.right"
         case .minimize:    return "arrow.down.right.and.arrow.up.left"
         case .closeWindow: return "xmark.circle.fill"
         case .appWheel:    return "circle.grid.3x3.fill"
         case .repeatKey:   return "repeat"
-        case .brightness:  return "sun.max.fill"
+        case .brightness(let value): return value <= 0.25 ? "sun.min.fill" : "sun.max.fill"
         }
     }
 }

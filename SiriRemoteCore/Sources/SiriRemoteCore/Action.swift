@@ -16,6 +16,9 @@ public enum Action: Equatable {
     // named layer mode (a normal `config.modes` entry, e.g. "tvLayer") instead of the app mode.
     // Pushed on press, popped on release (see Controller.pushLayer/popLayer).
     case layer(String)
+    /// Advance through `settings.layers` in array order, wrapping from the last entry to BASE.
+    /// RemoteInputHandler gives this the same tap-toggle / hold-momentary semantics as `.layer`.
+    case layerCycle
     case space(direction: Int)   // switch macOS Spaces: -1 = left, +1 = right
     // Toggle native full screen on the frontmost window. NOT a keystroke: synthesizing the menu
     // shortcut does not take effect, the same way it does not for Space switching. Driven through
@@ -56,6 +59,7 @@ public extension Action {
         case .appWheel:                 return "App Wheel"
         case .mode(let to):             return "Mode: \(to)"
         case .layer(let name):          return "Layer: \(name)"
+        case .layerCycle:               return "Next Layer"
         case .repeatKey(let keys, _, _): return ActionLabel.keystroke(keys) + " ⟳"
         case .brightness(let value):    return "Brightness \(Int(value * 100))%"
         }
@@ -183,6 +187,7 @@ extension Action: Decodable {
         case "applescript": self = .applescript(script: try c.decode(String.self, forKey: .script))
         case "mode":        self = .mode(to: try c.decode(String.self, forKey: .to))
         case "layer":       self = .layer(try c.decode(String.self, forKey: .to))
+        case "layerCycle":  self = .layerCycle
         case "space":       self = .space(direction: (try c.decode(String.self, forKey: .to)) == "left" ? -1 : 1)
         case "fullscreen":  self = .fullscreen
         case "minimize":    self = .minimize
@@ -233,6 +238,8 @@ extension Action: Encodable {
         case .layer(let name):
             try c.encode("layer", forKey: .action)
             try c.encode(name, forKey: .to)
+        case .layerCycle:
+            try c.encode("layerCycle", forKey: .action)
         case .fullscreen:
             try c.encode("fullscreen", forKey: .action)
         case .minimize:

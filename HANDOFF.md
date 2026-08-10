@@ -1651,6 +1651,105 @@ feel that evening; if any of these is wrong, this is where to look:
   MakeTouch/Touching/BreakTouch state machine both carry real data; press and release are currently
   *inferred* from contact counts instead.
 
+## macOS tuning UI and Layer-1 desktop mapping (2026-08-10)
+
+- The Tuning window is now a wide macOS workspace (`1040pt` preferred width): pointer and circular
+  acceleration curves are always visible side by side at the top, with a draggable two-column split
+  below. Both curves have three direct-manipulation points (slow endpoint, bend, fast endpoint).
+- Pointer and circular-scroll acceleration are separate curves. `accelerationCurvesLinked` links
+  only their dimensionless `accelCurve` bend; base speed, gain endpoints, thresholds, and physical
+  units remain independent. The pointer runtime now applies the same `smoothstep^accelCurve` shape
+  already used by circular scroll. Old configs decode to pointer curve `1.0` and unlocked.
+- Desktop switching moved from ring-left/right **double press** to `L1.ring.left/right` **single
+  press**. All base and L1 left/right double variants were removed, so common base-layer tab,
+  track, or arrow actions no longer wait for `doubleTapWindow`.
+- `browser` and `terminal` no longer override `L1.ring.left/right`; the global Layer-1 Space action
+  therefore works consistently in every app. Their unlayered left/right bindings remain unchanged.
+- The live config, `examples/config.author.jsonc`, `examples/config.jsonc`, and the README layer
+  example must stay aligned with this resolution. Reintroducing any base `ring.left.double` or an
+  app-specific L1 left/right override will restore latency or shadow desktop switching.
+
+## Ordered layer cycle (2026-08-10)
+
+- `settings.layers` is now the single ordered source of truth for layer identity, HUD name, colour,
+  and cycling. It accepts 1–10 entries, must begin with `BASE`, and every later id names a mode.
+  Users write exactly as many layers as they want; `{ "action": "layerCycle" }` advances through
+  that array and wraps from its final entry to BASE.
+- TV owns one inherited `button.tv → layerCycle` binding. L1/L2 no longer repeat the TV tap or hold
+  mappings, so adding, removing, or reordering a layer requires no changes inside the mode blocks.
+- The old `settings.layerHUD` dictionary remains decode-compatible. Its unordered keys migrate in
+  deterministic BASE/L-number/custom-id order, and ConfigWriter emits only the new array schema.
+- Layout's Add → Layer path now creates both the backing mode and its ordered layer entry, with
+  separate internal id, display name, and colour fields. It refuses an 11th layer; removing a layer
+  mode also removes its definition so UI saves cannot produce a config the loader rejects.
+- New L2 copies the current app's BASE bindings through normal layer fall-through, but owns all four
+  `ring.up/down/left/right` families as immediate plain arrow keystrokes. This also prevents BASE
+  direction hold/double variants from leaking into L2.
+- `button.tv.hold → appWheel` remains in BASE and falls through every layer that does not deliberately
+  claim the TV button family.
+- The pre-change live config backup is `/tmp/hypervibe-config-before-layer3.jsonc`.
+- The pre-array live config backup is `/tmp/hypervibe-config-before-ordered-layers.jsonc`. A final
+  canonical diff confirmed no tuning, app-profile, or non-TV binding changed during migration.
+- Final verification: SiriRemoteCore 111/111 tests passed; both shipped JSONC examples parse; the
+  complete macOS app builds and carries the stable `siriRemote Local Signing` identity. The normal
+  standalone process was restarted from `app/HyperVibe.app`; `HyperVibe Host` was left untouched.
+
+## Layer HUD colour and motion (2026-08-10)
+
+- Layer state is no longer tied to `controlAccentColor` (usually blue). The fixed visual identity is
+  BASE = system green, L1 = system blue, L2 = system purple; future numbered layers continue through
+  orange, pink, teal, and indigo. Both the SF Symbol and a restrained card-gradient wash carry the
+  colour, so the state remains distinguishable at a glance.
+- The HUD never exposes internal ids when a configured `name` exists. Names are arbitrary; an empty
+  name falls back to `Layer n` using the entry's array position, so custom ids still read naturally.
+- Names and colours live directly on each `settings.layers` entry as `{ "id", "name", "color" }`.
+  Named adaptive system colours plus `#RRGGBB` and `#RRGGBBAA` are accepted; missing/invalid values
+  fall back to the built-in ordinal/palette. The typed array round-trips through ConfigWriter, and
+  order/name/colour update together on config hot reload.
+- A visible layer change is an in-place 0.30 s push: old icon/type travel left and the destination
+  enters from the right. The card compresses and settles over 0.34 s while its gradient and border
+  interpolate continuously. First appearance remains a separate 0.38 s rise-and-settle animation.
+- Repeated notifications with the same presentation key do not replay the transition. Rapid layer
+  taps replace the named Core Animation keys and begin colour interpolation from the presentation
+  layer, avoiding queued or discontinuous animations.
+- Multi-display mirroring is unchanged: every physical screen owns a synchronized Surface and all
+  surfaces receive the same transition. New windows begin transparent, which also fixes a newly
+  attached display popping in while another HUD surface is already visible.
+- `--test-layer-hud` now walks BASE → L1 → L2 → BASE at 0.65 s intervals so an in-place transition is
+  exercised rather than only two isolated fade-ins. Visual QC was recorded at 4096×2304/120 Hz via
+  `/tmp/hypervibe-hud-cycle.mov`; 30 fps contact-sheet inspection confirmed the push, tint morph,
+  scale settle, and final fade on real rendered frames.
+
+## Optional persistent status widget (2026-08-10)
+
+- `settings.statusWidgetEnabled` (default `false`) and the Tuning-tab **On-screen Status** toggle
+  control a separate compact status surface. The generic example stays opt-in; the maintainer
+  example enables it. Old configs decode to `false`, so upgrading cannot unexpectedly add chrome.
+- At rest the card shows the effective layer's configured name and colour. `Controller` publishes a
+  typed `HandledAction` only after a binding resolves; the card therefore shows the exact action and
+  presentation that fires through app/layer inheritance, never an unbound raw button report. App
+  activation comes from `AppWatcher` and uses the real installed app icon.
+- Launch actions are presented immediately, before app activation completes. The following
+  AppWatcher confirmation is matched by normalized app name and updates without bouncing the same
+  icon twice. Media/AppleScript actions deliberately prefer action-specific symbols (next,
+  previous, play/pause) over the targeted app icon, so “open Music” and “next track” are visually
+  distinct.
+- Display time is input-aware: ordinary actions 0.66 s, double 0.80 s, triple 0.92 s, hold stages
+  1.05/1.20/1.35 s, app activation 0.90 s. Each new discrete gesture gets its own spring; a continuous
+  stream of identical repeat events inside 220 ms shares one pulse and only extends its dwell. A
+  generation token prevents an expired timer from overwriting a newer action or layer.
+- Push-to-talk and explicit `repeatKey` bindings bypass `Controller.handle` for matched raw edges and
+  genuine key-down repeat. Those paths explicitly report the captured/resolved binding through the
+  same callback: PTT only after its 0.2 s opener really fires (never on a cancelled quick tap), and
+  repeatKey once on press rather than once per timer tick.
+- The non-activating `NSPanel` joins every Space and full-screen Space without stealing focus. Its
+  entire surface is draggable. `UserDefaults` stores the `CGDirectDisplayID` plus X/Y normalized to
+  that screen's visible frame; resolution changes reproject it, off-screen drags are clamped after
+  mouse-up, and disconnecting the saved monitor relocates and rehomes it on an available display.
+- `--test-status-widget` exercises Layer → Music icon → Next Track → Layer → Voice Input without
+  touching remote IO, rcd, Accessibility, or the normal running app. Core verification after the
+  direct-action pipeline addition: 113/113 tests passed.
+
 ## Maintenance rules
 
 - Preserve user changes and the active config; do not reset or replace mappings without explicit

@@ -39,12 +39,51 @@ final class ControllerTests: XCTestCase {
         c.handle(InputEvent(key: "button.tv"))
         XCTAssertEqual(spy.executed.map(\.0), [.shell(command: "say hi")])
     }
+
+    func testHandledActionObserverReportsOnlyResolvedBindingAndItsPresentation() throws {
+        let spy = SpyExecutor()
+        let json = """
+        { "settings": { "defaultMode": "g" },
+          "modes": { "g": {
+            "button.tv.double": { "action": "media", "key": "next", "label": "Skip", "icon": "forward.fill" }
+          } } }
+        """
+        let c = try makeController(json, spy)
+        var observed: [Controller.HandledAction] = []
+        c.onActionHandled = { observed.append($0) }
+
+        XCTAssertFalse(c.handle(InputEvent(key: "button.nope")))
+        XCTAssertTrue(c.handle(InputEvent(key: "button.tv.double")))
+
+        XCTAssertEqual(observed, [.init(
+            key: "button.tv.double",
+            action: .media(key: "next"),
+            presentation: .init(label: "Skip", icon: "forward.fill"))])
+        XCTAssertEqual(spy.executed.map(\.0), [.media(key: "next")])
+    }
+
+    func testDirectlyHandledActionCanBeReportedWithoutExecutingItAgain() throws {
+        let spy = SpyExecutor()
+        let c = try makeController(cfg, spy)
+        var observed: [Controller.HandledAction] = []
+        c.onActionHandled = { observed.append($0) }
+
+        XCTAssertTrue(c.reportResolvedAction(for: "button.tv"))
+        XCTAssertFalse(c.reportResolvedAction(for: "button.nope"))
+
+        XCTAssertEqual(observed.map(\.action), [.shell(command: "say hi")])
+        XCTAssertTrue(spy.executed.isEmpty)
+    }
+
     func testModeActionSwitchesWithoutExecuting() throws {
         let spy = SpyExecutor()
         let engine = MappingEngine(config: try ConfigLoader.load(cfg))
         let c = Controller(engine: engine, executor: spy)
+        var observed: [Controller.HandledAction] = []
+        c.onActionHandled = { observed.append($0) }
         c.handle(InputEvent(key: "button.menu"))          // action: mode -> web
         XCTAssertTrue(spy.executed.isEmpty)               // not sent to executor
+        XCTAssertEqual(observed.map(\.action), [.mode(to: "web")])
         XCTAssertEqual(engine.activeMode, "web")
         c.handle(InputEvent(key: "ring.up"))              // now resolvable in web
         XCTAssertEqual(spy.executed.map(\.0), [.keystroke(keys: "cmd+up")])
@@ -97,6 +136,29 @@ final class ControllerTests: XCTestCase {
         XCTAssertEqual(changes[0], "L1")
         XCTAssertEqual(changes[1], "L2")
         XCTAssertNil(changes[2])
+    }
+
+    func testConfiguredLayerCycleUsesArrayOrderAndWraps() throws {
+        let json = """
+        { "settings": { "defaultMode": "global", "layers": [
+              { "id": "BASE", "name": "Daily" },
+              { "id": "EDIT", "name": "Editing" },
+              { "id": "PRESENT", "name": "Presentation" }
+            ] },
+          "modes": { "global": {}, "EDIT": {}, "PRESENT": {} } }
+        """
+        let c = try makeController(json, SpyExecutor())
+        XCTAssertEqual(c.nextLayerInCycle(after: nil), .layer("EDIT"))
+        XCTAssertEqual(c.nextLayerInCycle(after: "EDIT"), .layer("PRESENT"))
+        XCTAssertEqual(c.nextLayerInCycle(after: "PRESENT"), .base)
+        XCTAssertEqual(c.nextLayerInCycle(after: "stale"), .base)
+    }
+
+    func testEmptyLayerCycleIsUnavailable() throws {
+        let c = try makeController(
+            "{ \"settings\": { \"defaultMode\": \"g\" }, \"modes\": { \"g\": {} } }",
+            SpyExecutor())
+        XCTAssertEqual(c.nextLayerInCycle(after: nil), .unavailable)
     }
 
     // MARK: - Momentary layer (Feature: LAYER)

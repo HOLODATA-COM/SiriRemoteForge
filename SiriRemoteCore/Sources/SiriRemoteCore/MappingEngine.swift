@@ -7,6 +7,10 @@ public final class MappingEngine {
         self.activeMode = config.settings.defaultMode
     }
 
+    /// Ordered, user-authored layer cycle. Exposed read-only so Controller can choose the next
+    /// destination without leaking the full config into the app's input layer.
+    public var configuredLayers: [Config.LayerDefinition] { config.settings.layers }
+
     /// Look up the action bound to `eventKey` in the active mode, walking the inherits chain.
     public func resolve(_ eventKey: String) -> Action? {
         resolve(eventKey, in: activeMode)

@@ -28,14 +28,17 @@ final class LayerHUD {
     private final class Surface {
         let window: NSWindow
         let gradient: CAGradientLayer
+        let cardLayer: CALayer
         let iconView: NSImageView
         let titleLabel: NSTextField
         let subtitleLabel: NSTextField
 
-        init(window: NSWindow, gradient: CAGradientLayer, iconView: NSImageView,
+        init(window: NSWindow, gradient: CAGradientLayer, cardLayer: CALayer,
+             iconView: NSImageView,
              titleLabel: NSTextField, subtitleLabel: NSTextField) {
             self.window = window
             self.gradient = gradient
+            self.cardLayer = cardLayer
             self.iconView = iconView
             self.titleLabel = titleLabel
             self.subtitleLabel = subtitleLabel
@@ -47,8 +50,26 @@ final class LayerHUD {
     private var hideTimer: Timer?
     private var fadeToken = 0
     private var isShowing = false
+    /// Config-backed presentation keyed by BASE/L1/L2/...; normalized once so key case does not
+    /// become a surprising reason for an otherwise valid definition to be ignored. Ordinals retain
+    /// the authored array order for unnamed custom ids (`EDITING` can still fall back to Layer 3).
+    private var configuredLayers: [String: Config.LayerDefinition]
+    private var configuredOrdinals: [String: Int]
+    /// Distinguishes a real in-place state change from a repeated notification. Content transitions
+    /// only run when the face actually changes; repeated connection callbacks do not wobble the HUD.
+    private var currentPresentationKey: String?
 
-    init() {}
+    init(layers: [Config.LayerDefinition] = []) {
+        (configuredLayers, configuredOrdinals) = Self.normalized(layers)
+    }
+
+    /// Hot-reload hook. The next layer card uses the new label/colour without rebuilding the app.
+    func configure(layers: [Config.LayerDefinition]) {
+        onMain { [weak self] in
+            guard let self = self else { return }
+            (self.configuredLayers, self.configuredOrdinals) = Self.normalized(layers)
+        }
+    }
 
     // MARK: - Public API
 
@@ -59,43 +80,56 @@ final class LayerHUD {
 
     /// Switched INTO a named layer (sticky).
     func showOn(_ layerName: String) {
-        show(symbol: "square.stack.3d.up.fill", title: layerName, subtitle: "Layer active",
-             tint: .controlAccentColor)
+        let appearance = appearance(forLayer: layerName)
+        show(symbol: "square.stack.3d.up.fill", title: appearance.label,
+             subtitle: "Layer active",
+             tint: appearance.tint, presentationKey: "layer:\(layerName.uppercased())")
     }
 
     /// Switched back to the base layer. Same subject, outline + dimmed rather than a slash: a slash
     /// would read as "layers are off", which is exactly the wrong idea.
     func showOff(_ layerName: String) {
-        show(symbol: "square.stack.3d.up", title: "Base", subtitle: "Layer active",
-             tint: .secondaryLabelColor)
+        let appearance = appearance(forLayer: "BASE")
+        show(symbol: "square.stack.3d.up", title: appearance.label,
+             subtitle: "Layer active",
+             tint: appearance.tint, presentationKey: "layer:BASE")
     }
 
     /// The remote connected: filled remote, green — matching the green dot in Settings.
     func showRemoteConnected() {
         show(symbol: "appletvremote.gen4.fill", title: "Siri Remote", subtitle: "Connected",
-             tint: .systemGreen)
+             tint: .systemGreen, presentationKey: "remote:connected")
     }
 
     /// The remote dropped: same subject, outline + dimmed, so the state reads at a glance without
     /// changing what the icon depicts. (There is no `appletvremote.gen4.slash` symbol to use.)
     func showRemoteDisconnected() {
         show(symbol: "appletvremote.gen4", title: "Siri Remote", subtitle: "Disconnected",
-             tint: .secondaryLabelColor)
+             tint: .secondaryLabelColor, presentationKey: "remote:disconnected")
     }
 
     // MARK: - Show / hide
 
-    private func show(symbol: String, title: String, subtitle: String, tint: NSColor) {
+    private func show(symbol: String, title: String, subtitle: String, tint: NSColor,
+                      presentationKey: String) {
         onMain { [weak self] in
             guard let self = self else { return }
             self.syncSurfaces()
             guard !self.surfaces.isEmpty else { return }
-            for surface in self.surfaces.values {
-                self.applyAppearanceColors(to: surface)
-                self.configure(surface, symbol: symbol, title: title, subtitle: subtitle, tint: tint)
-            }
-            self.fadeToken += 1
             let wasShowing = self.isShowing
+            let contentIsChanging = wasShowing && self.currentPresentationKey != presentationKey
+            for surface in self.surfaces.values {
+                if contentIsChanging { self.prepareContentTransition(on: surface) }
+                self.applyAppearanceColors(to: surface, tint: tint, animated: contentIsChanging)
+                self.configure(surface, symbol: symbol, title: title, subtitle: subtitle, tint: tint)
+                if contentIsChanging {
+                    self.animateLayerChange(on: surface)
+                } else if !wasShowing {
+                    self.animateReveal(on: surface)
+                }
+            }
+            self.currentPresentationKey = presentationKey
+            self.fadeToken += 1
             self.isShowing = true
 
             // Always re-order every mirror. A cached window can be removed from the visible window
@@ -106,7 +140,7 @@ final class LayerHUD {
                 surface.window.orderFrontRegardless()
             }
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = wasShowing ? 0.10 : 0.14
+                ctx.duration = wasShowing ? 0.16 : 0.20
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 for surface in self.surfaces.values {
                     surface.window.animator().alphaValue = 1
@@ -154,12 +188,180 @@ final class LayerHUD {
         surface.subtitleLabel.stringValue = title.isEmpty ? "" : subtitle
     }
 
-    /// Light card in light mode, dark card in dark mode (a subtle top→bottom gradient either way).
-    private func applyAppearanceColors(to surface: Surface) {
+    /// BASE, L1 and L2 use deliberately distant points in the system palette. Future numbered
+    /// layers continue round a stable palette rather than falling back to the user's accent colour,
+    /// so two layers can never become indistinguishable merely because macOS accent is blue.
+    private func tint(forLayer rawName: String) -> NSColor {
+        let name = rawName.uppercased()
+        if name == "BASE" { return .systemGreen }
+        let palette: [NSColor] = [.systemBlue, .systemPurple, .systemOrange,
+                                  .systemPink, .systemTeal, .systemIndigo]
+        if name.hasPrefix("L"), let number = Int(name.dropFirst()), number > 0 {
+            return palette[(number - 1) % palette.count]
+        }
+        return .systemBlue
+    }
+
+    private func appearance(forLayer rawName: String) -> (label: String, tint: NSColor) {
+        let style = configuredLayers[rawName.uppercased()]
+        let configuredLabel = style?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = configuredLabel.flatMap { $0.isEmpty ? nil : $0 }
+            ?? displayName(forLayer: rawName)
+        let tint = style?.color.flatMap(configuredColor(named:)) ?? tint(forLayer: rawName)
+        return (label, tint)
+    }
+
+    private static func normalized(_ layers: [Config.LayerDefinition])
+        -> ([String: Config.LayerDefinition], [String: Int]) {
+        var definitions: [String: Config.LayerDefinition] = [:]
+        var ordinals: [String: Int] = [:]
+        for (index, layer) in layers.enumerated() {
+            let key = layer.id.uppercased()
+            definitions[key] = layer
+            ordinals[key] = index + 1
+        }
+        return (definitions, ordinals)
+    }
+
+    /// Accept adaptive macOS system colours for the common case and CSS-style hex for arbitrary
+    /// brand palettes. #RRGGBBAA uses the conventional final alpha byte.
+    private func configuredColor(named rawValue: String) -> NSColor? {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch value.lowercased() {
+        case "accent", "accentcolor", "controlaccentcolor": return .controlAccentColor
+        case "red", "systemred":       return .systemRed
+        case "orange", "systemorange": return .systemOrange
+        case "yellow", "systemyellow": return .systemYellow
+        case "green", "systemgreen":   return .systemGreen
+        case "mint", "systemmint":     return .systemMint
+        case "teal", "systemteal":     return .systemTeal
+        case "cyan", "systemcyan":     return .systemCyan
+        case "blue", "systemblue":     return .systemBlue
+        case "indigo", "systemindigo": return .systemIndigo
+        case "purple", "systempurple": return .systemPurple
+        case "pink", "systempink":     return .systemPink
+        case "brown", "systembrown":   return .systemBrown
+        case "gray", "grey", "systemgray", "systemgrey": return .systemGray
+        default: return colorFromHex(value)
+        }
+    }
+
+    private func colorFromHex(_ value: String) -> NSColor? {
+        guard value.hasPrefix("#") else { return nil }
+        let digits = String(value.dropFirst())
+        guard digits.count == 6 || digits.count == 8,
+              let packed = UInt64(digits, radix: 16) else { return nil }
+        let hasAlpha = digits.count == 8
+        let red = CGFloat((packed >> (hasAlpha ? 24 : 16)) & 0xff) / 255
+        let green = CGFloat((packed >> (hasAlpha ? 16 : 8)) & 0xff) / 255
+        let blue = CGFloat((packed >> (hasAlpha ? 8 : 0)) & 0xff) / 255
+        let alpha = hasAlpha ? CGFloat(packed & 0xff) / 255 : 1
+        return NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+    }
+
+    /// Config uses BASE/L1/L2 because layers are modifiers over an unlayered mode. The HUD speaks
+    /// in user-facing ordinals instead: BASE is the first layer, config L1 the second, and so on.
+    /// Keeping this translation at the presentation boundary avoids leaking implementation names.
+    private func displayName(forLayer rawName: String) -> String {
+        let name = rawName.uppercased()
+        if let ordinal = configuredOrdinals[name] { return "Layer \(ordinal)" }
+        if name == "BASE" { return "Layer 1" }
+        if name.hasPrefix("L"), let number = Int(name.dropFirst()), number > 0 {
+            return "Layer \(number + 1)"
+        }
+        return rawName
+    }
+
+    /// Light card in light mode, dark card in dark mode. The layer tint is washed gently into the
+    /// neutral material, making the state readable from the whole silhouette rather than only the
+    /// icon. Explicit colour animations preserve continuity through rapid layer taps.
+    private func applyAppearanceColors(to surface: Surface, tint: NSColor, animated: Bool) {
         let dark = surface.window.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let top = dark ? NSColor(calibratedWhite: 0.26, alpha: 1) : NSColor(calibratedWhite: 0.99, alpha: 1)
-        let bot = dark ? NSColor(calibratedWhite: 0.18, alpha: 1) : NSColor(calibratedWhite: 0.93, alpha: 1)
-        surface.gradient.colors = [top.cgColor, bot.cgColor]
+        let neutralTop = dark ? NSColor(calibratedWhite: 0.25, alpha: 1)
+                              : NSColor(calibratedWhite: 0.995, alpha: 1)
+        let neutralBottom = dark ? NSColor(calibratedWhite: 0.16, alpha: 1)
+                                 : NSColor(calibratedWhite: 0.93, alpha: 1)
+        let top = neutralTop.blended(withFraction: dark ? 0.19 : 0.08, of: tint) ?? neutralTop
+        let bottom = neutralBottom.blended(withFraction: dark ? 0.12 : 0.13, of: tint) ?? neutralBottom
+        let colors = [top.cgColor, bottom.cgColor]
+        let border = tint.withAlphaComponent(dark ? 0.30 : 0.22).cgColor
+
+        let oldColors: Any?
+        if let presentedColors = surface.gradient.presentation()?.value(forKeyPath: "colors") {
+            oldColors = presentedColors
+        } else {
+            oldColors = surface.gradient.colors
+        }
+        let oldBorder = surface.gradient.presentation()?.borderColor
+            ?? surface.gradient.borderColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        surface.gradient.colors = colors
+        surface.gradient.borderColor = border
+        CATransaction.commit()
+
+        guard animated else { return }
+        let timing = CAMediaTimingFunction(controlPoints: 0.22, 0.72, 0.18, 1.0)
+        let colorAnimation = CABasicAnimation(keyPath: "colors")
+        colorAnimation.fromValue = oldColors
+        colorAnimation.toValue = colors
+        colorAnimation.duration = 0.34
+        colorAnimation.timingFunction = timing
+        surface.gradient.add(colorAnimation, forKey: "layerTint")
+
+        let borderAnimation = CABasicAnimation(keyPath: "borderColor")
+        borderAnimation.fromValue = oldBorder
+        borderAnimation.toValue = border
+        borderAnimation.duration = 0.34
+        borderAnimation.timingFunction = timing
+        surface.gradient.add(borderAnimation, forKey: "layerBorderTint")
+    }
+
+    /// Core Animation snapshots the old layer contents for CATransition, so icon and typography
+    /// travel together without introducing duplicate AppKit controls or a one-frame hard swap.
+    private func prepareContentTransition(on surface: Surface) {
+        let timing = CAMediaTimingFunction(controlPoints: 0.22, 0.72, 0.18, 1.0)
+        for view in [surface.iconView, surface.titleLabel, surface.subtitleLabel] as [NSView] {
+            let transition = CATransition()
+            transition.type = .push
+            transition.subtype = .fromRight
+            transition.duration = 0.30
+            transition.timingFunction = timing
+            view.layer?.add(transition, forKey: "layerContent")
+        }
+    }
+
+    /// A restrained compress-and-settle gives the floating card physical continuity while its
+    /// contents advance. It is short enough to keep up with rapid TV-button taps.
+    private func animateLayerChange(on surface: Surface) {
+        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+        scale.values = [1.0, 0.965, 1.012, 1.0]
+        scale.keyTimes = [0.0, 0.28, 0.72, 1.0]
+        scale.duration = 0.34
+        scale.timingFunctions = [
+            CAMediaTimingFunction(name: .easeIn),
+            CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.20, 1.0),
+            CAMediaTimingFunction(name: .easeOut),
+        ]
+        surface.cardLayer.add(scale, forKey: "layerChangeScale")
+    }
+
+    /// First presentation is distinct from an in-place switch: rise softly from below and settle,
+    /// while the window itself fades in. Keeping the two motions separate avoids a generic pop.
+    private func animateReveal(on surface: Surface) {
+        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+        scale.values = [0.88, 1.025, 0.995, 1.0]
+        scale.keyTimes = [0.0, 0.58, 0.82, 1.0]
+
+        let rise = CAKeyframeAnimation(keyPath: "transform.translation.y")
+        rise.values = [-9.0, 1.5, 0.0]
+        rise.keyTimes = [0.0, 0.70, 1.0]
+
+        let group = CAAnimationGroup()
+        group.animations = [scale, rise]
+        group.duration = 0.38
+        group.timingFunction = CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.20, 1.0)
+        surface.cardLayer.add(group, forKey: "layerReveal")
     }
 
     // MARK: - Window
@@ -198,6 +400,7 @@ final class LayerHUD {
         let cardRect = NSRect(x: pad, y: pad, width: card, height: card)
 
         let win = NSWindow(contentRect: winRect, styleMask: .borderless, backing: .buffered, defer: false)
+        win.alphaValue = 0
         win.isOpaque = false
         win.backgroundColor = .clear
         win.hasShadow = false          // no square window shadow — we draw a rounded one below
@@ -235,11 +438,13 @@ final class LayerHUD {
         cardView.layer?.masksToBounds = true
 
         let icon = NSImageView(frame: NSRect(x: 0, y: card * 0.36, width: card, height: card * 0.40))
+        icon.wantsLayer = true
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.imageAlignment = .alignCenter
         cardView.addSubview(icon)
 
         let label = NSTextField(labelWithString: "")
+        label.wantsLayer = true
         label.frame = NSRect(x: 8, y: card * 0.19, width: card - 16, height: 24)
         label.alignment = .center
         label.font = .systemFont(ofSize: 16, weight: .semibold)
@@ -248,6 +453,7 @@ final class LayerHUD {
         cardView.addSubview(label)
 
         let sub = NSTextField(labelWithString: "")
+        sub.wantsLayer = true
         sub.frame = NSRect(x: 8, y: card * 0.09, width: card - 16, height: 16)
         sub.alignment = .center
         sub.font = .systemFont(ofSize: 11.5, weight: .regular)
@@ -257,7 +463,7 @@ final class LayerHUD {
 
         container.addSubview(cardView)
         win.contentView = container
-        return Surface(window: win, gradient: grad, iconView: icon,
+        return Surface(window: win, gradient: grad, cardLayer: cardView.layer!, iconView: icon,
                        titleLabel: label, subtitleLabel: sub)
     }
 

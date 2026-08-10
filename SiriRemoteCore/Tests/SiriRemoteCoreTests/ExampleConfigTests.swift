@@ -16,12 +16,23 @@ final class ExampleConfigTests: XCTestCase {
             .appendingPathComponent("examples/config.jsonc")
     }
 
+    private var authorURL: URL {
+        exampleURL.deletingLastPathComponent().appendingPathComponent("config.author.jsonc")
+    }
+
     func testExampleConfigParses() throws {
         let text = try String(contentsOf: exampleURL, encoding: .utf8)
         let config = try ConfigLoader.load(text)
         XCTAssertFalse(config.modes.isEmpty)
         // The default mode must exist, or every key is unbound the moment the app starts.
         XCTAssertNotNil(config.modes[config.settings.defaultMode])
+    }
+
+    func testAuthorConfigParses() throws {
+        let text = try String(contentsOf: authorURL, encoding: .utf8)
+        let config = try ConfigLoader.load(text)
+        XCTAssertEqual(config.settings.layers.map(\.id), ["BASE", "L1", "L2"])
+        XCTAssertEqual(config.modes["global"]?.bindings["button.tv"], .layerCycle)
     }
 
     func testEveryReferencedModeExists() throws {

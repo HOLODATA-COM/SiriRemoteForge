@@ -273,7 +273,16 @@ setup — push-to-talk, per-app Music/browser/terminal modes, layers — is in
 
 ```jsonc
 {
-  "settings": { "defaultMode": "global", "cursorSpeed": 1.4, /* … tuning … */ },
+  "settings": {
+    "defaultMode": "global",
+    "cursorSpeed": 1.4,
+    "layers": [
+      { "id": "BASE", "name": "Daily", "color": "green" },
+      { "id": "L1", "name": "Spaces", "color": "blue" },
+      { "id": "L2", "name": "Arrows", "color": "purple" }
+    ],
+    "statusWidgetEnabled": false
+  },
 
   // Frontmost app's bundle id → mode name (plus a "default").
   "appProfiles": {
@@ -284,7 +293,7 @@ setup — push-to-talk, per-app Music/browser/terminal modes, layers — is in
 
   "modes": {
     "global": {
-      "button.tv":  { "action": "layer", "to": "L1" },          // TV button = layer L1
+      "button.tv":  { "action": "layerCycle" },                  // follows settings.layers, then loops
       "ring.left":  { "action": "keystroke", "keys": "left" },
       "ring.up.hold": { "action": "shell", "command": "open -a 'Mission Control'" }
     },
@@ -293,7 +302,10 @@ setup — push-to-talk, per-app Music/browser/terminal modes, layers — is in
       "button.menu": { "action": "keystroke", "keys": "cmd+[" }, // Back button = history back
       "L1.ring.left":  { "action": "keystroke", "keys": "cmd+opt+left" }  // L1 in Chrome = prev tab
     },
-    "L1": { "inherits": "global" }                               // layer marker (see Layers)
+    "L1": { "inherits": "global" },
+    "L2": { "inherits": "global",
+            "ring.left": { "action": "keystroke", "keys": "left" },
+            "ring.right": { "action": "keystroke", "keys": "right" } }
   }
 }
 ```
@@ -331,6 +343,7 @@ Suffix any button/ring key with:
 | `applescript` | `script`                             | e.g. control Apple Music |
 | `mode`        | `to`                                  | switch the active mode |
 | `layer`       | `to`                                  | make this key a **layer** key (see below) |
+| `layerCycle`  | —                                     | walk `settings.layers` in order and loop |
 | `space`       | `to`: `left`/`right`                  | switch macOS Spaces, animated, via System Events (needs Automation permission) |
 | `fullscreen`  | —                                     | toggle the frontmost window's full screen, via the Accessibility API — synthesizing Ctrl+Cmd+F does not work |
 | `minimize`    | —                                     | minimise the frontmost window (Accessibility API) |
@@ -341,10 +354,50 @@ Suffix any button/ring key with:
 
 ### Layers (layer × app)
 
-Bind a key to `{ "action": "layer", "to": "L1" }`. That key becomes a **layer key**:
+For a direct one-layer toggle, bind a key to `{ "action": "layer", "to": "L1" }`. That key
+becomes a **layer key**:
 
 - **Tap** it → toggle layer `L1` *sticky* on/off (persists until tapped again).
 - **Hold** it and press other keys → *momentary* `L1` (active only while held).
+
+For an ordered loop, define `settings.layers` and bind one key to `{ "action": "layerCycle" }`.
+The array may contain **1–10 entries**. It must start with `BASE`; each later `id` names a mode in
+`modes`. Write only the layers you want: a three-entry array loops `BASE → L1 → L2 → BASE`, while a
+seven-entry array loops through all seven. Reordering the array changes the route; no per-layer
+`button.tv` bindings are needed.
+
+`name` is the arbitrary user-facing HUD title, not an internal identifier. `color` accepts adaptive
+system names (`green`, `blue`, `purple`, `orange`, `pink`, `teal`, `cyan`, `indigo`, etc.), `accent`,
+or `#RRGGBB` / `#RRGGBBAA`:
+
+```jsonc
+"settings": {
+  "layers": [
+    { "id": "BASE", "name": "Daily", "color": "green" },
+    { "id": "L1", "name": "Desktop", "color": "blue" },
+    { "id": "L2", "name": "Editing", "color": "#AF52DE" }
+  ]
+}
+```
+
+Missing names fall back to `Layer 1`, `Layer 2`, etc. in array order; missing or invalid colours use
+the built-in palette. Saving the file hot-reloads order, names, and colours, and subsequent
+Settings/Layout writes preserve them. The old `settings.layerHUD` dictionary still loads and is
+migrated to this ordered form on the next UI save.
+
+### Always-on status widget
+
+Turn on **Settings → Tuning → On-screen Status → Always-on status widget**, or set
+`"statusWidgetEnabled": true`. The compact glass card rests on the current layer, then briefly
+springs to the operation that actually ran. App activation uses the app's real icon; media,
+navigation, mouse, voice, and window actions use an action-specific symbol (or the binding's custom
+`label` / `icon`). It then returns to the current layer automatically.
+
+The display time follows the gesture: ordinary taps are shortest, double/triple taps stay a little
+longer, and deeper hold stages remain visible longest. The panel is non-activating, stays above apps
+across normal and full-screen Spaces, and is draggable over its entire surface. HyperVibe stores the
+physical display plus a normalized position. If that display is disconnected, the card moves to an
+available screen and adopts that as its new saved home instead of being stranded off-screen.
 
 **A layer is a modifier, not a second keyboard.** Holding one never turns a bound key into a dead
 key: a key the layer says nothing about keeps doing whatever it does unlayered, *in the current app*.
@@ -357,9 +410,9 @@ While layer `L` is held, key `K` resolves most-specific-first:
 | 2 | `"K"` among mode `L`'s **own** bindings | any app, in this layer |
 | 3 | `"K"` in the active app mode's `inherits` chain | this app, **without** the layer |
 
-Example: `L1.ring.left` = `cmd+shift+left` in `global` (the default) but `cmd+opt+left` in `browser`
-(step 1); `terminal` binds `button.menu` to `repeatKey delete` and says nothing about it in `L1`, so
-holding `L1` in a terminal still deletes (step 3).
+Example: the shipped config binds `L1.ring.left` to `space left` in `global`, so Browser, Music, and
+Terminal all inherit the same Layer-1 desktop switch (step 1). Their unlayered `ring.left` bindings
+remain app-specific and immediate because no `ring.left.double` binding delays them.
 
 A layer claims a button **whole**. Bind any variant — `L1.button.playPause`, or just its `.hold` —
 and every other variant of that button resolves inside the layer only; the unlayered `.hold2` no
@@ -445,13 +498,17 @@ Off by default — it changes which app receives your input, which should not be
 empty disables it. Bind `{ "action": "appWheel" }` to a hold — typically the layer key's:
 
 ```jsonc
-"button.tv":      { "action": "layer", "to": "L1" },
+"button.tv":      { "action": "layerCycle" },
 "button.tv.hold": { "action": "appWheel" },
 ```
 
 It is an ordinary hold binding, so it gets the progress card and the cancel grace like any other,
 and a layer key that carries hold stages still taps to toggle and still works as a momentary layer
 when another key is pressed during the hold.
+
+Because `layerCycle` is a single inherited binding, layer modes do not need to repeat either the tap
+or hold action. A layer that deliberately rebinds any variant of the TV button still claims that
+button family and therefore shadows the inherited App-wheel hold, as with every layered binding.
 
 The wheel opens **centred on the pointer**, so choosing is a short flick outward rather than a trip
 across the display — which matters on a 27 mm pad. Selection follows the CURSOR, not the finger's
@@ -464,7 +521,7 @@ dead zone, so summoning it and pressing Select does nothing by accident.
 All live in `settings` and in the app's **Tuning** tab: `cursorSpeed`, `cursorDeadzone`, pointer-accel
 curve (`accelMin`/`accelMax`/`accelLowSpeed`/`accelHighSpeed`), `clickRiseThreshold`, `pressMoveMax`,
 `holdThreshold`/`holdThreshold2`/`holdThreshold3`, `doubleTapWindow`, `spacesModeWindow`,
-`findCursorEnabled`, `focusFollowsCursor`, and `circularScroll { enabled, minRadius, startThreshold,
+`findCursorEnabled`, `statusWidgetEnabled`, `focusFollowsCursor`, and `circularScroll { enabled, minRadius, startThreshold,
 pixelsPerRadian, scrollEase, invert }`. Config is the single source of truth — Tuning-tab slider changes are written
 back to `config.jsonc` (debounced).
 

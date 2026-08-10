@@ -26,6 +26,10 @@ final class ConfigLoaderTests: XCTestCase {
                        .layer("tvLayer"))
         XCTAssertEqual(Action.layer("tvLayer").displayLabel, "Layer: tvLayer")
     }
+    func testDecodesLayerCycle() throws {
+        XCTAssertEqual(try decodeAction("{\"action\":\"layerCycle\"}"), .layerCycle)
+        XCTAssertEqual(Action.layerCycle.displayLabel, "Next Layer")
+    }
     func testUnknownActionThrows() {
         XCTAssertThrowsError(try decodeAction("{\"action\":\"nope\"}"))
     }
@@ -103,13 +107,100 @@ final class ConfigLoaderTests: XCTestCase {
             "{ \"settings\": { \"defaultMode\": \"g\" }, \"modes\": { \"g\": {} } }")
         XCTAssertEqual(defaults.settings.cursorSpeed, 0.6)
         XCTAssertEqual(defaults.settings.cursorDeadzone, 0.006)
+        XCTAssertFalse(defaults.settings.statusWidgetEnabled)
 
         let overridden = try ConfigLoader.load("""
-        { "settings": { "defaultMode": "g", "cursorSpeed": 0.35, "cursorDeadzone": 0.01 },
+        { "settings": { "defaultMode": "g", "cursorSpeed": 0.35, "cursorDeadzone": 0.01,
+                         "statusWidgetEnabled": true },
           "modes": { "g": {} } }
         """)
         XCTAssertEqual(overridden.settings.cursorSpeed, 0.35)
         XCTAssertEqual(overridden.settings.cursorDeadzone, 0.01)
+        XCTAssertTrue(overridden.settings.statusWidgetEnabled)
+    }
+
+    func testOrderedLayersDefaultAndOverrides() throws {
+        let defaults = try ConfigLoader.load(
+            "{ \"settings\": { \"defaultMode\": \"g\" }, \"modes\": { \"g\": {} } }")
+        XCTAssertEqual(defaults.settings.layers, [])
+
+        let configured = try ConfigLoader.load("""
+        { "settings": {
+            "defaultMode": "g",
+            "layers": [
+              { "id": "BASE", "name": "Daily", "color": "green" },
+              { "id": "L1", "name": "Work", "color": "#FF9500CC" },
+              { "id": "L2", "color": "purple" }
+            ]
+          },
+          "modes": { "g": {}, "L1": {}, "L2": {} } }
+        """)
+        XCTAssertEqual(configured.settings.layers, [
+            Config.LayerDefinition(id: "BASE", name: "Daily", color: "green"),
+            Config.LayerDefinition(id: "L1", name: "Work", color: "#FF9500CC"),
+            Config.LayerDefinition(id: "L2", name: nil, color: "purple")
+        ])
+    }
+
+    func testLegacyLayerHUDMigratesInDeterministicOrder() throws {
+        let configured = try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "layerHUD": {
+              "L2": { "label": "Third", "color": "purple" },
+              "BASE": { "label": "First", "color": "green" },
+              "L1": { "label": "Second", "color": "blue" }
+            } },
+          "modes": { "g": {}, "L1": {}, "L2": {} } }
+        """)
+        XCTAssertEqual(configured.settings.layers.map(\.id), ["BASE", "L1", "L2"])
+        XCTAssertEqual(configured.settings.layers.map(\.name), ["First", "Second", "Third"])
+
+        // A presentation-only legacy dictionary did not require a BASE override or a corresponding
+        // mode. Preserve that compatibility; migration supplies the missing BASE entry itself.
+        let partial = try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "layerHUD": {
+              "L1": { "label": "Work", "color": "blue" }
+            } },
+          "modes": { "g": {} } }
+        """)
+        XCTAssertEqual(partial.settings.layers.map(\.id), ["BASE", "L1"])
+    }
+
+    func testLayersRejectMoreThanTenEntries() {
+        let definitions = (["BASE"] + (1...10).map { "L\($0)" })
+            .map { "{ \"id\": \"\($0)\" }" }.joined(separator: ",")
+        let modes = (["g"] + (1...10).map { "L\($0)" })
+            .map { "\"\($0)\": {}" }.joined(separator: ",")
+        XCTAssertThrowsError(try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "layers": [\(definitions)] },
+          "modes": { \(modes) } }
+        """)) { error in
+            XCTAssertEqual(error as? ConfigError,
+                           .validation("settings.layers supports at most 10 layers"))
+        }
+    }
+
+    func testLayersRequireBaseFirstUniqueIDsAndExistingModes() {
+        XCTAssertThrowsError(try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "layers": [{"id":"L1"}] },
+          "modes": { "g": {}, "L1": {} } }
+        """)) { error in
+            XCTAssertEqual(error as? ConfigError,
+                           .validation("settings.layers must start with id 'BASE'"))
+        }
+        XCTAssertThrowsError(try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "layers": [{"id":"BASE"},{"id":"base"}] },
+          "modes": { "g": {}, "base": {} } }
+        """)) { error in
+            XCTAssertEqual(error as? ConfigError,
+                           .validation("settings.layers contains duplicate id 'base'"))
+        }
+        XCTAssertThrowsError(try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "layers": [{"id":"BASE"},{"id":"L1"}] },
+          "modes": { "g": { "button.tv": { "action": "layerCycle" } } } }
+        """)) { error in
+            XCTAssertEqual(error as? ConfigError,
+                           .validation("settings.layers id 'L1' is not in modes"))
+        }
     }
 
     func testHoldStageThresholdsDefaultsAndOverrides() throws {

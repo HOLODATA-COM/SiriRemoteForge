@@ -5,6 +5,26 @@ public protocol ActionExecutor: AnyObject {
 /// Ties input events to the engine and executor. `mode` actions are handled
 /// internally (they switch the engine's active mode) and never reach the executor.
 public final class Controller {
+    /// A binding that resolved successfully and is about to be handled. App-level presentation
+    /// features can observe this without duplicating MappingEngine's layer/app inheritance rules.
+    public struct HandledAction: Equatable {
+        public let key: String
+        public let action: Action
+        public let presentation: Config.Presentation?
+
+        public init(key: String, action: Action, presentation: Config.Presentation?) {
+            self.key = key
+            self.action = action
+            self.presentation = presentation
+        }
+    }
+
+    public enum LayerCycleTarget: Equatable {
+        case unavailable
+        case base
+        case layer(String)
+    }
+
     private var engine: MappingEngine
     private let executor: ActionExecutor
 
@@ -25,6 +45,10 @@ public final class Controller {
     /// toggles and momentary holds because every layer transition flows through `pushLayer`/`popLayer`.
     public var onLayerChanged: ((String?) -> Void)?
 
+    /// Fires exactly once for every binding `handle` accepts, immediately before the action is
+    /// executed (or an internal mode switch is applied). Unbound input never reaches this hook.
+    public var onActionHandled: ((HandledAction) -> Void)?
+
     public init(engine: MappingEngine, executor: ActionExecutor) {
         self.engine = engine
         self.executor = executor
@@ -43,6 +67,25 @@ public final class Controller {
 
     /// The layer mode currently overriding resolution, or nil when resolving against the app mode.
     public var currentLayer: String? { activeLayer }
+
+    /// Destination after `current` in the user-authored cycle. A missing current id deliberately
+    /// resets to the first entry (which validation guarantees is BASE) rather than guessing which
+    /// custom layer should follow a stale id after hot reload.
+    public func nextLayerInCycle(after current: String?) -> LayerCycleTarget {
+        let layers = engine.configuredLayers
+        guard !layers.isEmpty else { return .unavailable }
+        let currentID = current ?? "BASE"
+        let nextIndex: Int
+        if let index = layers.firstIndex(where: {
+            $0.id.caseInsensitiveCompare(currentID) == .orderedSame
+        }) {
+            nextIndex = (index + 1) % layers.count
+        } else {
+            nextIndex = 0
+        }
+        let id = layers[nextIndex].id
+        return id == "BASE" ? .base : .layer(id)
+    }
 
     /// A resolved binding together with the presentation of that SAME binding. Kept as one value so
     /// the label and icon can never come from a different binding that merely shares the key.
@@ -152,12 +195,31 @@ public final class Controller {
     /// fall back to native behavior. While a layer is active, resolves against the layer instead.
     @discardableResult
     public func handle(_ event: InputEvent) -> Bool {
-        guard let action = resolve(event.key) else { return false }
-        if case let .mode(to) = action {
+        guard let resolved = site(event.key) else { return false }
+        reportHandled(HandledAction(key: event.key, action: resolved.action,
+                                    presentation: resolved.presentation))
+        if case let .mode(to) = resolved.action {
             engine.switchMode(to: to)
             return true
         }
-        executor.execute(action, payload: event.payload)
+        executor.execute(resolved.action, payload: event.payload)
+        return true
+    }
+
+    /// Report a config action that an app-specific fast path executes directly instead of routing
+    /// through `handle` (push-to-talk raw edges and genuine held-key repeat are the two macOS cases).
+    /// Keeping the notification here preserves one observer contract without executing it twice.
+    public func reportHandled(_ handled: HandledAction) {
+        onActionHandled?(handled)
+    }
+
+    /// Resolve and report a directly-handled action using the same app/layer/presentation lookup as
+    /// `handle`. Returns false when the binding disappeared before the direct path ran.
+    @discardableResult
+    public func reportResolvedAction(for eventKey: String) -> Bool {
+        guard let resolved = site(eventKey) else { return false }
+        reportHandled(HandledAction(key: eventKey, action: resolved.action,
+                                    presentation: resolved.presentation))
         return true
     }
 

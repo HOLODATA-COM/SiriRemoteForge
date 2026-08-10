@@ -24,24 +24,19 @@ struct SettingsView: View {
     private enum Tab: String, CaseIterable { case tuning = "Tuning", layout = "Layout" }
     @State private var tab: Tab = .tuning
 
+    private enum CurveTarget: Equatable { case pointer, circular }
+    /// When the user closes the lock, the curve they touched most recently becomes the source.
+    /// Starting with circular is intentional: existing installs already expose/tune that curve,
+    /// while pointer curve shaping is new.
+    @State private var lastEditedCurve: CurveTarget = .circular
+
     var body: some View {
         VStack(spacing: 0) {
             header
-            tabPicker
             Divider()
             switch tab {
             case .tuning:
-                Form {
-                    deviceSection
-                    cursorSection
-                    accelerationSection
-                    clickSection
-                    circularSection
-                    buttonsSection
-                    startupSection
-                    footerSection
-                }
-                .formStyle(.grouped)
+                tuningWorkspace
             case .layout:
                 if let config = model.config {
                     LayoutView(config: config, onSave: { newConfig in
@@ -59,8 +54,8 @@ struct SettingsView: View {
         }
         // Flexible height (not fixed) so the window can be shrunk to fit smaller displays — the
         // inner ScrollView/Form then scroll instead of the content being clipped.
-        .frame(width: tab == .layout ? 900 : 452)
-        .frame(minHeight: 480, idealHeight: 900, maxHeight: .infinity)
+        .frame(width: tab == .layout ? 1100 : 1040)
+        .frame(minHeight: 620, idealHeight: 780, maxHeight: .infinity)
         .animation(.easeInOut(duration: 0.2), value: tab)
         // Polling start/stop lives in SettingsWindowController — `.onDisappear` never fires for
         // this window (it is cached and only ordered out). Refresh on appear so reopening shows
@@ -75,6 +70,141 @@ struct SettingsView: View {
         .onChange(of: model.connected) { _ in device.refresh() }
     }
 
+    // MARK: - Desktop workspace
+
+    private var tuningWorkspace: some View {
+        VStack(spacing: 0) {
+            curveWorkbench
+            Divider()
+
+            // Native split view: both sides scroll independently and the divider is draggable,
+            // which makes this behave like a Mac settings workspace rather than one long phone
+            // form. Pointer/click controls live together; wheel/remote controls live together.
+            HSplitView {
+                Form {
+                    cursorSection
+                    accelerationSection
+                    clickSection
+                    deviceSection
+                }
+                .formStyle(.grouped)
+                .frame(minWidth: 390)
+
+                Form {
+                    circularSection
+                    buttonsSection
+                    widgetSection
+                    startupSection
+                    footerSection
+                }
+                .formStyle(.grouped)
+                .frame(minWidth: 390)
+            }
+        }
+    }
+
+    private var curveWorkbench: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Acceleration Curves")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("Drag the endpoints for range; drag the middle point for shape.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(model.tune.accelerationCurvesLinked
+                     ? "Shape changes apply to both curves"
+                     : "Each curve is tuned independently")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                shapeLockButton
+            }
+
+            HStack(alignment: .top, spacing: 14) {
+                curvePanel(title: "Pointer Movement",
+                           subtitle: "Trackpad delta per frame",
+                           icon: "cursorarrow.motionlines",
+                           accent: .blue,
+                           target: .pointer)
+
+                curvePanel(title: "Circular Scroll",
+                           subtitle: "Ring radians per frame",
+                           icon: "arrow.clockwise",
+                           accent: .orange,
+                           target: .circular)
+                    .opacity(model.tune.circularEnabled ? 1 : 0.48)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 15)
+        .padding(.bottom, 16)
+        .background(.bar)
+    }
+
+    private func curvePanel(title: String, subtitle: String, icon: String,
+                            accent: Color, target: CurveTarget) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(accent)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.system(size: 13, weight: .semibold))
+                    Text(subtitle).font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(target == .pointer ? "POINTER" : "SCROLL")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(accent.opacity(0.12)))
+            }
+
+            if target == .pointer {
+                AccelCurveView(
+                    accelMin: $model.tune.accelMin,
+                    accelMax: $model.tune.accelMax,
+                    lowSpeed: $model.tune.accelLowSpeed,
+                    highSpeed: $model.tune.accelHighSpeed,
+                    curve: curveBinding(for: .pointer),
+                    limits: .pointer,
+                    accent: accent,
+                    slowLabel: "slow pointer",
+                    fastLabel: "fast pointer",
+                    formatSpeed: { String(format: "%.0f", $0 * 1000) },
+                    shapeLinked: model.tune.accelerationCurvesLinked,
+                    onInteraction: { lastEditedCurve = .pointer })
+            } else {
+                AccelCurveView(
+                    accelMin: $model.tune.circularAccelMin,
+                    accelMax: $model.tune.circularAccelMax,
+                    lowSpeed: $model.tune.circularAccelLowSpeed,
+                    highSpeed: $model.tune.circularAccelHighSpeed,
+                    curve: curveBinding(for: .circular),
+                    limits: .circular,
+                    accent: accent,
+                    slowLabel: "slow scroll",
+                    fastLabel: "fast scroll",
+                    formatSpeed: { String(format: "%.0f", $0 * 1000) },
+                    shapeLinked: model.tune.accelerationCurvesLinked,
+                    onInteraction: { lastEditedCurve = .circular })
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.quaternary.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(accent.opacity(0.16), lineWidth: 1)
+        )
+    }
+
     // MARK: - Tab switcher
 
     private var tabPicker: some View {
@@ -83,8 +213,7 @@ struct SettingsView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .padding(.horizontal, 22).padding(.vertical, 10)
-        .background(.bar)
+        .frame(width: 220)
     }
 
     // MARK: - Header
@@ -107,6 +236,8 @@ struct SettingsView: View {
                 Text("Touch & gesture tuning")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
+            Spacer()
+            tabPicker
             Spacer()
             statusPill
         }
@@ -275,25 +406,29 @@ struct SettingsView: View {
     private var accelerationSection: some View {
         Section {
             slider(icon: "tortoise.fill", title: "Slow-move factor",
-                   value: $model.tune.accelMin, range: 0.2...1.0,
+                   value: $model.tune.accelMin, range: 0.05...2.0,
                    minIcon: "tortoise.fill", maxIcon: "cursorarrow.motionlines",
                    display: { String(format: "%.2f×", $0) })
             slider(icon: "hare.fill", title: "Fast-move factor",
-                   value: $model.tune.accelMax, range: 1.0...4.0,
+                   value: $model.tune.accelMax, range: 0.5...8.0,
                    minIcon: "cursorarrow.motionlines", maxIcon: "hare.fill",
                    display: { String(format: "%.2f×", $0) })
             slider(icon: "arrow.down.forward", title: "Slow threshold",
-                   value: $model.tune.accelLowSpeed, range: 0.002...0.03,
+                   value: $model.tune.accelLowSpeed, range: 0.001...0.05,
                    minIcon: "tortoise.fill", maxIcon: "hare.fill",
                    display: { String(format: "%.0f", $0 * 1000) })
             slider(icon: "arrow.up.forward", title: "Fast threshold",
-                   value: $model.tune.accelHighSpeed, range: 0.02...0.12,
+                   value: $model.tune.accelHighSpeed, range: 0.01...0.14,
                    minIcon: "tortoise.fill", maxIcon: "hare.fill",
                    display: { String(format: "%.0f", $0 * 1000) })
+            slider(icon: "point.topleft.down.curvedto.point.bottomright.up", title: "Curve shape",
+                   value: curveBinding(for: .pointer), range: 0.35...4.0,
+                   minIcon: "arrow.up.right", maxIcon: "arrow.turn.up.right",
+                   display: { String(format: "%.2f", $0) })
         } header: {
-            Text("Pointer Acceleration")
+            Text("Pointer Curve Values")
         } footer: {
-            Text("Slow finger motion moves the cursor less (precision); fast motion moves it more (reach), scaling on top of Speed. The two thresholds mark where the slow and fast ends kick in — below the slow threshold the factor is the slow-move factor, above the fast threshold it's the fast-move factor, smooth between.")
+            Text("Exact values for the blue curve above. The graph and these controls stay in sync and apply live.")
         }
     }
 
@@ -350,7 +485,7 @@ struct SettingsView: View {
                        minIcon: "hare.fill", maxIcon: "tortoise.fill",
                        display: { String(format: "%.0f°", $0 * 180 / .pi) })
                 slider(icon: "speedometer", title: "Scroll speed",
-                       value: $model.tune.circularPixelsPerRadian, range: 40...400,
+                       value: $model.tune.circularPixelsPerRadian, range: 40...600,
                        minIcon: "tortoise.fill", maxIcon: "hare.fill",
                        display: { String(format: "%.0f", $0) })
                 slider(icon: "wind", title: "Smoothness",
@@ -358,30 +493,26 @@ struct SettingsView: View {
                        minIcon: "tortoise.fill", maxIcon: "hare.fill",
                        display: { String(format: "%.2f", $0) })
 
-                // Velocity gain — shown as a curve, because four numbers do not tell you what the
-                // wheel will feel like, and the shape does.
-                VStack(alignment: .leading, spacing: 10) {
-                    rowLabel("Speed response", "chart.xyaxis.line")
-                    AccelCurveView(accelMin: model.tune.circularAccelMin,
-                                   accelMax: model.tune.circularAccelMax,
-                                   lowSpeed: model.tune.circularAccelLowSpeed,
-                                   highSpeed: model.tune.circularAccelHighSpeed,
-                                   curve: model.tune.circularAccelCurve)
-                }
-                .padding(.vertical, 2)
-
                 slider(icon: "tortoise.fill", title: "Slow gain",
-                       value: $model.tune.circularAccelMin, range: 0.1...1.5,
+                       value: $model.tune.circularAccelMin, range: 0.05...2.0,
                        minIcon: "minus", maxIcon: "plus",
                        display: { String(format: "%.2f×", $0) })
                 slider(icon: "hare.fill", title: "Fast gain",
-                       value: $model.tune.circularAccelMax, range: 1.0...5.0,
+                       value: $model.tune.circularAccelMax, range: 0.5...6.0,
                        minIcon: "minus", maxIcon: "plus",
                        display: { String(format: "%.2f×", $0) })
+                slider(icon: "arrow.down.forward", title: "Slow threshold",
+                       value: $model.tune.circularAccelLowSpeed, range: 0.001...0.05,
+                       minIcon: "tortoise.fill", maxIcon: "hare.fill",
+                       display: { String(format: "%.0f", $0 * 1000) })
+                slider(icon: "arrow.up.forward", title: "Fast threshold",
+                       value: $model.tune.circularAccelHighSpeed, range: 0.01...0.16,
+                       minIcon: "tortoise.fill", maxIcon: "hare.fill",
+                       display: { String(format: "%.0f", $0 * 1000) })
                 slider(icon: "point.topleft.down.curvedto.point.bottomright.up", title: "Curve shape",
-                       value: $model.tune.circularAccelCurve, range: 0.4...4.0,
+                       value: curveBinding(for: .circular), range: 0.35...4.0,
                        minIcon: "arrow.up.right", maxIcon: "arrow.turn.up.right",
-                       display: { String(format: "%.1f", $0) })
+                       display: { String(format: "%.2f", $0) })
 
                 Toggle(isOn: $model.tune.circularInvert) {
                     rowLabel("Reverse direction", "arrow.left.arrow.right")
@@ -393,6 +524,59 @@ struct SettingsView: View {
             Text("Circle a finger on the pad's outer ring to scroll — like a click wheel.")
         }
         .animation(.easeInOut(duration: 0.22), value: model.tune.circularEnabled)
+    }
+
+    /// Shape is the dimensionless exponent only. End gains, thresholds, and the two base-speed
+    /// controls never cross the link because pointer delta/frame and ring radians/frame are not
+    /// interchangeable units.
+    private func curveBinding(for target: CurveTarget) -> Binding<Double> {
+        Binding(
+            get: {
+                switch target {
+                case .pointer: return model.tune.accelCurve
+                case .circular: return model.tune.circularAccelCurve
+                }
+            },
+            set: { newValue in
+                lastEditedCurve = target
+                var tune = model.tune
+                switch target {
+                case .pointer: tune.accelCurve = newValue
+                case .circular: tune.circularAccelCurve = newValue
+                }
+                if tune.accelerationCurvesLinked {
+                    tune.accelCurve = newValue
+                    tune.circularAccelCurve = newValue
+                }
+                model.tune = tune
+            }
+        )
+    }
+
+    private var shapeLockButton: some View {
+        Button {
+            var tune = model.tune
+            let shouldLink = !tune.accelerationCurvesLinked
+            if shouldLink {
+                // Closing the lock uses the last graph the user touched as the source, so enabling
+                // it never unexpectedly destroys the curve they just finished shaping.
+                let source = lastEditedCurve == .pointer ? tune.accelCurve : tune.circularAccelCurve
+                tune.accelCurve = source
+                tune.circularAccelCurve = source
+            }
+            tune.accelerationCurvesLinked = shouldLink
+            model.tune = tune
+        } label: {
+            Label(model.tune.accelerationCurvesLinked ? "Locked" : "Independent",
+                  systemImage: model.tune.accelerationCurvesLinked ? "lock.fill" : "lock.open")
+                .font(.system(size: 11, weight: .medium))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .tint(model.tune.accelerationCurvesLinked ? .accentColor : .secondary)
+        .help(model.tune.accelerationCurvesLinked
+              ? "Pointer and scroll use the same normalised curve shape. Click to edit independently."
+              : "Click to lock both normalised curve shapes. Numeric speed and gain ranges stay independent.")
     }
 
     private var startupSection: some View {
@@ -422,6 +606,18 @@ struct SettingsView: View {
                  ?? "Runs HyperVibe automatically after you log in. Also listed under System Settings → General → Login Items.")
                 .font(.system(size: 11))
                 .foregroundStyle(launchAtLoginError == nil ? Color.secondary : Color.red)
+        }
+    }
+
+    private var widgetSection: some View {
+        Section {
+            Toggle(isOn: $model.tune.statusWidgetEnabled) {
+                rowLabel("Always-on status widget", "rectangle.on.rectangle")
+            }
+        } header: {
+            Text("On-screen Status")
+        } footer: {
+            Text("Keeps the active Layer visible above every app. Actions and app switches briefly animate in, then the widget returns to the current Layer. Drag it anywhere; its screen and position are remembered.")
         }
     }
 

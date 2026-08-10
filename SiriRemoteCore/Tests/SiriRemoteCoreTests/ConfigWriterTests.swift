@@ -27,6 +27,7 @@ final class ConfigWriterTests: XCTestCase {
             .applescript(script: "tell application \"Music\" to playpause"),
             .mode(to: "music"),
             .layer("tvLayer"),
+            .layerCycle,
             .space(direction: -1),
             .space(direction: 1),
             .repeatKey(keys: "delete", delay: 0.3, interval: 0.045),
@@ -64,6 +65,10 @@ final class ConfigWriterTests: XCTestCase {
         o = try encodeToObject(.layer("tvLayer"))
         XCTAssertEqual(o["action"] as? String, "layer")
         XCTAssertEqual(o["to"] as? String, "tvLayer")     // layer reuses the `to` key
+
+        o = try encodeToObject(.layerCycle)
+        XCTAssertEqual(o["action"] as? String, "layerCycle")
+        XCTAssertNil(o["to"])
 
         // launch omits an absent optional (encodeIfPresent).
         o = try encodeToObject(.launch(app: "Safari", url: nil))
@@ -103,9 +108,16 @@ final class ConfigWriterTests: XCTestCase {
         "accelMax": 6.0,
         "accelLowSpeed": 0.007,
         "accelHighSpeed": 0.06,
+        "accelCurve": 1.75,
+        "accelerationCurvesLinked": true,
         "doubleTapWindow": 0.2,
         "spacesModeWindow": 5.0,
         "findCursorEnabled": true,
+        "statusWidgetEnabled": true,
+        "layers": [
+          { "id": "BASE", "name": "Layer 1", "color": "green" },
+          { "id": "L1", "name": "Layer 2", "color": "#0A84FF" }
+        ],
         "circularScroll": {
           "enabled": true, "minRadius": 0.35, "startThreshold": 0.35,
           "pixelsPerRadian": 160, "scrollEase": 0.3, "invert": false
@@ -150,13 +162,16 @@ final class ConfigWriterTests: XCTestCase {
         "tvLayer": {
           "ring.up":   { "action": "media", "key": "volup" },
           "ring.down": { "action": "media", "key": "voldown" }
-        }
+        },
+        "L1": { "inherits": "global" }
       }
     }
     """
 
     func testConfigRoundTripsThroughWriter() throws {
         let original = try ConfigLoader.load(representativeConfig)
+        XCTAssertEqual(original.settings.layers[1],
+                       Config.LayerDefinition(id: "L1", name: "Layer 2", color: "#0A84FF"))
         let written = try ConfigWriter.serialize(original)
         let reparsed = try ConfigLoader.load(written)
         XCTAssertEqual(reparsed, original)
@@ -215,6 +230,8 @@ final class ConfigWriterTests: XCTestCase {
         """)
         XCTAssertEqual(config.settings.appWheel, [], "the launcher must be off until asked for")
         XCTAssertEqual(config.settings.holdCancelGrace, 1.0)
+        XCTAssertEqual(config.settings.accelCurve, 1.0)
+        XCTAssertFalse(config.settings.accelerationCurvesLinked)
         XCTAssertEqual(try ConfigLoader.load(ConfigWriter.serialize(config)), config)
     }
 }
