@@ -349,7 +349,7 @@ struct LayoutView: View {
                     selectedKey = key       // click a remote button → open its editor row + keep it lit
                     highlightedKey = key
                 })
-                Text("Aluminum Siri Remote (3rd gen). Click an input to edit it.")
+                Text("Aluminum Siri Remote (2nd or 3rd gen). Click an input to edit it.")
                     .font(.system(size: 11.5)).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)

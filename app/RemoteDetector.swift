@@ -40,8 +40,10 @@ class RemoteDetector {
     private let knownProductIDs: [Int] = [
         0x0221, 0x0255, 0x0266, 0x0267, 0x0269,
         0x0C4E, 0x0C4F, 0x030D, 0x030E,
-        0x0315  // 3rd-gen Siri Remote (A2843, USB-C). HID name is the serial number,
-                // not "Siri Remote", so it must be matched by product ID here.
+        0x0314, // 2nd-gen Siri Remote (A2540, Lightning)
+        0x0315  // 3rd-gen Siri Remote (A2854, USB-C)
+                // These HID names are serial numbers rather than "Siri Remote", so the
+                // aluminum remotes must be matched by product ID here.
     ]
     
     init(deviceCallback: @escaping (IOHIDDevice?) -> Void) {

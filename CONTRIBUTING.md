@@ -16,8 +16,8 @@ cd app && ./build.sh && ./create_app_bundle.sh
 `app/` is compiled directly with `swiftc` — the core sources are compiled into the same binary, so
 adding a file to `app/` means adding it to the `SWIFT_FILES` list in `app/build.sh`.
 
-You need the hardware (a 3rd-gen Apple TV Siri Remote) and Accessibility permission to run it, but
-not to work on the engine.
+You need the hardware (a 2nd- or 3rd-gen Apple TV Siri Remote) and Accessibility permission to run
+it, but not to work on the engine.
 
 ## What to know before you change behaviour
 

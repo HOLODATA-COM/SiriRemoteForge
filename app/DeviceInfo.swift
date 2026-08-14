@@ -63,9 +63,9 @@ final class DeviceInfo: ObservableObject {
     @Published private(set) var updatedAt: Date?
     @Published private(set) var refreshing: Bool = false
 
-    /// Apple vendor / 3rd-gen Siri Remote product.
+    /// Apple vendor / aluminum Siri Remote products.
     private static let vendor = 0x004C
-    private static let product = 0x0315
+    private static let products = [0x0314, 0x0315]
 
     private var timer: Timer?
 
@@ -136,7 +136,9 @@ final class DeviceInfo: ObservableObject {
             let sections = root["SPBluetoothDataType"] as? [[String: Any]]
         else { return nil }
 
-        let wantProduct = String(format: "0x%04X", product).lowercased()
+        let wantedProducts = Set(products.map {
+            String(format: "0x%04X", $0).lowercased()
+        })
 
         for section in sections {
             // Connected devices are grouped under `device_connected` (and, when idle, other keys).
@@ -146,7 +148,7 @@ final class DeviceInfo: ObservableObject {
                     for (deviceName, raw) in group {
                         guard let d = raw as? [String: Any] else { continue }
                         let pid = (d["device_productID"] as? String)?.lowercased()
-                        guard pid == wantProduct else { continue }
+                        guard let pid, wantedProducts.contains(pid) else { continue }
                         var info = BTInfo()
                         info.name = deviceName
                         if let b = d["device_batteryLevelMain"] as? String {
@@ -167,10 +169,13 @@ final class DeviceInfo: ObservableObject {
     /// Enumerate the remote's HID interfaces directly (no subprocess).
     private static func readInterfaces() -> [Interface] {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-        IOHIDManagerSetDeviceMatching(manager, [
-            kIOHIDVendorIDKey: vendor,
-            kIOHIDProductIDKey: product
-        ] as CFDictionary)
+        let matches = products.map { product in
+            [
+                kIOHIDVendorIDKey: vendor,
+                kIOHIDProductIDKey: product
+            ]
+        }
+        IOHIDManagerSetDeviceMatchingMultiple(manager, matches as CFArray)
 
         guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else { return [] }
 
