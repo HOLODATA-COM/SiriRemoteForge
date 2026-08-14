@@ -13,7 +13,11 @@ struct RemoteVoiceFrame {
 }
 
 enum VoiceFrameParser {
-    private static let signature: [UInt8] = [0x04, 0x00, 0x1B, 0x35, 0x00]
+    /// L2CAP ATT notification signatures. The attribute handle differs by remote generation.
+    private static let signatures: [[UInt8]] = [
+        [0x04, 0x00, 0x1B, 0x35, 0x00], // A2854 (3rd gen)
+        [0x04, 0x00, 0x1B, 0x36, 0x00], // A2540 (2nd gen)
+    ]
 
     static func parse(_ line: String) -> RemoteVoiceFrame? {
         let fields = line.split(whereSeparator: { $0.isWhitespace })
@@ -37,14 +41,22 @@ enum VoiceFrameParser {
     }
 
     /// Core extractor shared by the text path and the binary `.pklg` path. `bytes` must be a
-    /// buffer that contains the ATT signature `04 00 1B 35 00` (L2CAP CID 0x0004, opcode 0x1B,
-    /// handle 0x0035) followed by the notification value. For the text path this is the whole
-    /// raw ACL packet; for the binary path it is the reassembled L2CAP PDU. The logic beyond the
-    /// signature — sequence, Opus length, TOC 0xB8 — is identical, so both paths decode the same
-    /// frames (verified: cap_mic.pklg → 804 frames, byte-for-byte with the text capture).
+    /// buffer that contains a supported ATT signature (L2CAP CID 0x0004, opcode 0x1B, then the
+    /// generation-specific attribute handle) followed by the notification value. For the text path
+    /// this is the whole raw ACL packet; for the binary path it is the reassembled L2CAP PDU. The
+    /// logic beyond the signature — sequence, Opus length, TOC 0xB8 — is identical, so both paths
+    /// decode the same frames (verified: cap_mic.pklg → 804 frames, byte-for-byte with the text
+    /// capture).
     static func parse(bytes: [UInt8], handle: String) -> RemoteVoiceFrame? {
-        guard let signatureIndex = firstIndex(of: signature, in: bytes) else { return nil }
-        let valueIndex = signatureIndex + signature.count
+        var signatureIndex: Int?
+        for signature in signatures {
+            if let index = firstIndex(of: signature, in: bytes) {
+                signatureIndex = index
+                break
+            }
+        }
+        guard let signatureIndex else { return nil }
+        let valueIndex = signatureIndex + 5
         guard valueIndex + 5 <= bytes.count else { return nil }
 
         let sequence = UInt16(bytes[valueIndex + 2])
