@@ -124,8 +124,9 @@ older DriverKit experiment:
 ## Requirements
 
 - macOS 13+ (Ventura or later), Apple silicon or Intel.
-- A **3rd-generation Siri Remote** (2022, USB-C). Pair it over Bluetooth first (hold it near the Mac;
-  it appears as a keyboard/trackpad device).
+- A **2nd-generation Siri Remote** (2021, A2540, Lightning) or **3rd-generation Siri Remote**
+  (2022, A2854, USB-C). Pair it over Bluetooth first (hold it near the Mac; it appears as a
+  keyboard/trackpad device).
 - Xcode command-line tools (`xcode-select --install`) for `swiftc`.
 
 **No third-party tools.** Animated Space switching was once routed through BetterTouchTool; it now
@@ -614,15 +615,19 @@ Development invariant: a diagnostic instance temporarily replaces the normal app
 alongside it. After every diagnostic, stop the flagged process and restore exactly one no-argument
 `HyperVibe.app` instance so remote control remains available.
 
-## Hardware notes (3rd-gen Siri Remote)
+## Hardware notes (aluminum Siri Remote)
 
-- HID product `0x0315`, Apple BT vendor `0x004C`; the device name is the unit serial, so matching is
-  by product id. The remote mirrors each logical button across several HID interfaces — duplicate
-  callbacks are de-duplicated to a single state transition.
+- The 2nd-gen A2540 uses HID product `0x0314`; the 3rd-gen A2854 uses `0x0315`. Both use Apple BT
+  vendor `0x004C`. Their HID device names can be unit serials, so matching is by product id. The
+  remote mirrors each logical button across several HID interfaces — duplicate callbacks are
+  de-duplicated to a single state transition.
 - The ring is a Consumer-page control (`0x42`–`0x45`); center = `0x80`. The Back (‹) button reports
   Generic-Desktop usage `0x86`, surfaced as **`button.menu`** (not `button.back`).
 - The trackpad is read via `MultitouchSupport` (family 145, ~60 Hz over BLE); a press is detected by
   a sharp rise in contact size while the finger is still. No accelerometer/gyro on this generation.
+
+The A2540 support was verified on one physical remote over Bluetooth on macOS 26.5: button input,
+clickpad movement and clicking, ring directions, scrolling, volume, and app switching all worked.
 
 ## Contributing
 
