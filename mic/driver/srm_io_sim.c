@@ -155,6 +155,27 @@ static int producer_start(SimProducer *p, int writingInitially)
     return 0;
 }
 
+// A producer marked active is not necessarily primed: pthread_create may return before the new
+// thread publishes its first 10 ms chunk. Phase 3 models HyperVibe's built-in feeder already
+// running when CoreAudio opens a fresh input session, so wait for a small real backlog instead of
+// letting host scheduling decide whether the beginning of that session is silent. This does not
+// weaken any stream assertion; it makes the fixture establish the state its comment promises.
+static int producer_wait_for_frames(SimProducer *p, uint64_t minimumFrames)
+{
+    const uint64_t deadline = mach_absolute_time() + ns_to_ticks(500000000ULL);
+    while (atomic_load_explicit(&p->shm->writeIndex, memory_order_acquire) < minimumFrames)
+    {
+        if (mach_absolute_time() >= deadline)
+        {
+            fprintf(stderr, "io sim: %s did not prime %llu frames before the deadline\n",
+                    p->name, (unsigned long long)minimumFrames);
+            return -1;
+        }
+        usleep(1000);
+    }
+    return 0;
+}
+
 static void producer_finish(SimProducer *p)
 {
     if (p->started)
@@ -512,6 +533,7 @@ int main(int argc, char **argv)
     // from ~0.26 s, releases at ~1.00 s, and re-presses at ~2.01 s. 285 cycles ~ 3.04 s.
     atomic_store_explicit(&gRemoteProducer.writing, 0, memory_order_release);
     if (producer_start(&gBuiltinProducer, 1) != 0) { return 2; }
+    if (producer_wait_for_frames(&gBuiltinProducer, 3 * kChunkFrames) != 0) { return 2; }
     PhaseRun phase3 = {
         .name = "phase3", .totalCycles = 285,
         .jumpAtCycle = kNoCycle, .jumpFrames = 0,

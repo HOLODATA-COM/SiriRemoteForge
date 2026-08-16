@@ -136,14 +136,21 @@ class RemoteInputHandler {
     /// stage actually fired (0 = released before stage 1). Only emitted for buttons that have at
     /// least one hold binding — there is nothing to choose between otherwise.
     var onHoldBegan: ((_ startedAt: CFTimeInterval,
-                       _ base: (action: Action, presentation: Config.Presentation?)?,
-                       _ stages: [(threshold: TimeInterval, action: Action,
+                       _ base: (key: String, action: Action,
+                                presentation: Config.Presentation?)?,
+                       _ stages: [(threshold: TimeInterval, key: String, action: Action,
                                    presentation: Config.Presentation?, isCancel: Bool)]) -> Void)?
     /// Which of the stages passed to `onHoldBegan` fired, as a 1-BASED POSITION in that list
     /// (0 = released before the first). Deliberately not the binding's stage number: the list holds
     /// only the BOUND stages, so for a key with just `.hold2`/`.hold3` those numbers are 2 and 3
     /// while the positions are 1 and 2.
     var onHoldEnded: ((_ firedIndex: Int) -> Void)?
+
+    /// Edge-driven actions such as push-to-talk are already a physical hold; they deliberately
+    /// bypass the `.hold*` release-to-select ladder. These callbacks let the compact status widget
+    /// mirror that real press/release lifetime without pretending it is a timed hold stage.
+    var onContinuousActionBegan: ((_ handled: Controller.HandledAction) -> Void)?
+    var onContinuousActionEnded: ((_ key: String) -> Void)?
 
     /// Multi-tap: `<key>` / `<key>.double` / `<key>.triple`. Each tap is HELD for `doubleTapWindow`
     /// to see whether another arrives; the deepest count actually reached is what fires, and it
@@ -802,6 +809,7 @@ class RemoteInputHandler {
         // Release AFTER the opener fired → fire the closing hotkey (dictation off).
         if !pressed, let keys = pushToTalkOpen.removeValue(forKey: buttonName) {
             Keys.synthesize(keys)
+            onContinuousActionEnded?(tapKey)
             print("🔘 \(tapKey) → pushToTalk '\(keys)' (release edge)")
             return
         }
@@ -821,10 +829,11 @@ class RemoteInputHandler {
                 self.pushToTalkPending.removeValue(forKey: buttonName)
                 self.pushToTalkOpen[buttonName] = keys
                 Keys.synthesize(keys)
-                // This raw-edge fast path deliberately bypasses Controller.handle; report the
-                // captured binding only once the delayed opener genuinely fired (a quick tap must
-                // show its `.tap`/`.double` action instead, never a voice action that did not run).
-                self.controller?.reportHandled(handled)
+                // This raw-edge fast path deliberately bypasses Controller.handle. It is not a
+                // short notification: announce a continuous action only once the delayed opener
+                // genuinely fires, then keep it alive until the matching release callback above.
+                // A quick tap therefore shows only its `.tap`/`.double` action, never voice input.
+                self.onContinuousActionBegan?(handled)
                 print("🔘 \(tapKey) → pushToTalk '\(keys)' (press edge, +\(self.pushToTalkActivationDelay)s)")
             }
             pushToTalkPending[buttonName] = work
@@ -1024,11 +1033,11 @@ class RemoteInputHandler {
             $0.delay == $1.delay ? $0.ordinal < $1.ordinal : $0.delay < $1.delay
         }
 
-        var hudStages: [(threshold: TimeInterval, action: Action,
+        var hudStages: [(threshold: TimeInterval, key: String, action: Action,
                          presentation: Config.Presentation?, isCancel: Bool)] = []
         for stage in armed {
             if let stageAction = controller.resolvedAction(for: stage.key) {
-                hudStages.append((stage.delay, stageAction,
+                hudStages.append((stage.delay, stage.key, stageAction,
                                   controller.resolvedPresentation(for: stage.key), false))
             }
         }
@@ -1037,14 +1046,14 @@ class RemoteInputHandler {
         if holdCancelGrace > 0, let deepest = armed.last {
             let threshold = deepest.delay + holdCancelGrace
             cancelAt = threshold
-            hudStages.append((threshold, Action.mouse(op: "click"),
+            hudStages.append((threshold, "\(tapKey).cancel", Action.mouse(op: "click"),
                               Config.Presentation(label: "Cancel", icon: "arrow.uturn.backward"), true))
         }
         let startedAt = CACurrentMediaTime()
         armedHolds[buttonName] = ArmedHold(startedAt: startedAt, stages: armed, cancelAt: cancelAt)
         // Stage 0 is the ordinary tap — releasing early fires it (see the release branch).
         let base = controller.resolvedAction(for: tapKey).map {
-            (action: $0, presentation: controller.resolvedPresentation(for: tapKey))
+            (key: tapKey, action: $0, presentation: controller.resolvedPresentation(for: tapKey))
         }
         onHoldBegan?(startedAt, base, hudStages)
         return true
@@ -1494,9 +1503,9 @@ class RemoteInputHandler {
             // Same card as any other hold. Not emitted for a drop press, which schedules nothing —
             // a filling track there would promise a drag that is not coming.
             onHoldBegan?(CACurrentMediaTime(),
-                         (action: .mouse(op: "click"),
+                         (key: "button.select", action: .mouse(op: "click"),
                           presentation: RemoteInputHandler.selectTapPresentation),
-                         [(stickyDragThreshold, Action.mouse(op: "click"),
+                         [(stickyDragThreshold, "button.select.hold", Action.mouse(op: "click"),
                            RemoteInputHandler.selectDragPresentation, false)])
         } else if !pressed && isSelectPressed {
             isSelectPressed = false
@@ -1683,6 +1692,7 @@ class RemoteInputHandler {
         pushToTalkPending.removeValue(forKey: buttonName)?.cancel()
         if let keys = pushToTalkOpen.removeValue(forKey: buttonName) {
             Keys.synthesize(keys)
+            onContinuousActionEnded?(RemoteInputHandler.configKey(for: buttonName))
         }
 
         // Select's drag timer. Left running, it posts mouseDown at +0.5s with nothing physically

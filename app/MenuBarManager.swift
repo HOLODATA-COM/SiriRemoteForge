@@ -29,18 +29,35 @@ final class MenuBarManager {
     private let statusItem: NSStatusItem
     private let menu: NSMenu
     private let statusMenuItem: NSMenuItem
+    private var isConnected = false
+    private var localeObserver: NSObjectProtocol?
 
     /// Two-finger scroll scale (see `ScrollSpeed`).
     private(set) var scrollSpeed: ScrollSpeed = .medium
 
     /// Set by the AppDelegate to open the SwiftUI settings window.
     var onOpenSettings: (() -> Void)?
+    /// Set by the AppDelegate to re-open the first-run setup guide.
+    var onOpenSetup: (() -> Void)?
 
     init(statusItem: NSStatusItem) {
         self.statusItem = statusItem
         self.menu = NSMenu()
-        self.statusMenuItem = NSMenuItem(title: "Status: Disconnected", action: nil, keyEquivalent: "")
+        self.statusMenuItem = NSMenuItem(title: L("Status: Disconnected"), action: nil, keyEquivalent: "")
         setupMenuBar()
+        localeObserver = NotificationCenter.default.addObserver(
+            forName: Loc.didChange, object: nil, queue: .main
+        ) { [weak self] _ in self?.relocalize() }
+    }
+
+    deinit {
+        if let observer = localeObserver { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    /// Rebuild the menu and refresh the status line in the current language.
+    private func relocalize() {
+        rebuildMenu()
+        statusMenuItem.title = isConnected ? L("Status: Connected ✓") : L("Status: Disconnected")
     }
 
     // MARK: - Icon
@@ -102,22 +119,29 @@ final class MenuBarManager {
         menu.addItem(statusMenuItem)
 
         menu.addItem(.separator())
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        let setupItem = NSMenuItem(title: L("Setup Guide"), action: #selector(openSetup), keyEquivalent: "")
+        setupItem.target = self
+        menu.addItem(setupItem)
+
+        let settingsItem = NSMenuItem(title: L("Settings…"), action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
 
         menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: L("Quit"), action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
     }
 
     @objc private func openSettings() { onOpenSettings?() }
 
+    @objc private func openSetup() { onOpenSetup?() }
+
     func updateConnectionStatus(connected: Bool) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.statusMenuItem.title = connected ? "Status: Connected ✓" : "Status: Disconnected"
+            self.isConnected = connected
+            self.statusMenuItem.title = connected ? L("Status: Connected ✓") : L("Status: Disconnected")
             self.statusItem.button?.appearsDisabled = !connected
         }
     }

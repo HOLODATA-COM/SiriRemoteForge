@@ -9,6 +9,7 @@ echo "Building HyperVibe..."
 
 SWIFT_FILES=(
     "main.swift"
+    "Localization.swift"
     "SiriRemoteApp.swift"
     "MenuBarManager.swift"
     "RemoteDetector.swift"
@@ -29,6 +30,7 @@ SWIFT_FILES=(
     "HUDScreen.swift"
     "LayerHUD.swift"
     "StatusWidget.swift"
+    "HoldAnimationGallery.swift"
     "HoldProgressHUD.swift"
     "ActionVisual.swift"
     # --- Settings UI (SwiftUI) ---
@@ -39,6 +41,7 @@ SWIFT_FILES=(
     "AccelCurveView.swift"
     "SettingsView.swift"
     "SettingsWindow.swift"
+    "SetupWizard.swift"
     "RemoteView.swift"
     "LayoutView.swift"
     # --- Config engine integration (this fork) ---

@@ -21,6 +21,10 @@ struct SettingsView: View {
     @State private var launchAtLogin = LaunchAtLogin.state.isOn
     @State private var launchAtLoginError: String?
 
+    /// Drives live relocalization: changing the language republishes, re-running this view's body
+    /// (so every `L(...)` in the Tuning tab re-evaluates) and re-`.id()`-ing the Layout subview.
+    @ObservedObject private var loc = Loc.shared
+
     private enum Tab: String, CaseIterable { case tuning = "Tuning", layout = "Layout" }
     @State private var tab: Tab = .tuning
 
@@ -45,9 +49,12 @@ struct SettingsView: View {
                         do { try ConfigStore.save(newConfig) }
                         catch { NSLog("[siriRemote] config save failed: \(error)") }
                     })
+                    // LayoutView is a separate view struct with unchanged inputs, so re-running this
+                    // body would not re-run its body; keying it on the language forces relocalization.
+                    .id(loc.language)
                 } else {
                     Spacer()
-                    Text("Loading config…").foregroundStyle(.secondary)
+                    Text(L("Loading config…")).foregroundStyle(.secondary)
                     Spacer()
                 }
             }
@@ -73,74 +80,200 @@ struct SettingsView: View {
     // MARK: - Desktop workspace
 
     private var tuningWorkspace: some View {
-        VStack(spacing: 0) {
-            curveWorkbench
-            Divider()
-
-            // Native split view: both sides scroll independently and the divider is draggable,
-            // which makes this behave like a Mac settings workspace rather than one long phone
-            // form. Pointer/click controls live together; wheel/remote controls live together.
-            HSplitView {
-                Form {
-                    cursorSection
-                    accelerationSection
-                    clickSection
-                    deviceSection
-                }
-                .formStyle(.grouped)
-                .frame(minWidth: 390)
-
-                Form {
-                    circularSection
-                    buttonsSection
-                    widgetSection
-                    startupSection
-                    footerSection
-                }
-                .formStyle(.grouped)
-                .frame(minWidth: 390)
-            }
+        // One document, one scroll position. The old split view forced people to remember which
+        // column owned a setting and could leave two unrelated scroll positions on screen. Curve
+        // ownership is now explicit and everything shared follows in a predictable vertical order.
+        Form {
+            curveRelationshipSection
+            pointerMovementSection
+            circularMovementSection
+            generalSettingsIntro
+            clickSection
+            buttonsSection
+            widgetSection
+            startupSection
+            languageSection
+            deviceSection
+            footerSection
         }
+        .formStyle(.grouped)
     }
 
-    private var curveWorkbench: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
+    private var curveRelationshipSection: some View {
+        Section {
+            HStack(spacing: 14) {
+                Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(Color.accentColor.opacity(0.11)))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Acceleration Curves")
-                        .font(.system(size: 16, weight: .semibold))
-                    Text("Drag the endpoints for range; drag the middle point for shape.")
+                    Text(L("Acceleration Curves"))
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(model.tune.accelerationCurvesLinked
+                         ? L("Pointer and ring share the same curve shape.")
+                         : L("Pointer and ring are tuned independently."))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text(model.tune.accelerationCurvesLinked
-                     ? "Shape changes apply to both curves"
-                     : "Each curve is tuned independently")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
                 shapeLockButton
             }
+            .padding(.vertical, 5)
+        } footer: {
+            Text(L("Each graph is a complete editor. Drag either endpoint to set its slow and fast range; drag the middle point to shape the acceleration."))
+        }
+    }
 
-            HStack(alignment: .top, spacing: 14) {
-                curvePanel(title: "Pointer Movement",
-                           subtitle: "Trackpad delta per frame",
-                           icon: "cursorarrow.motionlines",
-                           accent: .blue,
-                           target: .pointer)
+    private var pointerMovementSection: some View {
+        Section {
+            curvePanel(title: L("Pointer Movement"),
+                       subtitle: L("Finger velocity → pointer gain"),
+                       icon: "cursorarrow.motionlines",
+                       accent: .blue,
+                       target: .pointer)
 
-                curvePanel(title: "Circular Scroll",
-                           subtitle: "Ring radians per frame",
+            DisclosureGroup {
+                VStack(spacing: 13) {
+                    slider(icon: "cursorarrow.motionlines", title: L("Base speed"),
+                           value: $model.tune.cursorSpeed, range: 0.1...3.0,
+                           minIcon: "tortoise.fill", maxIcon: "hare.fill",
+                           display: { String(format: "%.2f×", $0) })
+                    slider(icon: "hand.raised.fill", title: L("Steadiness"),
+                           value: $model.tune.cursorDeadzone, range: 0.0...0.02,
+                           minIcon: "scribble.variable", maxIcon: "hand.raised.fill",
+                           display: { String(format: "%.0f", $0 * 1000) })
+                    slider(icon: "tortoise.fill", title: L("Slow-move gain"),
+                           value: $model.tune.accelMin, range: 0.05...2.0,
+                           minIcon: "tortoise.fill", maxIcon: "cursorarrow.motionlines",
+                           display: { String(format: "%.2f×", $0) })
+                    slider(icon: "hare.fill", title: L("Fast-move gain"),
+                           value: $model.tune.accelMax, range: 0.5...8.0,
+                           minIcon: "cursorarrow.motionlines", maxIcon: "hare.fill",
+                           display: { String(format: "%.2f×", $0) })
+                    slider(icon: "arrow.down.forward", title: L("Slow threshold"),
+                           value: $model.tune.accelLowSpeed, range: 0.001...0.05,
+                           minIcon: "tortoise.fill", maxIcon: "hare.fill",
+                           display: { String(format: "%.0f", $0 * 1000) })
+                    slider(icon: "arrow.up.forward", title: L("Fast threshold"),
+                           value: $model.tune.accelHighSpeed, range: 0.01...0.14,
+                           minIcon: "tortoise.fill", maxIcon: "hare.fill",
+                           display: { String(format: "%.0f", $0 * 1000) })
+                    slider(icon: "point.topleft.down.curvedto.point.bottomright.up",
+                           title: L("Curve shape"), value: curveBinding(for: .pointer),
+                           range: 0.35...4.0, minIcon: "arrow.up.right",
+                           maxIcon: "arrow.turn.up.right",
+                           display: { String(format: "%.2f", $0) })
+
+                    Divider()
+                    Toggle(isOn: $model.tune.findCursorEnabled) {
+                        rowLabel(L("Find cursor on shake"), "cursorarrow.rays")
+                    }
+                    Toggle(isOn: $model.tune.focusFollowsCursor) {
+                        rowLabel(L("Focus app under cursor"), "macwindow.on.rectangle")
+                    }
+                }
+                .padding(.top, 9)
+            } label: {
+                Label(L("Pointer fine tuning"), systemImage: "slider.horizontal.3")
+                    .font(.system(size: 12, weight: .medium))
+            }
+        } header: {
+            Text(L("Pointer Movement"))
+        } footer: {
+            Text(L("Only these controls affect pointer movement. Changes apply live while you drag the graph or a slider."))
+        }
+    }
+
+    private var circularMovementSection: some View {
+        Section {
+            Toggle(isOn: $model.tune.circularEnabled) {
+                rowLabel(L("Enable ring scrolling"), "arrow.clockwise")
+            }
+
+            if model.tune.circularEnabled {
+                curvePanel(title: L("Ring Scrolling"),
+                           subtitle: L("Ring rotation → scroll gain"),
                            icon: "arrow.clockwise",
                            accent: .orange,
                            target: .circular)
-                    .opacity(model.tune.circularEnabled ? 1 : 0.48)
+
+                DisclosureGroup {
+                    VStack(spacing: 13) {
+                        slider(icon: "circle.dashed", title: L("Outer ring only"),
+                               value: $model.tune.circularMinRadius, range: 0.15...0.45,
+                               minIcon: "smallcircle.filled.circle.fill", maxIcon: "circle",
+                               display: { String(format: "%.0f%%", $0 * 100) })
+                        slider(icon: "timer", title: L("Start resistance"),
+                               value: $model.tune.circularStartThreshold, range: 0.1...1.5,
+                               minIcon: "hare.fill", maxIcon: "tortoise.fill",
+                               display: { String(format: "%.0f°", $0 * 180 / .pi) })
+                        slider(icon: "speedometer", title: L("Base scroll speed"),
+                               value: $model.tune.circularPixelsPerRadian, range: 40...600,
+                               minIcon: "tortoise.fill", maxIcon: "hare.fill",
+                               display: { String(format: "%.0f", $0) })
+                        slider(icon: "wind", title: L("Smoothness"),
+                               value: $model.tune.circularScrollEase, range: 0.1...0.6,
+                               minIcon: "tortoise.fill", maxIcon: "hare.fill",
+                               display: { String(format: "%.2f", $0) })
+                        slider(icon: "tortoise.fill", title: L("Slow-scroll gain"),
+                               value: $model.tune.circularAccelMin, range: 0.05...2.0,
+                               minIcon: "minus", maxIcon: "plus",
+                               display: { String(format: "%.2f×", $0) })
+                        slider(icon: "hare.fill", title: L("Fast-scroll gain"),
+                               value: $model.tune.circularAccelMax, range: 0.5...6.0,
+                               minIcon: "minus", maxIcon: "plus",
+                               display: { String(format: "%.2f×", $0) })
+                        slider(icon: "arrow.down.forward", title: L("Slow threshold"),
+                               value: $model.tune.circularAccelLowSpeed, range: 0.001...0.05,
+                               minIcon: "tortoise.fill", maxIcon: "hare.fill",
+                               display: { String(format: "%.0f", $0 * 1000) })
+                        slider(icon: "arrow.up.forward", title: L("Fast threshold"),
+                               value: $model.tune.circularAccelHighSpeed, range: 0.01...0.16,
+                               minIcon: "tortoise.fill", maxIcon: "hare.fill",
+                               display: { String(format: "%.0f", $0 * 1000) })
+                        slider(icon: "point.topleft.down.curvedto.point.bottomright.up",
+                               title: L("Curve shape"), value: curveBinding(for: .circular),
+                               range: 0.35...4.0, minIcon: "arrow.up.right",
+                               maxIcon: "arrow.turn.up.right",
+                               display: { String(format: "%.2f", $0) })
+
+                        Divider()
+                        Toggle(isOn: $model.tune.circularInvert) {
+                            rowLabel(L("Reverse direction"), "arrow.left.arrow.right")
+                        }
+                    }
+                    .padding(.top, 9)
+                } label: {
+                    Label(L("Ring fine tuning"), systemImage: "slider.horizontal.3")
+                        .font(.system(size: 12, weight: .medium))
+                }
             }
+        } header: {
+            Text(L("Ring Scrolling"))
+        } footer: {
+            Text(L("Only these controls affect rotation around the outer ring. Pointer movement keeps its own independent curve above."))
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 15)
-        .padding(.bottom, 16)
-        .background(.bar)
+        .animation(.easeInOut(duration: 0.18), value: model.tune.circularEnabled)
+    }
+
+    private var generalSettingsIntro: some View {
+        Section {
+            HStack(spacing: 12) {
+                Image(systemName: "gearshape.2.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L("General Settings"))
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(L("Click, button timing, on-screen feedback, startup and device information."))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+        }
     }
 
     private func curvePanel(title: String, subtitle: String, icon: String,
@@ -156,7 +289,7 @@ struct SettingsView: View {
                     Text(subtitle).font(.system(size: 10)).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text(target == .pointer ? "POINTER" : "SCROLL")
+                Text(target == .pointer ? L("POINTER") : L("SCROLL"))
                     .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(accent)
                     .padding(.horizontal, 7)
@@ -173,8 +306,8 @@ struct SettingsView: View {
                     curve: curveBinding(for: .pointer),
                     limits: .pointer,
                     accent: accent,
-                    slowLabel: "slow pointer",
-                    fastLabel: "fast pointer",
+                    slowLabel: L("slow pointer"),
+                    fastLabel: L("fast pointer"),
                     formatSpeed: { String(format: "%.0f", $0 * 1000) },
                     shapeLinked: model.tune.accelerationCurvesLinked,
                     onInteraction: { lastEditedCurve = .pointer })
@@ -187,8 +320,8 @@ struct SettingsView: View {
                     curve: curveBinding(for: .circular),
                     limits: .circular,
                     accent: accent,
-                    slowLabel: "slow scroll",
-                    fastLabel: "fast scroll",
+                    slowLabel: L("slow scroll"),
+                    fastLabel: L("fast scroll"),
                     formatSpeed: { String(format: "%.0f", $0 * 1000) },
                     shapeLinked: model.tune.accelerationCurvesLinked,
                     onInteraction: { lastEditedCurve = .circular })
@@ -209,7 +342,7 @@ struct SettingsView: View {
 
     private var tabPicker: some View {
         Picker("", selection: $tab) {
-            ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            ForEach(Tab.allCases, id: \.self) { Text(L($0.rawValue)).tag($0) }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -233,7 +366,7 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("siriRemote").font(.system(size: 19, weight: .semibold))
-                Text("Touch & gesture tuning")
+                Text(L("Touch & gesture tuning"))
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Spacer()
@@ -251,7 +384,7 @@ struct SettingsView: View {
             Circle()
                 .fill(model.connected ? Color.green : Color.secondary.opacity(0.45))
                 .frame(width: 7, height: 7)
-            Text(model.connected ? "Connected" : "Waiting")
+            Text(model.connected ? L("Connected") : L("Waiting"))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -300,12 +433,12 @@ struct SettingsView: View {
                             Image(systemName: batterySymbol(pct)).foregroundStyle(batteryTint(pct))
                             Text("\(pct)%").monospacedDigit()
                         }
-                    } label: { rowLabel("Battery", "bolt.fill") }
+                    } label: { rowLabel(L("Battery"), "bolt.fill") }
                 }
                 if let fw = device.firmware {
                     LabeledContent {
                         Text(fw).monospacedDigit().foregroundStyle(.secondary)
-                    } label: { rowLabel("Firmware", "cpu") }
+                    } label: { rowLabel(L("Firmware"), "cpu") }
                 }
                 if let addr = device.address {
                     LabeledContent {
@@ -313,7 +446,7 @@ struct SettingsView: View {
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                    } label: { rowLabel("Bluetooth address", "dot.radiowaves.left.and.right") }
+                    } label: { rowLabel(L("Bluetooth address"), "dot.radiowaves.left.and.right") }
                 }
                 if let name = device.name {
                     LabeledContent {
@@ -321,14 +454,14 @@ struct SettingsView: View {
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                    } label: { rowLabel("Serial", "number") }
+                    } label: { rowLabel(L("Serial"), "number") }
                 }
                 if let vid = device.vendorID, let pid = device.productID {
                     LabeledContent {
                         Text("\(vid) / \(pid)")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.secondary)
-                    } label: { rowLabel("Vendor / Product", "tag") }
+                    } label: { rowLabel(L("Vendor / Product"), "tag") }
                 }
                 if !device.interfaces.isEmpty {
                     DisclosureGroup {
@@ -341,7 +474,7 @@ struct SettingsView: View {
                                         .frame(width: 92, alignment: .leading)
                                     Text(i.label).font(.system(size: 11))
                                     Spacer()
-                                    Text("in \(i.maxInput) · feat \(i.maxFeature)")
+                                    Text(L("in %d · feat %d", i.maxInput, i.maxFeature))
                                         .font(.system(size: 10, design: .monospaced))
                                         .foregroundStyle(.tertiary)
                                 }
@@ -349,17 +482,17 @@ struct SettingsView: View {
                         }
                         .padding(.top, 4)
                     } label: {
-                        rowLabel("HID interfaces (\(device.interfaces.count))", "list.bullet.indent")
+                        rowLabel(L("HID interfaces (%d)", device.interfaces.count), "list.bullet.indent")
                     }
                 }
             } else {
-                Text("Remote not connected")
+                Text(L("Remote not connected"))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
         } header: {
             HStack {
-                Text("Device")
+                Text(L("Device"))
                 Spacer()
                 Button {
                     device.refresh()
@@ -368,162 +501,54 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(device.refreshing)
-                .help("Refresh device information")
+                .help(L("Refresh device information"))
             }
         } footer: {
             Text(device.updatedAt == nil
-                 ? "The remote's microphone is not readable on macOS — see docs/mic-reverse-engineering.md"
-                 : "Battery and firmware come from the system Bluetooth stack. The microphone is not readable on macOS.")
+                 ? L("The remote's microphone is not readable on macOS — see %@", "docs/mic-reverse-engineering.md")
+                 : L("Battery and firmware come from the system Bluetooth stack. The microphone is not readable on macOS."))
                 .font(.system(size: 11))
         }
     }
 
     // MARK: - Sections
 
-    private var cursorSection: some View {
-        Section {
-            slider(icon: "cursorarrow.motionlines", title: "Speed",
-                   value: $model.tune.cursorSpeed, range: 0.1...3.0,
-                   minIcon: "tortoise.fill", maxIcon: "hare.fill",
-                   display: { String(format: "%.2f×", $0) })
-            slider(icon: "hand.raised.fill", title: "Steadiness",
-                   value: $model.tune.cursorDeadzone, range: 0.0...0.02,
-                   minIcon: "scribble.variable", maxIcon: "hand.raised.fill",
-                   display: { String(format: "%.0f", $0 * 1000) })
-            Toggle(isOn: $model.tune.findCursorEnabled) {
-                rowLabel("Find cursor on shake", "cursorarrow.rays")
-            }
-            Toggle(isOn: $model.tune.focusFollowsCursor) {
-                rowLabel("Focus app under cursor", "macwindow.on.rectangle")
-            }
-        } header: {
-            Text("Cursor")
-        } footer: {
-            Text("Higher steadiness ignores finger jitter, so it's easier to hold still and click. Find cursor on shake flashes a ring around the pointer when you rapidly shake it back and forth.\n\nFocus app under cursor makes shortcuts land where you're pointing: rest the cursor on another display and the app there becomes frontmost. Only apps already covering that whole display, fullscreen or maximised — raising one of those changes nothing you can see, while doing this to overlapping windows would reshuffle them as the pointer crossed.")
-        }
-    }
-
-    private var accelerationSection: some View {
-        Section {
-            slider(icon: "tortoise.fill", title: "Slow-move factor",
-                   value: $model.tune.accelMin, range: 0.05...2.0,
-                   minIcon: "tortoise.fill", maxIcon: "cursorarrow.motionlines",
-                   display: { String(format: "%.2f×", $0) })
-            slider(icon: "hare.fill", title: "Fast-move factor",
-                   value: $model.tune.accelMax, range: 0.5...8.0,
-                   minIcon: "cursorarrow.motionlines", maxIcon: "hare.fill",
-                   display: { String(format: "%.2f×", $0) })
-            slider(icon: "arrow.down.forward", title: "Slow threshold",
-                   value: $model.tune.accelLowSpeed, range: 0.001...0.05,
-                   minIcon: "tortoise.fill", maxIcon: "hare.fill",
-                   display: { String(format: "%.0f", $0 * 1000) })
-            slider(icon: "arrow.up.forward", title: "Fast threshold",
-                   value: $model.tune.accelHighSpeed, range: 0.01...0.14,
-                   minIcon: "tortoise.fill", maxIcon: "hare.fill",
-                   display: { String(format: "%.0f", $0 * 1000) })
-            slider(icon: "point.topleft.down.curvedto.point.bottomright.up", title: "Curve shape",
-                   value: curveBinding(for: .pointer), range: 0.35...4.0,
-                   minIcon: "arrow.up.right", maxIcon: "arrow.turn.up.right",
-                   display: { String(format: "%.2f", $0) })
-        } header: {
-            Text("Pointer Curve Values")
-        } footer: {
-            Text("Exact values for the blue curve above. The graph and these controls stay in sync and apply live.")
-        }
-    }
-
     private var clickSection: some View {
         Section {
-            slider(icon: "hand.tap.fill", title: "Press sensitivity",
+            slider(icon: "hand.tap.fill", title: L("Press sensitivity"),
                    value: $model.tune.clickRiseThreshold, range: 0.04...0.25,
                    minIcon: "hare.fill", maxIcon: "tortoise.fill",
                    display: { String(format: "%.2f", $0) })
-            slider(icon: "arrow.up.and.down.and.arrow.left.and.right", title: "Move tolerance",
+            slider(icon: "arrow.up.and.down.and.arrow.left.and.right", title: L("Move tolerance"),
                    value: $model.tune.pressMoveMax, range: 0.01...0.06,
                    minIcon: "smallcircle.filled.circle.fill", maxIcon: "circle",
                    display: { String(format: "%.3f", $0) })
         } header: {
-            Text("Click")
+            Text(L("Click"))
         } footer: {
-            Text("Pressing to click freezes the cursor so it doesn't drift. Lower sensitivity freezes more readily; higher move tolerance keeps it from feeling stuck.")
+            Text(L("Pressing to click freezes the cursor so it doesn't drift. Lower sensitivity freezes more readily; higher move tolerance keeps it from feeling stuck."))
         }
     }
 
     private var buttonsSection: some View {
         Section {
-            slider(icon: "clock", title: "Long-press time",
+            slider(icon: "clock", title: L("Long-press time"),
                    value: $model.tune.holdThreshold, range: 0.2...1.2,
                    minIcon: "hare.fill", maxIcon: "tortoise.fill",
                    display: { String(format: "%.1fs", $0) })
-            slider(icon: "hand.tap.fill", title: "Double-tap speed",
+            slider(icon: "hand.tap.fill", title: L("Double-tap speed"),
                    value: $model.tune.doubleTapWindow, range: 0.15...0.6,
                    minIcon: "hare.fill", maxIcon: "tortoise.fill",
                    display: { String(format: "%.2fs", $0) })
-            slider(icon: "rectangle.on.rectangle", title: "Spaces Mode timeout",
+            slider(icon: "rectangle.on.rectangle", title: L("Spaces Mode timeout"),
                    value: $model.tune.spacesModeWindow, range: 2.0...15.0,
                    minIcon: "hare.fill", maxIcon: "tortoise.fill",
                    display: { String(format: "%.0fs", $0) })
         } header: {
-            Text("Buttons")
+            Text(L("Buttons"))
         } footer: {
-            Text("Long-press time: how long to hold a button before its \u{201C}.hold\u{201D} fires. Double-tap speed: the window for a second tap to trigger a \u{201C}.double\u{201D} binding instead of a second single press. Spaces Mode timeout: after long-pressing ring-up to arm desktop switching, how long without a left/right switch before it disarms.")
+            Text(L("Long-press time: how long to hold a button before its \u{201C}.hold\u{201D} fires. Double-tap speed: the window for a second tap to trigger a \u{201C}.double\u{201D} binding instead of a second single press. Spaces Mode timeout: after long-pressing ring-up to arm desktop switching, how long without a left/right switch before it disarms."))
         }
-    }
-
-    private var circularSection: some View {
-        Section {
-            Toggle(isOn: $model.tune.circularEnabled) {
-                rowLabel("Circular scroll", "arrow.clockwise")
-            }
-            if model.tune.circularEnabled {
-                slider(icon: "circle.dashed", title: "Outer ring only",
-                       value: $model.tune.circularMinRadius, range: 0.15...0.45,
-                       minIcon: "smallcircle.filled.circle.fill", maxIcon: "circle",
-                       display: { String(format: "%.0f%%", $0 * 100) })
-                slider(icon: "timer", title: "Start resistance",
-                       value: $model.tune.circularStartThreshold, range: 0.1...1.5,
-                       minIcon: "hare.fill", maxIcon: "tortoise.fill",
-                       display: { String(format: "%.0f°", $0 * 180 / .pi) })
-                slider(icon: "speedometer", title: "Scroll speed",
-                       value: $model.tune.circularPixelsPerRadian, range: 40...600,
-                       minIcon: "tortoise.fill", maxIcon: "hare.fill",
-                       display: { String(format: "%.0f", $0) })
-                slider(icon: "wind", title: "Smoothness",
-                       value: $model.tune.circularScrollEase, range: 0.1...0.6,
-                       minIcon: "tortoise.fill", maxIcon: "hare.fill",
-                       display: { String(format: "%.2f", $0) })
-
-                slider(icon: "tortoise.fill", title: "Slow gain",
-                       value: $model.tune.circularAccelMin, range: 0.05...2.0,
-                       minIcon: "minus", maxIcon: "plus",
-                       display: { String(format: "%.2f×", $0) })
-                slider(icon: "hare.fill", title: "Fast gain",
-                       value: $model.tune.circularAccelMax, range: 0.5...6.0,
-                       minIcon: "minus", maxIcon: "plus",
-                       display: { String(format: "%.2f×", $0) })
-                slider(icon: "arrow.down.forward", title: "Slow threshold",
-                       value: $model.tune.circularAccelLowSpeed, range: 0.001...0.05,
-                       minIcon: "tortoise.fill", maxIcon: "hare.fill",
-                       display: { String(format: "%.0f", $0 * 1000) })
-                slider(icon: "arrow.up.forward", title: "Fast threshold",
-                       value: $model.tune.circularAccelHighSpeed, range: 0.01...0.16,
-                       minIcon: "tortoise.fill", maxIcon: "hare.fill",
-                       display: { String(format: "%.0f", $0 * 1000) })
-                slider(icon: "point.topleft.down.curvedto.point.bottomright.up", title: "Curve shape",
-                       value: curveBinding(for: .circular), range: 0.35...4.0,
-                       minIcon: "arrow.up.right", maxIcon: "arrow.turn.up.right",
-                       display: { String(format: "%.2f", $0) })
-
-                Toggle(isOn: $model.tune.circularInvert) {
-                    rowLabel("Reverse direction", "arrow.left.arrow.right")
-                }
-            }
-        } header: {
-            Text("Circular Scroll")
-        } footer: {
-            Text("Circle a finger on the pad's outer ring to scroll — like a click wheel.")
-        }
-        .animation(.easeInOut(duration: 0.22), value: model.tune.circularEnabled)
     }
 
     /// Shape is the dimensionless exponent only. End gains, thresholds, and the two base-speed
@@ -567,7 +592,7 @@ struct SettingsView: View {
             tune.accelerationCurvesLinked = shouldLink
             model.tune = tune
         } label: {
-            Label(model.tune.accelerationCurvesLinked ? "Locked" : "Independent",
+            Label(model.tune.accelerationCurvesLinked ? L("Locked") : L("Independent"),
                   systemImage: model.tune.accelerationCurvesLinked ? "lock.fill" : "lock.open")
                 .font(.system(size: 11, weight: .medium))
         }
@@ -575,8 +600,8 @@ struct SettingsView: View {
         .controlSize(.small)
         .tint(model.tune.accelerationCurvesLinked ? .accentColor : .secondary)
         .help(model.tune.accelerationCurvesLinked
-              ? "Pointer and scroll use the same normalised curve shape. Click to edit independently."
-              : "Click to lock both normalised curve shapes. Numeric speed and gain ranges stay independent.")
+              ? L("Pointer and scroll use the same normalised curve shape. Click to edit independently.")
+              : L("Click to lock both normalised curve shapes. Numeric speed and gain ranges stay independent."))
     }
 
     private var startupSection: some View {
@@ -595,15 +620,15 @@ struct SettingsView: View {
                     launchAtLogin = LaunchAtLogin.state.isOn
                 }
             )) {
-                rowLabel("Start at login", "arrow.up.forward.app")
+                rowLabel(L("Start at login"), "arrow.up.forward.app")
             }
             .disabled(LaunchAtLogin.state == .unavailable)
         } header: {
-            Text("Startup")
+            Text(L("Startup"))
         } footer: {
-            Text(launchAtLoginError.map { "Couldn't change it: \($0)" }
+            Text(launchAtLoginError.map { L("Couldn't change it: %@", $0) }
                  ?? LaunchAtLogin.note
-                 ?? "Runs HyperVibe automatically after you log in. Also listed under System Settings → General → Login Items.")
+                 ?? L("Runs HyperVibe automatically after you log in. Also listed under System Settings → General → Login Items."))
                 .font(.system(size: 11))
                 .foregroundStyle(launchAtLoginError == nil ? Color.secondary : Color.red)
         }
@@ -612,12 +637,36 @@ struct SettingsView: View {
     private var widgetSection: some View {
         Section {
             Toggle(isOn: $model.tune.statusWidgetEnabled) {
-                rowLabel("Always-on status widget", "rectangle.on.rectangle")
+                rowLabel(L("Always-on status widget"), "rectangle.on.rectangle")
+            }
+            Toggle(isOn: $model.tune.holdHUDEnabled) {
+                rowLabel(L("Long-press progress HUD"), "wave.3.right.circle.fill")
             }
         } header: {
-            Text("On-screen Status")
+            Text(L("On-screen Status"))
         } footer: {
-            Text("Keeps the active Layer visible above every app. Actions and app switches briefly animate in, then the widget returns to the current Layer. Drag it anywhere; its screen and position are remembered.")
+            Text(L("The compact widget stays above every app, shows the current Layer at rest, and follows a hold until release. The larger progress HUD visualises release-to-select stages. They can be enabled independently."))
+        }
+    }
+
+    private var languageSection: some View {
+        Section {
+            Picker(selection: Binding(
+                get: { loc.language },
+                set: { loc.language = $0 }
+            )) {
+                ForEach(AppLanguage.allCases) { language in
+                    Text(language.displayName).tag(language)
+                }
+            } label: {
+                rowLabel(L("Interface language"), "globe")
+            }
+            .pickerStyle(.menu)
+        } header: {
+            Text(L("Language"))
+        } footer: {
+            Text(L("The whole app switches immediately — no relaunch needed."))
+                .font(.system(size: 11))
         }
     }
 
@@ -626,10 +675,10 @@ struct SettingsView: View {
             Button(role: .destructive) {
                 withAnimation { model.resetToDefaults() }
             } label: {
-                rowLabel("Reset to defaults", "arrow.counterclockwise")
+                rowLabel(L("Reset to defaults"), "arrow.counterclockwise")
             }
         } footer: {
-            Text("Button, ring, and swipe mappings live in ~/.config/siriremote/config.jsonc")
+            Text(L("Button, ring, and swipe mappings live in %@", "~/.config/siriremote/config.jsonc"))
                 .font(.system(size: 11))
         }
     }

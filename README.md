@@ -281,7 +281,8 @@ setup — push-to-talk, per-app Music/browser/terminal modes, layers — is in
       { "id": "L1", "name": "Spaces", "color": "blue" },
       { "id": "L2", "name": "Arrows", "color": "purple" }
     ],
-    "statusWidgetEnabled": false
+    "statusWidgetEnabled": true,
+    "holdHUDEnabled": true
   },
 
   // Frontmost app's bundle id → mode name (plus a "default").
@@ -387,17 +388,62 @@ migrated to this ordered form on the next UI save.
 
 ### Always-on status widget
 
-Turn on **Settings → Tuning → On-screen Status → Always-on status widget**, or set
-`"statusWidgetEnabled": true`. The compact glass card rests on the current layer, then briefly
-springs to the operation that actually ran. App activation uses the app's real icon; media,
+The status widget is on by default. Turn it off under **Settings → Tuning → On-screen Status**, or
+set `"statusWidgetEnabled": false`. The compact glass card rests on the current layer, then briefly
+settles on the operation that actually ran. App activation uses the app's real icon; media,
 navigation, mouse, voice, and window actions use an action-specific symbol (or the binding's custom
 `label` / `icon`). It then returns to the current layer automatically.
 
-The display time follows the gesture: ordinary taps are shortest, double/triple taps stay a little
-longer, and deeper hold stages remain visible longest. The panel is non-activating, stays above apps
+The display time follows the physical gesture: a short tap holds for about 0.7 seconds;
+double/triple taps stay a little longer. For a release-to-select hold, the compact card starts its
+visual lead-in at 0.18 seconds: a two-layer liquid surface rises across the complete rounded card
+while subtle card-shaped waves expand through it. The icon and labels remain above the liquid with
+hold-specific contrast. The action face changes only at the real configured stage
+threshold, and the final vessel remains full until key-up. A release before 0.18 seconds cancels the
+pending preview entirely; releasing after the preview but before the first threshold still performs
+and confirms the ordinary tap. The card therefore exposes useful progress without becoming a
+second gesture recognizer. Push-to-talk is
+edge-driven rather than a normal `.hold` binding, so its voice face begins when the 0.2 s opener
+really fires and remains until the side button is released. While it is active, the icon becomes a
+live scrolling waveform driven by the audio source that the virtual device is actually serving:
+fresh Siri Remote voice takes priority, then it falls back to the Mac's built-in microphone. Silence
+settles flat and louder speech produces taller bars; no repeating decorative animation supplies those heights.
+Voice mode unfolds into a full-card console: 25 bars span 176 px and retain roughly 0.83 seconds of
+sound history while the ordinary icon/title face recedes. Tiny four-corner readouts show `VOICE`,
+live elapsed time, relative pitch direction/semitones, and spectral brightness. Each bar also keeps
+a real acoustic colour signature: falling intonation moves toward indigo, the
+speaker's slowly learned centre stays cyan, and rising intonation warms toward amber. Pitch
+confidence controls saturation, so breaths and unvoiced consonants fall gracefully back to the
+current Layer tint instead of flashing random colours. A small luminous cap reflects spectral
+brightness, and a restrained whole-card radial field follows the current pitch colour behind the
+console. Every state change uses shared-element geometry rather than moving or fading a page. The
+icon is treated as one two-sided object inside a shared temporary hinge: its current face turns to
+the 90° edge around Y, swaps while edge-on, and the next icon returns from −90° on that exact axis.
+Both text rows use the same construction around X, reading as a compact vertical page turn. A Layer
+change uses the same physics but leaves the unchanged
+`Current Layer` subtitle physically continuous. Voice makes the waveform the icon's back face: 25
+short bars turn into view across the original icon's full 40 pt footprint, then spread into the real
+waveform while the two text rows flip and divide into four corner readouts. Its live indicator uses
+a dedicated red recording dot while the label and timer remain white. Releasing runs the entire
+mapping backwards—without a circular nucleus, background colour dot, `Completed` intermediary, or
+page motion. All analysis runs off the real-time audio callback and changes display only.
+Layer actions skip the redundant
+“Next Layer” face and show only the actual destination Layer. The panel is non-activating, stays above apps
 across normal and full-screen Spaces, and is draggable over its entire surface. HyperVibe stores the
 physical display plus a normalized position. If that display is disconnected, the card moves to an
 available screen and adopts that as its new saved home instead of being stranded off-screen.
+Layer-to-layer changes use one continuous vertical wheel: the old face rolls upward around the
+content's centre axis while the next face enters from below. The final layer wraps to the first in
+the same direction, and only the content moves—the persistent card itself does not hop or scale.
+The card intentionally has no external drop shadow; its material, tint and hairline border define
+the edge without leaving a dark halo over the app underneath.
+
+The larger release-to-select progress HUD has its own **Long-press progress HUD** toggle and config
+key, `"holdHUDEnabled"`. It is also on by default and can be disabled independently of the compact
+status widget. Both water treatments deliberately appear after 0.18 seconds so the fill can be
+watched rising toward the first real hold boundary. That visual lead-in does not lower or alter the
+action threshold: for example, Select still becomes sticky drag at 0.5 seconds, and releasing
+earlier is still an ordinary click. A release before 0.18 seconds cancels both pending visuals.
 
 **A layer is a modifier, not a second keyboard.** Holding one never turns a bound key into a dead
 key: a key the layer says nothing about keeps doing whatever it does unlayered, *in the current app*.
@@ -521,7 +567,7 @@ dead zone, so summoning it and pressing Select does nothing by accident.
 All live in `settings` and in the app's **Tuning** tab: `cursorSpeed`, `cursorDeadzone`, pointer-accel
 curve (`accelMin`/`accelMax`/`accelLowSpeed`/`accelHighSpeed`), `clickRiseThreshold`, `pressMoveMax`,
 `holdThreshold`/`holdThreshold2`/`holdThreshold3`, `doubleTapWindow`, `spacesModeWindow`,
-`findCursorEnabled`, `statusWidgetEnabled`, `focusFollowsCursor`, and `circularScroll { enabled, minRadius, startThreshold,
+`findCursorEnabled`, `statusWidgetEnabled`, `holdHUDEnabled`, `focusFollowsCursor`, and `circularScroll { enabled, minRadius, startThreshold,
 pixelsPerRadian, scrollEase, invert }`. Config is the single source of truth — Tuning-tab slider changes are written
 back to `config.jsonc` (debounced).
 

@@ -29,16 +29,18 @@ final class LayerHUD {
         let window: NSWindow
         let gradient: CAGradientLayer
         let cardLayer: CALayer
+        let contentView: NSView
         let iconView: NSImageView
         let titleLabel: NSTextField
         let subtitleLabel: NSTextField
 
         init(window: NSWindow, gradient: CAGradientLayer, cardLayer: CALayer,
-             iconView: NSImageView,
+             contentView: NSView, iconView: NSImageView,
              titleLabel: NSTextField, subtitleLabel: NSTextField) {
             self.window = window
             self.gradient = gradient
             self.cardLayer = cardLayer
+            self.contentView = contentView
             self.iconView = iconView
             self.titleLabel = titleLabel
             self.subtitleLabel = subtitleLabel
@@ -82,7 +84,7 @@ final class LayerHUD {
     func showOn(_ layerName: String) {
         let appearance = appearance(forLayer: layerName)
         show(symbol: "square.stack.3d.up.fill", title: appearance.label,
-             subtitle: "Layer active",
+             subtitle: L("Layer active"),
              tint: appearance.tint, presentationKey: "layer:\(layerName.uppercased())")
     }
 
@@ -91,20 +93,20 @@ final class LayerHUD {
     func showOff(_ layerName: String) {
         let appearance = appearance(forLayer: "BASE")
         show(symbol: "square.stack.3d.up", title: appearance.label,
-             subtitle: "Layer active",
+             subtitle: L("Layer active"),
              tint: appearance.tint, presentationKey: "layer:BASE")
     }
 
     /// The remote connected: filled remote, green — matching the green dot in Settings.
     func showRemoteConnected() {
-        show(symbol: "appletvremote.gen4.fill", title: "Siri Remote", subtitle: "Connected",
+        show(symbol: "appletvremote.gen4.fill", title: "Siri Remote", subtitle: L("Connected"),
              tint: .systemGreen, presentationKey: "remote:connected")
     }
 
     /// The remote dropped: same subject, outline + dimmed, so the state reads at a glance without
     /// changing what the icon depicts. (There is no `appletvremote.gen4.slash` symbol to use.)
     func showRemoteDisconnected() {
-        show(symbol: "appletvremote.gen4", title: "Siri Remote", subtitle: "Disconnected",
+        show(symbol: "appletvremote.gen4", title: "Siri Remote", subtitle: L("Disconnected"),
              tint: .secondaryLabelColor, presentationKey: "remote:disconnected")
     }
 
@@ -118,12 +120,19 @@ final class LayerHUD {
             guard !self.surfaces.isEmpty else { return }
             let wasShowing = self.isShowing
             let contentIsChanging = wasShowing && self.currentPresentationKey != presentationKey
+            let isLayerRoll = contentIsChanging
+                && self.currentPresentationKey?.hasPrefix("layer:") == true
+                && presentationKey.hasPrefix("layer:")
             for surface in self.surfaces.values {
-                if contentIsChanging { self.prepareContentTransition(on: surface) }
+                if contentIsChanging {
+                    self.prepareContentTransition(on: surface, layerRoll: isLayerRoll)
+                }
                 self.applyAppearanceColors(to: surface, tint: tint, animated: contentIsChanging)
                 self.configure(surface, symbol: symbol, title: title, subtitle: subtitle, tint: tint)
-                if contentIsChanging {
-                    self.animateLayerChange(on: surface)
+                if isLayerRoll {
+                    self.animateLayerRoll(on: surface)
+                } else if contentIsChanging {
+                    self.animateStateChange(on: surface)
                 } else if !wasShowing {
                     self.animateReveal(on: surface)
                 }
@@ -264,10 +273,10 @@ final class LayerHUD {
     /// Keeping this translation at the presentation boundary avoids leaking implementation names.
     private func displayName(forLayer rawName: String) -> String {
         let name = rawName.uppercased()
-        if let ordinal = configuredOrdinals[name] { return "Layer \(ordinal)" }
-        if name == "BASE" { return "Layer 1" }
+        if let ordinal = configuredOrdinals[name] { return L("Layer %d", ordinal) }
+        if name == "BASE" { return L("Layer 1") }
         if name.hasPrefix("L"), let number = Int(name.dropFirst()), number > 0 {
-            return "Layer \(number + 1)"
+            return L("Layer %d", number + 1)
         }
         return rawName
     }
@@ -317,23 +326,47 @@ final class LayerHUD {
         surface.gradient.add(borderAnimation, forKey: "layerBorderTint")
     }
 
-    /// Core Animation snapshots the old layer contents for CATransition, so icon and typography
-    /// travel together without introducing duplicate AppKit controls or a one-frame hard swap.
-    private func prepareContentTransition(on surface: Surface) {
+    /// Core Animation snapshots the old contents for CATransition. Layer-to-layer changes always
+    /// advance vertically: the old layer rolls above the centre axis while the next one enters
+    /// from below. That direction remains constant across the final→first wrap, so the configured
+    /// layer list reads as one continuous wheel rather than reversing at its seam.
+    private func prepareContentTransition(on surface: Surface, layerRoll: Bool) {
         let timing = CAMediaTimingFunction(controlPoints: 0.22, 0.72, 0.18, 1.0)
-        for view in [surface.iconView, surface.titleLabel, surface.subtitleLabel] as [NSView] {
-            let transition = CATransition()
-            transition.type = .push
-            transition.subtype = .fromRight
-            transition.duration = 0.30
-            transition.timingFunction = timing
-            view.layer?.add(transition, forKey: "layerContent")
-        }
+        let transition = CATransition()
+        transition.type = .push
+        transition.subtype = layerRoll ? .fromBottom : .fromRight
+        transition.duration = layerRoll ? 0.34 : 0.30
+        transition.timingFunction = timing
+        surface.contentView.layer?.add(transition, forKey: "layerContent")
     }
 
-    /// A restrained compress-and-settle gives the floating card physical continuity while its
-    /// contents advance. It is short enough to keep up with rapid TV-button taps.
-    private func animateLayerChange(on surface: Surface) {
+    /// The content container's default anchor point is its centre. A small perspective X rotation
+    /// there turns the vertical push into a cylindrical-picker roll without moving or scaling the
+    /// card itself — important for a control that may animate on every layer tap.
+    private func animateLayerRoll(on surface: Surface) {
+        let pitch = CAKeyframeAnimation(keyPath: "transform")
+        pitch.values = [rollTransform(angle: 0),
+                        rollTransform(angle: -0.105),
+                        rollTransform(angle: 0.030),
+                        rollTransform(angle: 0)]
+        pitch.keyTimes = [0.0, 0.36, 0.76, 1.0]
+        pitch.duration = 0.34
+        pitch.timingFunctions = [
+            CAMediaTimingFunction(controlPoints: 0.30, 0.0, 0.34, 1.0),
+            CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.20, 1.0),
+            CAMediaTimingFunction(name: .easeOut),
+        ]
+        surface.contentView.layer?.add(pitch, forKey: "layerRollPitch")
+    }
+
+    private func rollTransform(angle: CGFloat) -> CATransform3D {
+        var transform = CATransform3DIdentity
+        transform.m34 = -1 / 520
+        return CATransform3DRotate(transform, angle, 1, 0, 0)
+    }
+
+    /// Non-layer state changes (remote connect/disconnect) keep their restrained settle response.
+    private func animateStateChange(on surface: Surface) {
         let scale = CAKeyframeAnimation(keyPath: "transform.scale")
         scale.values = [1.0, 0.965, 1.012, 1.0]
         scale.keyTimes = [0.0, 0.28, 0.72, 1.0]
@@ -437,11 +470,16 @@ final class LayerHUD {
         cardView.layer?.cornerCurve = .continuous
         cardView.layer?.masksToBounds = true
 
+        // Keep all face content in one clipping/animation container so its icon and typography
+        // move as a single wheel segment instead of three independently sliding fragments.
+        let content = NSView(frame: cardView.bounds)
+        content.wantsLayer = true
+
         let icon = NSImageView(frame: NSRect(x: 0, y: card * 0.36, width: card, height: card * 0.40))
         icon.wantsLayer = true
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.imageAlignment = .alignCenter
-        cardView.addSubview(icon)
+        content.addSubview(icon)
 
         let label = NSTextField(labelWithString: "")
         label.wantsLayer = true
@@ -450,7 +488,7 @@ final class LayerHUD {
         label.font = .systemFont(ofSize: 16, weight: .semibold)
         label.textColor = .labelColor
         label.lineBreakMode = .byTruncatingTail
-        cardView.addSubview(label)
+        content.addSubview(label)
 
         let sub = NSTextField(labelWithString: "")
         sub.wantsLayer = true
@@ -459,11 +497,14 @@ final class LayerHUD {
         sub.font = .systemFont(ofSize: 11.5, weight: .regular)
         sub.textColor = .secondaryLabelColor
         sub.lineBreakMode = .byTruncatingTail
-        cardView.addSubview(sub)
+        content.addSubview(sub)
+
+        cardView.addSubview(content)
 
         container.addSubview(cardView)
         win.contentView = container
-        return Surface(window: win, gradient: grad, cardLayer: cardView.layer!, iconView: icon,
+        return Surface(window: win, gradient: grad, cardLayer: cardView.layer!,
+                       contentView: content, iconView: icon,
                        titleLabel: label, subtitleLabel: sub)
     }
 

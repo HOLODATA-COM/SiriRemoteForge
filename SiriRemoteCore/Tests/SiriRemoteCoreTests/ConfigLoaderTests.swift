@@ -107,16 +107,18 @@ final class ConfigLoaderTests: XCTestCase {
             "{ \"settings\": { \"defaultMode\": \"g\" }, \"modes\": { \"g\": {} } }")
         XCTAssertEqual(defaults.settings.cursorSpeed, 0.6)
         XCTAssertEqual(defaults.settings.cursorDeadzone, 0.006)
-        XCTAssertFalse(defaults.settings.statusWidgetEnabled)
+        XCTAssertTrue(defaults.settings.statusWidgetEnabled)
+        XCTAssertTrue(defaults.settings.holdHUDEnabled)
 
         let overridden = try ConfigLoader.load("""
         { "settings": { "defaultMode": "g", "cursorSpeed": 0.35, "cursorDeadzone": 0.01,
-                         "statusWidgetEnabled": true },
+                         "statusWidgetEnabled": false, "holdHUDEnabled": false },
           "modes": { "g": {} } }
         """)
         XCTAssertEqual(overridden.settings.cursorSpeed, 0.35)
         XCTAssertEqual(overridden.settings.cursorDeadzone, 0.01)
-        XCTAssertTrue(overridden.settings.statusWidgetEnabled)
+        XCTAssertFalse(overridden.settings.statusWidgetEnabled)
+        XCTAssertFalse(overridden.settings.holdHUDEnabled)
     }
 
     func testOrderedLayersDefaultAndOverrides() throws {

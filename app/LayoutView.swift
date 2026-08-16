@@ -68,9 +68,9 @@ struct LayoutView: View {
             let configured = config.settings.layers[index].name?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let configured = configured, !configured.isEmpty { return configured }
-            return "Layer \(index + 1)"
+            return L("Layer %d", index + 1)
         }
-        if id == "BASE" { return "Layer 1" }
+        if id == "BASE" { return L("Layer 1") }
         return id
     }
 
@@ -124,7 +124,7 @@ struct LayoutView: View {
             HStack(spacing: 8) {
                 Image(systemName: "square.stack.3d.up.fill")
                     .font(.system(size: 11)).foregroundStyle(editLayer == nil ? .secondary : Color.accentColor)
-                Text("Editing").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Text(L("Editing")).font(.system(size: 11.5)).foregroundStyle(.secondary)
                 Picker("", selection: $editLayer) {
                     Text(layerTitle("BASE")).tag(String?.none)
                     ForEach(layerNames, id: \.self) { id in
@@ -133,8 +133,8 @@ struct LayoutView: View {
                 }
                 .labelsHidden().fixedSize()
                 Text(editLayer == nil
-                     ? "for \(mode == config.defaultModeName ? "Global" : mode)"
-                     : "→ what \(layerTitle(editLayer!)) does in \(mode == config.defaultModeName ? "Global" : mode)")
+                     ? L("for %@", mode == config.defaultModeName ? L("Global") : mode)
+                     : L("→ what %@ does in %@", layerTitle(editLayer!), mode == config.defaultModeName ? L("Global") : mode))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
             }
@@ -147,12 +147,12 @@ struct LayoutView: View {
 
     private var head: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("LAYOUT")
+            Text(L("LAYOUT"))
                 .font(.system(size: 11, weight: .heavy)).tracking(1.4)
                 .foregroundStyle(.secondary)
-            Text("What every button does")
+            Text(L("What every button does"))
                 .font(.system(size: 22, weight: .bold))
-            Text("Pick an app from the hub. Anything not set for that app falls back to Global, then to the remote's native behavior.")
+            Text(L("Pick an app from the hub. Anything not set for that app falls back to Global, then to the remote's native behavior."))
                 .font(.system(size: 12)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -171,7 +171,7 @@ struct LayoutView: View {
             return chipTitle(a, apps: apps, isDefault: false) < chipTitle(b, apps: apps, isDefault: false)
         }
         return HStack(spacing: 8) {
-            Text("APP")
+            Text(L("APP"))
                 .font(.system(size: 11, weight: .heavy)).tracking(1)
                 .foregroundStyle(.secondary)
             ForEach(modes, id: \.self) { m in
@@ -225,7 +225,7 @@ struct LayoutView: View {
                     .frame(width: 22, height: 22)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25), lineWidth: 1))
-                Text("Add…").font(.system(size: 13))
+                Text(L("Add…")).font(.system(size: 13))
             }
             .padding(.leading, 9).padding(.trailing, 13).padding(.vertical, 7)
             .foregroundStyle(.secondary)
@@ -240,25 +240,25 @@ struct LayoutView: View {
     private var addPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
             Picker("", selection: $addIsLayer) {
-                Text("App profile").tag(false)
-                Text("Layer").tag(true)
+                Text(L("App profile")).tag(false)
+                Text(L("Layer")).tag(true)
             }.pickerStyle(.segmented).labelsHidden()
             if addIsLayer {
-                TextField("Internal id (e.g. L3)", text: $addName).textFieldStyle(.roundedBorder)
-                TextField("Display name (e.g. Editing)", text: $addLayerTitle).textFieldStyle(.roundedBorder)
-                TextField("Colour (e.g. orange or #FF9500)", text: $addLayerColor)
+                TextField(L("Internal id (e.g. L3)"), text: $addName).textFieldStyle(.roundedBorder)
+                TextField(L("Display name (e.g. Editing)"), text: $addLayerTitle).textFieldStyle(.roundedBorder)
+                TextField(L("Colour (e.g. orange or #FF9500)"), text: $addLayerColor)
                     .textFieldStyle(.roundedBorder)
-                Text("Added to the end of settings.layers and inherited from Global. \(config.settings.layers.count)/10 layers used.")
+                Text(L("Added to the end of settings.layers and inherited from Global. %d/10 layers used.", config.settings.layers.count))
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 HStack(spacing: 6) {
-                    TextField("App bundle id (e.g. com.apple.Notes)", text: $addName)
+                    TextField(L("App bundle id (e.g. com.apple.Notes)"), text: $addName)
                         .textFieldStyle(.roundedBorder)
                     Button { chooseApp() } label: { Image(systemName: "folder") }
-                        .help("Choose an app — its bundle id is filled in automatically")
+                        .help(L("Choose an app — its bundle id is filled in automatically"))
                 }
                 HStack(spacing: 6) {
-                    Text("uses mode").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(L("uses mode")).font(.system(size: 11)).foregroundStyle(.secondary)
                     Picker("", selection: $addTargetMode) {
                         ForEach(sortedModeNames, id: \.self) { Text($0).tag($0) }
                     }.labelsHidden().frame(width: 130)
@@ -266,8 +266,8 @@ struct LayoutView: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") { showAdd = false }
-                Button("Create") { createAdd() }
+                Button(L("Cancel")) { showAdd = false }
+                Button(L("Create")) { createAdd() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canCreateAdd)
             }
@@ -282,7 +282,7 @@ struct LayoutView: View {
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.prompt = "Choose"
+        panel.prompt = L("Choose")
         if panel.runModal() == .OK, let url = panel.url, let id = Bundle(url: url)?.bundleIdentifier {
             addName = id
         }
@@ -321,9 +321,9 @@ struct LayoutView: View {
 
     private var legend: some View {
         HStack(spacing: 16) {
-            legendItem(.accentColor, "Custom in this app")
-            legendItem(.secondary, "Global / Inherited")
-            legendItem(Color.secondary.opacity(0.55), "System / native")
+            legendItem(.accentColor, L("Custom in this app"))
+            legendItem(.secondary, L("Global / Inherited"))
+            legendItem(Color.secondary.opacity(0.55), L("System / native"))
         }
         .font(.system(size: 11.5)).foregroundStyle(.secondary)
         .padding(.horizontal, 26).padding(.vertical, 6)
@@ -349,7 +349,7 @@ struct LayoutView: View {
                     selectedKey = key       // click a remote button → open its editor row + keep it lit
                     highlightedKey = key
                 })
-                Text("Aluminum Siri Remote (3rd gen). Click an input to edit it.")
+                Text(L("Aluminum Siri Remote (3rd gen). Click an input to edit it."))
                     .font(.system(size: 11.5)).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -368,7 +368,7 @@ struct LayoutView: View {
 
     private func groupCard(_ group: InputGroup) -> some View {
         VStack(spacing: 0) {
-            Text(group.name.uppercased())
+            Text(L(group.name).uppercased())
                 .font(.system(size: 11, weight: .heavy)).tracking(1)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -388,7 +388,7 @@ struct LayoutView: View {
         let r = resolve(keyFor(row.key))
         return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.name).font(.system(size: 13.5, weight: .medium))
+                Text(L(row.name)).font(.system(size: 13.5, weight: .medium))
                 Text(row.key).font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
@@ -442,7 +442,7 @@ struct LayoutView: View {
     // MARK: - Foot
 
     private var foot: some View {
-        Text("Click any input to edit its Tap / Double-tap / Hold actions — changes save to config.jsonc and apply live.")
+        Text(L("Click any input to edit its Tap / Double-tap / Hold actions — changes save to config.jsonc and apply live."))
             .font(.system(size: 11.5)).foregroundStyle(.secondary)
             .padding(.horizontal, 26).padding(.top, 6).padding(.bottom, 18)
     }
@@ -455,12 +455,12 @@ struct LayoutView: View {
     private func resolve(_ key: String) -> Resolved {
         if let res = config.resolveBinding(key, in: mode) {
             if res.sourceMode == mode {
-                return Resolved(label: res.action.displayLabel, kind: .custom, tag: "Custom")
+                return Resolved(label: res.action.displayLabel, kind: .custom, tag: L("Custom"))
             }
-            let tag = res.sourceMode == config.defaultModeName ? "Global" : "Inherited"
+            let tag = res.sourceMode == config.defaultModeName ? L("Global") : L("Inherited")
             return Resolved(label: res.action.displayLabel, kind: .inherited, tag: tag)
         }
-        return Resolved(label: Self.nativeLabel(key), kind: .system, tag: "System")
+        return Resolved(label: Self.nativeLabel(key), kind: .system, tag: L("System"))
     }
 
     // MARK: - Static tables
@@ -506,16 +506,16 @@ struct LayoutView: View {
     /// The remote's native behavior text for an unbound key.
     private static func nativeLabel(_ key: String) -> String {
         switch key {
-        case "select":            return "Click"
-        case "touch":             return "Move · Scroll · Swipe"
-        case "button.siri":       return "Siri"
-        case "button.playPause":  return "Play / Pause"
-        case "button.mute":       return "Mute"
-        case "button.volumeUp":   return "Volume +"
-        case "button.volumeDown": return "Volume −"
-        case "button.tv":         return "Control Center"
-        case "button.menu":       return "Back"
-        case "button.power":      return "Sleep / Wake"
+        case "select":            return L("Click")
+        case "touch":             return L("Move · Scroll · Swipe")
+        case "button.siri":       return L("Siri")
+        case "button.playPause":  return L("Play / Pause")
+        case "button.mute":       return L("Mute")
+        case "button.volumeUp":   return L("Volume +")
+        case "button.volumeDown": return L("Volume −")
+        case "button.tv":         return L("Control Center")
+        case "button.menu":       return L("Back")
+        case "button.power":      return L("Sleep / Wake")
         default:                  return "—"   // ring directions (incl. .hold), swipes, tap.two
         }
     }
@@ -523,7 +523,7 @@ struct LayoutView: View {
     // MARK: - Chip labels
 
     private func chipTitle(_ m: String, apps: [String: [String]], isDefault: Bool) -> String {
-        if isDefault { return "Global" }
+        if isDefault { return L("Global") }
         if let first = apps[m]?.first { return Self.friendlyApp(first) }
         return m.prefix(1).uppercased() + m.dropFirst()
     }
@@ -583,20 +583,20 @@ struct LayoutView: View {
     private func slots(for base: String) -> [Slot] {
         if base.hasPrefix("ring.") || base.hasPrefix("button.") {
             return [
-                Slot(slotKey: base,             label: "Tap"),
-                Slot(slotKey: base + ".double", label: "Double-tap"),
+                Slot(slotKey: base,             label: L("Tap")),
+                Slot(slotKey: base + ".double", label: L("Double-tap")),
                 // Binding this delays THIS key's double-tap by one doubleTapWindow — the double can
                 // no longer fire on its own press, because a third tap may still be coming. Nothing
                 // else is affected, and the plain tap is never delayed by either.
-                Slot(slotKey: base + ".triple", label: "Triple-tap"),
-                Slot(slotKey: base + ".hold",   label: "Hold"),
-                Slot(slotKey: base + ".hold2",  label: "Hold ··"),
-                Slot(slotKey: base + ".hold3",  label: "Hold ···"),
+                Slot(slotKey: base + ".triple", label: L("Triple-tap")),
+                Slot(slotKey: base + ".hold",   label: L("Hold")),
+                Slot(slotKey: base + ".hold2",  label: L("Hold ··")),
+                Slot(slotKey: base + ".hold3",  label: L("Hold ···")),
             ]
         }
         // Swipes / two-finger tap are one-shot gesture events — a single action, no hold/double.
         if base.hasPrefix("swipe.") || base == "tap.two" {
-            return [Slot(slotKey: base, label: "Action")]
+            return [Slot(slotKey: base, label: L("Action"))]
         }
         return []
     }
@@ -619,13 +619,13 @@ struct LayoutView: View {
         let theSlots = slots(for: base)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("EDIT").font(.system(size: 11, weight: .heavy)).tracking(1).foregroundStyle(.secondary)
-                Text(Self.inputName(base)).font(.system(size: 13, weight: .semibold))
+                Text(L("EDIT")).font(.system(size: 11, weight: .heavy)).tracking(1).foregroundStyle(.secondary)
+                Text(L(Self.inputName(base))).font(.system(size: 13, weight: .semibold))
                 if let layer = editLayer {
-                    Text("· layer \(layer)").font(.system(size: 11, weight: .semibold))
+                    Text(L("· layer %@", layer)).font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.accentColor)
                 }
-                Text("in \(mode == config.defaultModeName ? "Global" : mode)")
+                Text(L("in %@", mode == config.defaultModeName ? L("Global") : mode))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
                 Button { selectedKey = nil } label: {
@@ -636,7 +636,7 @@ struct LayoutView: View {
             .background(Color.secondary.opacity(0.06))
 
             if theSlots.isEmpty {
-                Text("This input is handled natively and isn't remappable here.")
+                Text(L("This input is handled natively and isn't remappable here."))
                     .font(.system(size: 12)).foregroundStyle(.secondary).padding(16)
             } else {
                 ForEach(Array(theSlots.enumerated()), id: \.element.slotKey) { idx, slot in
@@ -704,28 +704,28 @@ private struct ActionSlotEditor: View {
                 // destructive removal; wait for the user to type (commit on submit / focus-loss).
                 if newKind == .none || build() != nil { commit() }
             })) {
-                Text(Kind.none.rawValue).tag(Kind.none)
-                Section("Keys & media") {
-                    Text(Kind.keystroke.rawValue).tag(Kind.keystroke)
-                    Text(Kind.pushToTalk.rawValue).tag(Kind.pushToTalk)
-                    Text(Kind.repeatKey.rawValue).tag(Kind.repeatKey)
-                    Text(Kind.media.rawValue).tag(Kind.media)
-                    Text(Kind.mouse.rawValue).tag(Kind.mouse)
-                    Text(Kind.brightness.rawValue).tag(Kind.brightness)
+                Text(L(Kind.none.rawValue)).tag(Kind.none)
+                Section(L("Keys & media")) {
+                    Text(L(Kind.keystroke.rawValue)).tag(Kind.keystroke)
+                    Text(L(Kind.pushToTalk.rawValue)).tag(Kind.pushToTalk)
+                    Text(L(Kind.repeatKey.rawValue)).tag(Kind.repeatKey)
+                    Text(L(Kind.media.rawValue)).tag(Kind.media)
+                    Text(L(Kind.mouse.rawValue)).tag(Kind.mouse)
+                    Text(L(Kind.brightness.rawValue)).tag(Kind.brightness)
                 }
-                Section("Apps & web") {
-                    Text(Kind.launchApp.rawValue).tag(Kind.launchApp)
-                    Text(Kind.openURL.rawValue).tag(Kind.openURL)
+                Section(L("Apps & web")) {
+                    Text(L(Kind.launchApp.rawValue)).tag(Kind.launchApp)
+                    Text(L(Kind.openURL.rawValue)).tag(Kind.openURL)
                 }
-                Section("Scripting") {
-                    Text(Kind.shell.rawValue).tag(Kind.shell)
-                    Text(Kind.applescript.rawValue).tag(Kind.applescript)
+                Section(L("Scripting")) {
+                    Text(L(Kind.shell.rawValue)).tag(Kind.shell)
+                    Text(L(Kind.applescript.rawValue)).tag(Kind.applescript)
                 }
-                Section("Modes & layers") {
-                    Text(Kind.mode.rawValue).tag(Kind.mode)
-                    Text(Kind.layer.rawValue).tag(Kind.layer)
-                    Text(Kind.layerCycle.rawValue).tag(Kind.layerCycle)
-                    Text(Kind.space.rawValue).tag(Kind.space)
+                Section(L("Modes & layers")) {
+                    Text(L(Kind.mode.rawValue)).tag(Kind.mode)
+                    Text(L(Kind.layer.rawValue)).tag(Kind.layer)
+                    Text(L(Kind.layerCycle.rawValue)).tag(Kind.layerCycle)
+                    Text(L(Kind.space.rawValue)).tag(Kind.space)
                 }
             }
             .labelsHidden().frame(width: 128)
@@ -740,15 +740,15 @@ private struct ActionSlotEditor: View {
     @ViewBuilder private var param: some View {
         switch kind {
         case .none:
-            Text("does nothing").foregroundStyle(.secondary).font(.system(size: 12))
+            Text(L("does nothing")).foregroundStyle(.secondary).font(.system(size: 12))
         case .fullscreen:
-            Text("toggles the frontmost window").foregroundStyle(.secondary).font(.system(size: 12))
+            Text(L("toggles the frontmost window")).foregroundStyle(.secondary).font(.system(size: 12))
         case .minimize:
-            Text("minimises the frontmost window").foregroundStyle(.secondary).font(.system(size: 12))
+            Text(L("minimises the frontmost window")).foregroundStyle(.secondary).font(.system(size: 12))
         case .closeWindow:
-            Text("presses the window's red close button").foregroundStyle(.secondary).font(.system(size: 12))
+            Text(L("presses the window's red close button")).foregroundStyle(.secondary).font(.system(size: 12))
         case .appWheel:
-            Text("opens the radial launcher (settings.appWheel)").foregroundStyle(.secondary).font(.system(size: 12))
+            Text(L("opens the radial launcher (settings.appWheel)")).foregroundStyle(.secondary).font(.system(size: 12))
         case .keystroke, .repeatKey:
             TextField("cmd+shift+t", text: $text).textFieldStyle(.roundedBorder).frame(width: 170)
                 .focused($focused).onSubmit(commit)
@@ -756,17 +756,17 @@ private struct ActionSlotEditor: View {
             HStack(spacing: 8) {
                 TextField("cmd+shift+t", text: $text).textFieldStyle(.roundedBorder).frame(width: 170)
                     .focused($focused).onSubmit(commit)
-                Text("fires on press AND on release")
+                Text(L("fires on press AND on release"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
         case .shell:
-            TextField("shell command", text: $text).textFieldStyle(.roundedBorder).frame(width: 240)
+            TextField(L("shell command"), text: $text).textFieldStyle(.roundedBorder).frame(width: 240)
                 .focused($focused).onSubmit(commit)
         case .applescript:
-            TextField("AppleScript source", text: $text).textFieldStyle(.roundedBorder).frame(width: 240)
+            TextField(L("AppleScript source"), text: $text).textFieldStyle(.roundedBorder).frame(width: 240)
                 .focused($focused).onSubmit(commit)
         case .launchApp:
-            TextField("App name (e.g. Safari)", text: $text).textFieldStyle(.roundedBorder).frame(width: 200)
+            TextField(L("App name (e.g. Safari)"), text: $text).textFieldStyle(.roundedBorder).frame(width: 200)
                 .focused($focused).onSubmit(commit)
         case .openURL:
             TextField("https://…", text: $text).textFieldStyle(.roundedBorder).frame(width: 220)
@@ -778,11 +778,11 @@ private struct ActionSlotEditor: View {
         case .layer:
             HStack(spacing: 8) {
                 enumPicker(modeNames.isEmpty ? ["global"] : modeNames)
-                Text("tap = toggle · hold = momentary")
+                Text(L("tap = toggle · hold = momentary"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
         case .layerCycle:
-            Text("cycles settings.layers in order")
+            Text(L("cycles settings.layers in order"))
                 .font(.system(size: 10)).foregroundStyle(.secondary)
         case .brightness:
             HStack(spacing: 6) {

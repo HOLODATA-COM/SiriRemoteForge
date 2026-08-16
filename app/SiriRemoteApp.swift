@@ -22,6 +22,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var cursorHighlighter: CursorHighlighter?
     private var layerHUD: LayerHUD?
     private var statusWidget: StatusWidgetController?
+    private var holdAnimationGallery: HoldAnimationGalleryController?
     private var appWheel: AppWheelController?
     private var dragIndicator: DragIndicator?
     private var touchMonitor: TouchMonitorWindowController?
@@ -35,6 +36,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var builtinMicFeeder: BuiltinMicFeeder?
     /// Mirror of the tune flag — the shake→highlight path is gated on this (see `applyTune`).
     private var findCursorEnabled = true
+    /// Independent from the compact status widget: users may keep the always-on Layer card while
+    /// disabling the larger release-to-select progress HUD (or vice versa).
+    private var holdHUDEnabled = true
 
     // Config engine (SiriRemoteCore)
     private var controller: Controller?
@@ -44,9 +48,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Settings UI
     private var settingsModel: SettingsModel?
     private var settingsWindow: SettingsWindowController?
+    private var setupWizard: SetupWizardController?
     /// Debounces persisting Tuning-tab slider changes back into config.jsonc.
     private var tunePersistWork: DispatchWorkItem?
     
+    /// Show (or re-show) the first-run setup guide. Used both by the first-launch trigger and the
+    /// menu bar's "Setup Guide" item.
+    func showSetupWizard() {
+        let wizard = setupWizard ?? SetupWizardController { [weak self] in self?.setupWizard = nil }
+        setupWizard = wizard
+        wizard.show()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🚀 HyperVibe starting...")
 
@@ -60,6 +73,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let idx = CommandLine.arguments.firstIndex(of: "--snapshot-layout"),
            idx + 1 < CommandLine.arguments.count {
             LayoutSnapshot.renderAndExit(to: CommandLine.arguments[idx + 1])
+            return
+        }
+
+        // Isolated motion-design lab: nine long-press candidates run against the same timeline in a
+        // comparison window. It deliberately returns before remote/HID/audio setup, so designers
+        // can leave it open beside the production app without affecting input or rcd.
+        if CommandLine.arguments.contains("--preview-hold-animations") {
+            // The isolated motion lab is a real foreground design surface. Production continues
+            // to use accessory mode; only this explicit preview command receives a Dock/window
+            // presence so macOS always moves it onto the user's active Space.
+            NSApp.setActivationPolicy(.regular)
+            let gallery = HoldAnimationGalleryController()
+            holdAnimationGallery = gallery
+            gallery.show()
             return
         }
 
@@ -101,14 +128,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let widget = StatusWidgetController(layers: config.settings.layers, enabled: true)
             statusWidget = widget
             widget.setLayer(nil, animated: false)
+            widget.setConnected(true, animated: false)
             let slowVisualQC = CommandLine.arguments.contains("--test-status-widget-long")
             let beat: TimeInterval = slowVisualQC ? 10.0 : 3.0
             // Pin one requested face for deterministic pixel inspection. This exists because
             // screenshot permission round-trips can outlast the production sub-second dwell.
             if let stateIndex = CommandLine.arguments.firstIndex(of: "--test-status-widget-state"),
                stateIndex + 1 < CommandLine.arguments.count {
-                let dwell: TimeInterval = slowVisualQC ? 55.0 : 12.0
-                switch CommandLine.arguments[stateIndex + 1].lowercased() {
+                let requestedState = CommandLine.arguments[stateIndex + 1].lowercased()
+                let dwell: TimeInterval = slowVisualQC
+                    ? (requestedState == "back-hold" ? 260.0 : 55.0)
+                    : 12.0
+                switch requestedState {
                 case "music":
                     widget.showApplication(bundleID: "com.apple.Music", duration: dwell)
                 case "next":
@@ -117,10 +148,190 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                             presentation: .init(label: "Next Track", icon: nil)),
                                       durationOverride: dwell)
                 case "voice":
-                    widget.showAction(.init(key: "button.siri.hold2",
-                                            action: .pushToTalk(keys: "rctrl+rcmd+ropt"),
-                                            presentation: .init(label: "Voice Input", icon: "waveform")),
-                                      durationOverride: dwell)
+                    let action = Controller.HandledAction(
+                        key: "button.siri.hold2",
+                        action: .pushToTalk(keys: "rctrl+rcmd+ropt"),
+                        presentation: .init(label: "Voice Input", icon: "waveform")
+                    )
+                    widget.beginContinuousAction(action)
+                    let voiceStartedAt = CACurrentMediaTime()
+                    Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0,
+                                         repeats: true) { timer in
+                        let elapsed = CACurrentMediaTime() - voiceStartedAt
+                        guard elapsed < dwell else {
+                            timer.invalidate()
+                            widget.endContinuousAction(key: action.key)
+                            return
+                        }
+                        // Deterministic design-QC signal: changing amplitude, a five-semitone
+                        // intonation arc, brief unvoiced consonants, and independent brightness.
+                        // Production always supplies these values from real PCM analysis.
+                        let syllable = max(0, sin(elapsed * 5.2))
+                        let level = Float(0.10 + 0.68 * syllable)
+                        let semitones = 5.0 * sin(elapsed * 0.92)
+                        let pitch = Float(170.0 * pow(2.0, semitones / 12.0))
+                        let consonant = sin(elapsed * 3.1) > 0.78
+                        widget.updateVoiceMeter(.init(
+                            level: level,
+                            pitchHz: consonant ? 0 : pitch,
+                            pitchConfidence: consonant ? 0.18 : 0.94,
+                            brightness: Float(0.16 + 0.72 * max(0, sin(elapsed * 2.3)))
+                        ))
+                    }
+                case "voice-transition":
+                    // Two complete idle ↔ Voice hand-offs with deterministic audio features.
+                    // The one-second lead-in makes entry, release and re-entry easy to capture as
+                    // video without enabling HID discovery, microphone capture or input emission.
+                    let action = Controller.HandledAction(
+                        key: "button.siri.hold2",
+                        action: .pushToTalk(keys: "rctrl+rcmd+ropt"),
+                        presentation: .init(label: "Voice Input", icon: "waveform")
+                    )
+                    let runVoice: (TimeInterval) -> Void = { offset in
+                        DispatchQueue.main.asyncAfter(deadline: .now() + offset) {
+                            widget.beginContinuousAction(action)
+                            let voiceStartedAt = CACurrentMediaTime()
+                            Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0,
+                                                 repeats: true) { timer in
+                                let elapsed = CACurrentMediaTime() - voiceStartedAt
+                                guard elapsed < 2.2 else {
+                                    timer.invalidate()
+                                    widget.endContinuousAction(key: action.key)
+                                    return
+                                }
+                                let syllable = max(0, sin(elapsed * 5.2))
+                                let semitones = 5.0 * sin(elapsed * 0.92)
+                                widget.updateVoiceMeter(.init(
+                                    level: Float(0.10 + 0.68 * syllable),
+                                    pitchHz: Float(170.0 * pow(2.0, semitones / 12.0)),
+                                    pitchConfidence: 0.94,
+                                    brightness: Float(0.16 + 0.72
+                                        * max(0, sin(elapsed * 2.3)))
+                                ))
+                            }
+                        }
+                    }
+                    runVoice(15.0)
+                    runVoice(30.0)
+                case "hold":
+                    let startedAt = CACurrentMediaTime()
+                    widget.beginHold(
+                        startedAt: startedAt,
+                        base: (key: "button.nextTrack",
+                               action: .media(key: "next"),
+                               presentation: .init(label: "Next Track", icon: nil)),
+                        stages: [
+                            (threshold: 0.8, key: "button.siri.hold",
+                             action: .pushToTalk(keys: "rctrl+rcmd+ropt"),
+                             presentation: .init(label: "Voice Input", icon: "waveform"),
+                            isCancel: false)
+                        ]
+                    )
+                case "back-hold":
+                    // The production Back ladder: visual lead-in at 0.18 s, then Close, Quit and
+                    // the implicit cancellation escape hatch. It exercises every optical hand-off
+                    // without starting HID discovery or sending any action to the foreground app.
+                    let runBackHold = {
+                        let startedAt = CACurrentMediaTime()
+                        widget.beginHold(
+                            startedAt: startedAt,
+                            base: (key: "button.menu", action: .keystroke(keys: "delete"),
+                                   presentation: .init(label: "Delete", icon: "delete.left.fill")),
+                            stages: [
+                                (threshold: 0.5, key: "button.menu.taphold",
+                                 action: .keystroke(keys: "cmd+w"),
+                                 presentation: .init(label: "Close Window",
+                                                     icon: "xmark.circle.fill"),
+                                 isCancel: false),
+                                (threshold: 1.2, key: "button.menu.taphold2",
+                                 action: .keystroke(keys: "cmd+q"),
+                                 presentation: .init(label: "Quit App", icon: "power"),
+                                 isCancel: false),
+                                (threshold: 2.2, key: "button.menu.taphold.cancel",
+                                 action: .mouse(op: "click"),
+                                 presentation: .init(
+                                    label: "Cancel",
+                                    icon: "arrow.uturn.backward.circle.fill"
+                                 ),
+                                 isCancel: true),
+                            ]
+                        )
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.75) {
+                            widget.endHold(firedIndex: 3)
+                        }
+                    }
+                    let startOffsets: [TimeInterval] = slowVisualQC
+                        ? Array(stride(from: 6.0, through: 240.0, by: 6.0))
+                        : [0]
+                    for offset in startOffsets {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + offset,
+                                                      execute: runBackHold)
+                    }
+                case "tap":
+                    let startedAt = CACurrentMediaTime()
+                    widget.beginHold(
+                        startedAt: startedAt,
+                        base: (key: "button.playPause",
+                               action: .media(key: "playpause"), presentation: nil),
+                        stages: [
+                            (threshold: 0.8, key: "button.playPause.hold",
+                             action: .media(key: "next"), presentation: nil, isCancel: false)
+                        ]
+                    )
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        widget.endHold(firedIndex: 0)
+                    }
+                case "layer-tap":
+                    let startedAt = CACurrentMediaTime()
+                    widget.beginHold(
+                        startedAt: startedAt,
+                        base: (key: "button.tv", action: .layerCycle, presentation: nil),
+                        stages: [
+                            (threshold: 0.8, key: "button.tv.hold",
+                             action: .appWheel, presentation: nil, isCancel: false)
+                        ]
+                    )
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        // Same order as the production layer release: state changes first, then the
+                        // hold lifecycle ends. The status face must be Layer 2, never “Next Layer”.
+                        widget.setLayer("L1")
+                        widget.endHold(firedIndex: 0)
+                    }
+                case "select-hold":
+                    let startedAt = CACurrentMediaTime()
+                    widget.beginHold(
+                        startedAt: startedAt,
+                        base: (key: "button.select", action: .mouse(op: "click"),
+                               presentation: .init(label: "Click", icon: "cursorarrow.click")),
+                        stages: [
+                            (threshold: 0.5, key: "button.select.hold",
+                             action: .mouse(op: "click"),
+                             presentation: .init(label: "Drag", icon: "hand.draw.fill"),
+                             isCancel: false)
+                        ]
+                    )
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.68) {
+                        widget.endHold(firedIndex: 1)
+                    }
+                case "select-preview":
+                    // Release after the 0.18 s visual lead-in but before sticky drag's unchanged
+                    // 0.5 s input threshold. The vessel must be partially filled and the result
+                    // must still resolve to Click, never Drag.
+                    let startedAt = CACurrentMediaTime()
+                    widget.beginHold(
+                        startedAt: startedAt,
+                        base: (key: "button.select", action: .mouse(op: "click"),
+                               presentation: .init(label: "Click", icon: "cursorarrow.click")),
+                        stages: [
+                            (threshold: 0.5, key: "button.select.hold",
+                             action: .mouse(op: "click"),
+                             presentation: .init(label: "Drag", icon: "hand.draw.fill"),
+                             isCancel: false)
+                        ]
+                    )
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                        widget.endHold(firedIndex: 0)
+                    }
                 case "layer2":
                     widget.setLayer("L1")
                 default:
@@ -166,6 +377,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Headless visual QC for Select's exact timing contract: the water vessel appears at the
+        // 0.18 s visual lead-in and rises toward the unchanged 0.5 s sticky-drag boundary. This
+        // path creates only the HUD; it never starts HID detection or emits a mouse event.
+        if CommandLine.arguments.contains("--test-select-hold-hud") {
+            NSApp.setActivationPolicy(.accessory)
+            let hud = HoldProgressHUD()
+            holdHUD = hud
+            hud.prewarm()
+            func face(_ action: Action, _ presentation: Config.Presentation) -> HoldProgressHUD.Face {
+                let visual = ActionVisual.resolve(action, presentation)
+                return .init(label: visual.label, image: visual.image,
+                             iconOnly: visual.iconOnly)
+            }
+            let click = face(.mouse(op: "click"),
+                             .init(label: "Click", icon: "cursorarrow.click"))
+            let drag = face(.mouse(op: "click"),
+                            .init(label: "Drag", icon: "hand.draw.fill"))
+            hud.begin(base: click, stages: [.init(threshold: 0.5, face: drag)])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.62) { hud.end(firedIndex: 1) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { exit(0) }
+            return
+        }
+
         // Headless visual QC: `--test-hold-hud` runs a hold from 0 through every stage so the
         // progress card can be screenshotted, then exits — without seizing the remote. Uses real
         // actions so the icon resolution (app icons vs SF Symbols) is exercised too.
@@ -173,6 +407,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.setActivationPolicy(.accessory)
             let hud = HoldProgressHUD()
             holdHUD = hud
+            hud.prewarm()
             // Covers all three presentations: a shell `open -a` (real app icon), a `launch`
             // (real app icon), and a command given an explicit label + symbol in config.
             let demo: [(TimeInterval, Action, Config.Presentation?)] = [
@@ -307,9 +542,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsWin = SettingsWindowController(model: model)
         settingsWindow = settingsWin
         menuBarManager.onOpenSettings = { [weak settingsWin] in settingsWin?.show() }
+        menuBarManager.onOpenSetup = { [weak self] in self?.showSetupWizard() }
         // Convenience: `./HyperVibe --settings` pops the window open immediately.
         if CommandLine.arguments.contains("--settings") {
             DispatchQueue.main.async { settingsWin.show() }
+        }
+
+        // First launch: run the full setup guide (language → permissions → pairing → startup). It
+        // shows once (persisted) and can be reopened any time from the menu bar.
+        if !UserDefaults.standard.bool(forKey: SetupWizardController.completedKey) {
+            DispatchQueue.main.async { [weak self] in self?.showSetupWizard() }
         }
 
         // The launcher is summoned by an ordinary `.appWheel` hold binding, so it arrives here as an
@@ -397,7 +639,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // tick per bound stage and the name of the action that runs if it is released right now.
         let progress = HoldProgressHUD()
         holdHUD = progress
-        remoteInputHandler?.onHoldBegan = { startedAt, base, stages in
+        progress.prewarm()
+        remoteInputHandler?.onHoldBegan = { [weak self, weak persistentStatus] startedAt, base, stages in
+            persistentStatus?.beginHold(startedAt: startedAt, base: base, stages: stages)
+            guard self?.holdHUDEnabled == true else { return }
             func face(_ action: Action, _ p: Config.Presentation?) -> HoldProgressHUD.Face {
                 let v = ActionVisual.resolve(action, p)
                 return .init(label: v.label, image: v.image, iconOnly: v.iconOnly)
@@ -410,7 +655,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                return .init(threshold: $0.threshold, face: f)
                            })
         }
-        remoteInputHandler?.onHoldEnded = { firedIndex in progress.end(firedIndex: firedIndex) }
+        remoteInputHandler?.onHoldEnded = { [weak persistentStatus] firedIndex in
+            // `end` is safe even when the large HUD was disabled; calling it unconditionally also
+            // dismisses a HUD immediately if the user switches that preference off mid-hold.
+            progress.end(firedIndex: firedIndex)
+            persistentStatus?.endHold(firedIndex: firedIndex)
+        }
+        remoteInputHandler?.onContinuousActionBegan = { [weak self, weak persistentStatus] handled in
+            if case .pushToTalk = handled.action {
+                self?.builtinMicFeeder?.setVoiceMetering(true)
+            }
+            persistentStatus?.beginContinuousAction(handled)
+        }
+        remoteInputHandler?.onContinuousActionEnded = { [weak self, weak persistentStatus] key in
+            self?.builtinMicFeeder?.setVoiceMetering(false)
+            persistentStatus?.endContinuousAction(key: key)
+        }
 
         let dragBadge = DragIndicator()
         dragIndicator = dragBadge
@@ -464,6 +724,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.remoteInputHandler?.setRemoteDevice(device)
                 self.menuBarManager.updateConnectionStatus(connected: connected)
                 self.settingsModel?.connected = connected
+                RemoteConnection.shared.update(connected)
 
                 // HUD only on an actual transition. The remote publishes several HID interfaces and
                 // this callback can run more than once per physical connect, which would otherwise
@@ -472,6 +733,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.lastConnectedState = connected
                     connected ? self.layerHUD?.showRemoteConnected()
                               : self.layerHUD?.showRemoteDisconnected()
+                    // The always-on status widget rests on a "not connected" face and plays a
+                    // brief connect animation on the connect edge (setConnected de-duplicates the
+                    // several per-interface callbacks internally).
+                    self.statusWidget?.setConnected(connected)
 
                     // Reconnecting is itself a wake signal: the remote sleeps after a few minutes
                     // idle, so a screen dimmed with the Power button is typically found the next
@@ -512,11 +777,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         // Virtual-mic fallback (Phase 2b): keep the "Siri Remote Mic" device fed with the
-        // Mac's BUILT-IN microphone whenever the Siri button isn't held. Demand-gated on the
-        // plug-in's consumers notification — the mic is only hot while some app actually has
-        // the virtual device open. See BuiltinMicFeeder.swift for the feedback-avoidance rules.
-        builtinMicFeeder = BuiltinMicFeeder()
-        builtinMicFeeder?.start()
+        // Mac's BUILT-IN microphone whenever the virtual device needs fallback audio. The same
+        // pinned AUHAL briefly supplies a real level meter while Voice is physically held; no
+        // second/default-input capture path is opened, so the virtual mic cannot feed back.
+        let micFeeder = BuiltinMicFeeder()
+        micFeeder.setMeterLevelHandler { [weak persistentStatus] sample in
+            persistentStatus?.updateVoiceMeter(sample)
+        }
+        builtinMicFeeder = micFeeder
+        micFeeder.start()
 
         // Start media key interceptor
         mediaKeyInterceptor = MediaKeyInterceptor()
@@ -548,6 +817,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         remoteInputHandler?.spacesModeWindow = t.spacesModeWindow
         findCursorEnabled = t.findCursorEnabled
         statusWidget?.setEnabled(t.statusWidgetEnabled)
+        let wasShowingHoldHUD = holdHUDEnabled
+        holdHUDEnabled = t.holdHUDEnabled
+        if wasShowingHoldHUD, !t.holdHUDEnabled { holdHUD?.end(firedIndex: 0) }
         focusFollower?.enabled = t.focusFollowsCursor
     }
 
@@ -584,6 +856,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             s.spacesModeWindow = t.spacesModeWindow
             s.findCursorEnabled = t.findCursorEnabled
             s.statusWidgetEnabled = t.statusWidgetEnabled
+            s.holdHUDEnabled = t.holdHUDEnabled
             s.focusFollowsCursor = t.focusFollowsCursor
             s.circularScroll = t.circularConfig
         }

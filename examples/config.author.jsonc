@@ -47,6 +47,7 @@
     "spacesModeWindow": 5.0,     // Spaces Mode: seconds without a left/right switch before it disarms
     "findCursorEnabled": true,   // shake the cursor (rapid back-and-forth) to flash a locate highlight
     "statusWidgetEnabled": true, // always show Layer at rest; animate the current app/action briefly
+    "holdHUDEnabled": true,      // larger release-to-select progress HUD
     // Rest the cursor on an app that FILLS a display (fullscreen or just maximised) and it becomes
     // frontmost, so keystroke bindings land where you are pointing. Only apps covering >=90% of a
     // display: raising one of those changes nothing you can see, whereas doing this to overlapping

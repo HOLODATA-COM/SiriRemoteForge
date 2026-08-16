@@ -201,11 +201,21 @@ final class HoldProgressHUD: NSObject {
     private var confirming = false           // on release: freeze the choice, fill to the brim, fade
     private var fadeToken = 0
     private let ease: CGFloat = 0.28
-
-    /// Held presses shorter than this never show anything — otherwise every ordinary tap flashes it.
+    /// Visual lead-in only. The input state machine still owns the real hold thresholds (for
+    /// example Select starts sticky drag at 0.5 s). Showing the vessel at 0.18 s leaves enough
+    /// visible runway to watch its water rise toward that boundary; releasing before a real stage
+    /// still resolves as the ordinary tap, and releasing before this delay shows no HUD at all.
     private let appearDelay: TimeInterval = 0.18
 
     // MARK: - Public API
+
+    /// Compile the Metal pipeline and create the hidden per-display surfaces before the first
+    /// physical hold. Lazy setup inside `reveal()` can cost several frames (or much more on a cold
+    /// shader cache), turning a nominal 0.18 s lead-in into visibly late feedback. Prewarming never
+    /// orders a window and never starts a display link; it only moves that one-time work to startup.
+    func prewarm() {
+        onMain { [weak self] in self?.syncSurfaces() }
+    }
 
     func begin(startedAt: CFTimeInterval = CACurrentMediaTime(), base: Face?, stages: [Stage]) {
         // Preserve the caller's display order for equal thresholds. Swift's `sorted` is not stable,
@@ -233,9 +243,14 @@ final class HoldProgressHUD: NSObject {
             self.envelope = 1.5                              // enters a touch livelier, as if just poured
             self.makeWaves()
 
+            // The water HUD intentionally begins BEFORE the first action boundary. It is only a
+            // progress preview: stage/face selection below still compares the caller's immutable
+            // `startedAt` against the real configured thresholds. `end` cancels this work item, so
+            // an ordinary quick tap under 0.18 s never flashes the vessel.
+            let revealDelay = max(0, startedAt + self.appearDelay - CACurrentMediaTime())
             let work = DispatchWorkItem { [weak self] in self?.reveal() }
             self.appearWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + self.appearDelay, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + revealDelay, execute: work)
         }
     }
 
