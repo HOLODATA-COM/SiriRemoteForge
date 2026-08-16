@@ -38,6 +38,11 @@ app/BuiltinMicRingWriter.o
 # only after the release audit passes.
 dist/build/
 
+# Private hardware development. The firmware source, device-specific factory images, eFuse
+# summaries, and hardware logs are intentionally kept outside the public repository.
+firmware/
+dist/hardware/
+
 # Local product-film production files and rendered media.
 # This directory contains narration, animation sources, app artwork, and final exports.
 # It is intentionally local-only and must never be published with the open-source repository.

@@ -69,11 +69,14 @@ enum ActionVisual {
     }
 
     private static func fallbackLabel(_ action: Action) -> String {
+        if case .pushToTalk = action { return L("Voice Input") }
         // An `open -a` shell command reads far better as the app's name than as the raw command.
         if case .shell(let command) = action, let app = appName(fromOpenCommand: command) {
             return app
         }
-        return action.displayLabel
+        // The engine's English display label is used as the translation key so HUD action names
+        // localize at the presentation boundary without coupling SiriRemoteCore to the UI language.
+        return L(action.displayLabel)
     }
 
     // MARK: - App icons

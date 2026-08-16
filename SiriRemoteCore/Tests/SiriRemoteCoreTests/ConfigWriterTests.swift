@@ -114,6 +114,7 @@ final class ConfigWriterTests: XCTestCase {
         "spacesModeWindow": 5.0,
         "findCursorEnabled": true,
         "statusWidgetEnabled": true,
+        "holdHUDEnabled": true,
         "layers": [
           { "id": "BASE", "name": "Layer 1", "color": "green" },
           { "id": "L1", "name": "Layer 2", "color": "#0A84FF" }

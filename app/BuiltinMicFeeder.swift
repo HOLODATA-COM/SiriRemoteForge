@@ -19,11 +19,12 @@
 //     not AVAudioEngine: its inputNode starts life on the default input and its setup
 //     enumerates the whole device graph — third-party aggregate devices included.
 //
-//  2. The mic is only hot while some app actually has the virtual device open. The
-//     plug-in broadcasts the Darwin notification au.holodata.SiriRemoteMic.consumers
-//     with state = number of clients running IO (the same demand signal srm_captured
-//     uses); we capture on state >= 1 and stop the moment it returns to 0. Privacy and
-//     power: an idle Mac never has its microphone open because of this feature.
+//  2. The mic is only hot while some app actually has the virtual device open OR while
+//     the user is physically holding the configured Voice button and its live waveform
+//     needs a level. The plug-in broadcasts the Darwin notification
+//     au.holodata.SiriRemoteMic.consumers with state = number of clients running IO (the
+//     same demand signal srm_captured uses). Both demands stop immediately on their
+//     release edge; an idle Mac never has its microphone open because of this feature.
 //
 //  3. NOTHING here runs on the main thread. HAL property calls are synchronous mach
 //     IPC into coreaudiod and can stall for minutes when it is busy — observed live,
@@ -35,6 +36,18 @@ import AVFoundation
 import AudioToolbox
 import CoreAudio
 import Foundation
+
+/// One display-cadence acoustic snapshot. `level` is the existing perceptual envelope; the
+/// remaining values enrich only the compact Voice visual and never feed transcription/audio IO.
+struct VoiceMeterSample {
+    let level: Float
+    let pitchHz: Float
+    let pitchConfidence: Float
+    let brightness: Float
+
+    static let silence = VoiceMeterSample(level: 0, pitchHz: 0,
+                                          pitchConfidence: 0, brightness: 0)
+}
 
 final class BuiltinMicFeeder {
 
@@ -49,9 +62,24 @@ final class BuiltinMicFeeder {
 
     private var notifyToken: Int32?
     private var demandActive = false
+    private var meteringActive = false
     private var capturing = false
     private var context: CaptureContext?      // live AUHAL + RT buffers (built once, reused)
     private var deviceListeners: [(AudioDeviceID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+    private var meterTimer: DispatchSourceTimer?
+    private var meterLevelHandler: ((VoiceMeterSample) -> Void)?
+    private var smoothedMeterLevel: Float = 0
+    private var builtinMeterWriteIndex: UInt64?
+    private var remoteMeterWriteIndex: UInt64?
+    private var remoteMeterLastAdvanceNanoseconds: UInt64 = 0
+
+    // The waveform is a status signal, not a studio level meter. Keep room noise visually quiet,
+    // but retain enough lower-range travel for an ordinary speaking voice. The old 0.72 exponent
+    // expanded noise; the first corrective 1.60 curve over-compressed quieter speech.
+    private static let meterFloorDBFS: Float = -52
+    private static let meterCeilingDBFS: Float = -14
+    private static let meterCurve: Float = 1.15
+    private static let meterVisualGate: Float = 0.012
 
     // MARK: - Lifecycle (called from the main thread by AppDelegate)
 
@@ -94,7 +122,40 @@ final class BuiltinMicFeeder {
             notifyToken = nil
         }
         srm_builtin_ring_set_active(0)
-        queue.async { [weak self] in self?.stopCapture() }   // best-effort graceful stop
+        srm_builtin_meter_store_power(0)
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.meteringActive = false
+            self.stopMeterTimer(publishSilence: true)
+            self.stopCapture()
+        }   // best-effort graceful stop
+    }
+
+    /// Receives a perceptually-normalised 0...1 level at ~30 Hz while Voice metering is
+    /// active. Delivery happens on the feeder queue; UI clients must hop to the main thread.
+    func setMeterLevelHandler(_ handler: @escaping (VoiceMeterSample) -> Void) {
+        queue.async { [weak self] in self?.meterLevelHandler = handler }
+    }
+
+    /// Adds/removes the compact Voice widget's capture demand. This deliberately reuses the
+    /// already pinned built-in-mic AUHAL instead of opening the default input through a second
+    /// AVAudioEngine, which could accidentally select our own virtual microphone.
+    func setVoiceMetering(_ active: Bool) {
+        queue.async { [weak self] in
+            guard let self = self, active != self.meteringActive else { return }
+            self.meteringActive = active
+            if active {
+                srm_builtin_meter_store_power(0)
+                self.smoothedMeterLevel = 0
+                self.builtinMeterWriteIndex = nil
+                self.remoteMeterWriteIndex = nil
+                self.remoteMeterLastAdvanceNanoseconds = 0
+                self.startMeterTimer()
+            } else {
+                self.stopMeterTimer(publishSilence: true)
+            }
+            self.reconcileCaptureDemand()
+        }
     }
 
     // MARK: - Demand gating (feeder queue)
@@ -106,7 +167,116 @@ final class BuiltinMicFeeder {
         // No stop debounce (srm_captured keeps one for its heavy pipeline): stopping the
         // AU is cheap, the plug-in crossfades over blips, and stopping immediately is
         // the privacy-maximal reading of "only hot while in use".
-        demandActive ? startCapture() : stopCapture()
+        reconcileCaptureDemand()
+    }
+
+    private var captureWanted: Bool { demandActive || meteringActive }
+
+    private func reconcileCaptureDemand() {
+        captureWanted ? startCapture() : stopCapture()
+    }
+
+    // MARK: - Voice waveform metering (feeder queue)
+
+    private func startMeterTimer() {
+        guard meterTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(33),
+                       leeway: .milliseconds(5))
+        timer.setEventHandler { [weak self] in self?.publishMeterLevel() }
+        meterTimer = timer
+        timer.resume()
+    }
+
+    private func stopMeterTimer(publishSilence: Bool) {
+        meterTimer?.cancel()
+        meterTimer = nil
+        smoothedMeterLevel = 0
+        srm_builtin_meter_store_power(0)
+        builtinMeterWriteIndex = nil
+        if publishSilence { meterLevelHandler?(.silence) }
+    }
+
+    private func publishMeterLevel() {
+        guard meteringActive else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        var power = max(0, srm_builtin_meter_load_power())
+        var pitchHz: Float = 0
+        var pitchConfidence: Float = 0
+        var brightness: Float = 0
+
+        // The built-in PCM already lands in its 48 kHz fallback ring. Analyse that published
+        // window here on the feeder queue, never in the real-time render callback. The first
+        // index only establishes freshness so stale samples from a prior capture cannot colour
+        // the first frame of a new Voice hold.
+        var builtinFeatures = SRMMeterFeatures()
+        var builtinWriteIndex: UInt64 = 0
+        var builtinProducerActive: UInt32 = 0
+        if srm_builtin_meter_snapshot(&builtinFeatures, &builtinWriteIndex,
+                                      &builtinProducerActive) == 0,
+           builtinProducerActive != 0 {
+            if let previous = builtinMeterWriteIndex, builtinWriteIndex != previous {
+                pitchHz = max(0, builtinFeatures.pitchHz)
+                pitchConfidence = min(1, max(0, builtinFeatures.pitchConfidence))
+                brightness = min(1, max(0, builtinFeatures.brightness))
+            }
+            builtinMeterWriteIndex = builtinWriteIndex
+        } else {
+            builtinMeterWriteIndex = nil
+        }
+
+        // Match the virtual device's source priority: decoded Siri Remote voice owns the
+        // waveform while its ring is actively advancing; otherwise use the built-in fallback.
+        // The first observation only establishes a baseline — it does not make old backlog look
+        // fresh. One subsequent writeIndex change proves that live remote audio is arriving.
+        var remoteFeatures = SRMMeterFeatures()
+        var remoteWriteIndex: UInt64 = 0
+        var remoteProducerActive: UInt32 = 0
+        if srm_remote_meter_snapshot(&remoteFeatures, &remoteWriteIndex,
+                                     &remoteProducerActive) == 0,
+           remoteProducerActive != 0 {
+            if let previous = remoteMeterWriteIndex, remoteWriteIndex != previous {
+                remoteMeterLastAdvanceNanoseconds = now
+            }
+            remoteMeterWriteIndex = remoteWriteIndex
+            if remoteMeterLastAdvanceNanoseconds != 0,
+               now >= remoteMeterLastAdvanceNanoseconds,
+               now - remoteMeterLastAdvanceNanoseconds <= 150_000_000 {
+                power = max(0, remoteFeatures.meanSquarePower)
+                pitchHz = max(0, remoteFeatures.pitchHz)
+                pitchConfidence = min(1, max(0, remoteFeatures.pitchConfidence))
+                brightness = min(1, max(0, remoteFeatures.brightness))
+            }
+        } else {
+            remoteMeterWriteIndex = nil
+            remoteMeterLastAdvanceNanoseconds = 0
+        }
+
+        let target = Self.displayMeterLevel(meanSquarePower: power)
+
+        // Reject one-frame clicks while following normal speech promptly enough to feel live. The
+        // gentler release preserves word shape without making every syllable pump the whole card.
+        let response: Float = target > smoothedMeterLevel ? 0.40 : 0.13
+        smoothedMeterLevel += (target - smoothedMeterLevel) * response
+        meterLevelHandler?(VoiceMeterSample(
+            level: min(1, max(0, smoothedMeterLevel)),
+            pitchHz: pitchHz.isFinite ? pitchHz : 0,
+            pitchConfidence: pitchConfidence.isFinite ? pitchConfidence : 0,
+            brightness: brightness.isFinite ? brightness : 0
+        ))
+    }
+
+    /// Convert mean-square power to the compact waveform's perceptual 0...1 range. This affects
+    /// display only; neither the shared audio rings nor the samples served by the virtual mic are
+    /// changed. `meterVisualGate` removes the tiny residual after the curved noise floor, then
+    /// renormalises the remaining travel so genuinely loud speech can still reach full height.
+    private static func displayMeterLevel(meanSquarePower power: Float) -> Float {
+        guard power.isFinite, power > 0 else { return 0 }
+        let decibels = 10 * log10(max(power, 0.000_000_000_001))
+        let span = meterCeilingDBFS - meterFloorDBFS
+        let linear = min(1, max(0, (decibels - meterFloorDBFS) / span))
+        let curved = pow(linear, meterCurve)
+        return min(1, max(0, (curved - meterVisualGate) / (1 - meterVisualGate)))
     }
 
     // MARK: - Capture (feeder queue)
@@ -127,7 +297,7 @@ final class BuiltinMicFeeder {
                         print("🎙️ mic permission denied — built-in-mic fallback stays silent")
                         return
                     }
-                    if self.demandActive && !self.capturing { self.beginCapture() }
+                    if self.captureWanted && !self.capturing { self.beginCapture() }
                 }
             }
         default:
@@ -321,7 +491,7 @@ final class BuiltinMicFeeder {
                 self.teardownContext()
                 self.queue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     guard let self = self else { return }
-                    if self.demandActive { self.startCapture() }
+                    if self.captureWanted { self.startCapture() }
                 }
             }
             var mutableAddress = address
@@ -450,6 +620,14 @@ private func builtinMicRenderProc(inRefCon: UnsafeMutableRawPointer,
     let status = AudioUnitRender(context.unit, ioActionFlags, inTimeStamp, 1,
                                  inNumberFrames, &context.bufferList)
     guard status == noErr else { return status }
+
+    var meanSquarePower: Float = 0
+    for frame in 0..<frames {
+        let sample = context.storage[frame]
+        meanSquarePower += sample * sample
+    }
+    meanSquarePower /= Float(frames)
+    srm_builtin_meter_store_power(meanSquarePower.isFinite ? meanSquarePower : 0)
 
     if let resampler = context.resampler {
         resampler.process(context.storage, frames) { resampled, count in

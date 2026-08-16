@@ -178,7 +178,7 @@ struct AppWheelView: View {
                 if let failed = model.failure {
                     // The pick isn't installed — say so where the name would have been, in a warning
                     // tint, rather than collapsing as if nothing was pressed.
-                    Text("『\(failed)』未安装")
+                    Text(L("%@ is not installed", failed))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.orange)
                 } else if let i = model.highlighted, i < model.apps.count {
@@ -186,7 +186,7 @@ struct AppWheelView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
                 } else {
-                    Text("移到某个方向")
+                    Text(L("Move in a direction"))
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.75))
                 }

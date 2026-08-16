@@ -28,6 +28,7 @@ struct TuneSettings: Codable, Equatable {
     var spacesModeWindow: Double
     var findCursorEnabled: Bool
     var statusWidgetEnabled: Bool
+    var holdHUDEnabled: Bool
     var focusFollowsCursor: Bool
     var circularEnabled: Bool
     var circularMinRadius: Double
@@ -49,7 +50,7 @@ struct TuneSettings: Codable, Equatable {
         clickRiseThreshold: 0.1, pressMoveMax: 0.025,
         holdThreshold: 0.5, holdThreshold2: 1.0, holdThreshold3: 1.6, holdCancelGrace: 1.0,
         doubleTapWindow: 0.3, spacesModeWindow: 5.0, findCursorEnabled: true,
-        statusWidgetEnabled: false,
+        statusWidgetEnabled: true, holdHUDEnabled: true,
         focusFollowsCursor: false,
         circularEnabled: true,
         circularMinRadius: 0.35, circularStartThreshold: 0.35, circularPixelsPerRadian: 75,
@@ -78,6 +79,7 @@ struct TuneSettings: Codable, Equatable {
         spacesModeWindow = s.spacesModeWindow
         findCursorEnabled = s.findCursorEnabled
         statusWidgetEnabled = s.statusWidgetEnabled
+        holdHUDEnabled = s.holdHUDEnabled
         focusFollowsCursor = s.focusFollowsCursor
         circularEnabled = s.circularScroll.enabled
         circularMinRadius = s.circularScroll.minRadius
@@ -99,6 +101,7 @@ struct TuneSettings: Codable, Equatable {
          holdCancelGrace: Double,
          doubleTapWindow: Double,
          spacesModeWindow: Double, findCursorEnabled: Bool, statusWidgetEnabled: Bool,
+         holdHUDEnabled: Bool,
          focusFollowsCursor: Bool,
          circularEnabled: Bool,
          circularMinRadius: Double, circularStartThreshold: Double, circularPixelsPerRadian: Double,
@@ -124,6 +127,7 @@ struct TuneSettings: Codable, Equatable {
         self.spacesModeWindow = spacesModeWindow
         self.findCursorEnabled = findCursorEnabled
         self.statusWidgetEnabled = statusWidgetEnabled
+        self.holdHUDEnabled = holdHUDEnabled
         self.focusFollowsCursor = focusFollowsCursor
         self.circularEnabled = circularEnabled
         self.circularMinRadius = circularMinRadius

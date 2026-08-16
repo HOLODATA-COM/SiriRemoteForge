@@ -52,10 +52,12 @@ public struct Config: Equatable {
         public var spacesModeWindow: Double
         // Find-my-cursor: show a highlight when the cursor is shaken (rapid back-and-forth).
         public var findCursorEnabled: Bool
-        /// Optional always-on desktop widget that shows the active layer while idle and briefly
-        /// animates the most recent app/action. Off by default so upgrades never add new chrome
-        /// until the user asks for it.
+        /// Always-on desktop widget that shows the active layer while idle and briefly animates
+        /// the current app/action. Users can turn it off, but it is part of the default experience.
         public var statusWidgetEnabled: Bool
+        /// The larger release-to-select progress HUD shown while a button is held. Kept separate
+        /// from the compact always-on widget so either presentation can be disabled independently.
+        public var holdHUDEnabled: Bool
         /// Focus the app under the cursor, but ONLY when its window is fullscreen — a fullscreen
         /// window owns its whole Space, so focusing it raises nothing and disturbs no window
         /// stack. Off by default: it changes which app receives input.
@@ -287,7 +289,7 @@ extension Config.Settings: Decodable {
         case doubleTapWindow
         case spacesModeWindow
         case findCursorEnabled
-        case statusWidgetEnabled
+        case statusWidgetEnabled, holdHUDEnabled
         case focusFollowsCursor
     }
     public init(from decoder: Decoder) throws {
@@ -323,7 +325,8 @@ extension Config.Settings: Decodable {
         doubleTapWindow = try c.decodeIfPresent(Double.self, forKey: .doubleTapWindow) ?? 0.3
         spacesModeWindow = try c.decodeIfPresent(Double.self, forKey: .spacesModeWindow) ?? 5.0
         findCursorEnabled = try c.decodeIfPresent(Bool.self, forKey: .findCursorEnabled) ?? true
-        statusWidgetEnabled = try c.decodeIfPresent(Bool.self, forKey: .statusWidgetEnabled) ?? false
+        statusWidgetEnabled = try c.decodeIfPresent(Bool.self, forKey: .statusWidgetEnabled) ?? true
+        holdHUDEnabled = try c.decodeIfPresent(Bool.self, forKey: .holdHUDEnabled) ?? true
         focusFollowsCursor = try c.decodeIfPresent(Bool.self, forKey: .focusFollowsCursor) ?? false
     }
 
@@ -430,6 +433,7 @@ extension Config.Settings: Encodable {
         try c.encode(spacesModeWindow, forKey: .spacesModeWindow)
         try c.encode(findCursorEnabled, forKey: .findCursorEnabled)
         try c.encode(statusWidgetEnabled, forKey: .statusWidgetEnabled)
+        try c.encode(holdHUDEnabled, forKey: .holdHUDEnabled)
         try c.encode(focusFollowsCursor, forKey: .focusFollowsCursor)
     }
 }
