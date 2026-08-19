@@ -43,6 +43,7 @@ SWIFT_FILES=(
     "SettingsWindow.swift"
     "SetupWizard.swift"
     "RemoteView.swift"
+    "ShortcutRecorder.swift"
     "LayoutView.swift"
     # --- Config engine integration (this fork) ---
     "KeyMap.swift"
@@ -62,6 +63,7 @@ SWIFT_FILES=(
     "../SiriRemoteCore/Sources/SiriRemoteCore/Events.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/CircularScroll.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/HoldTiming.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/ShortcutCodec.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/MappingEngine.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/Controller.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/Placeholder.swift"

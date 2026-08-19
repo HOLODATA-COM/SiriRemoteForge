@@ -89,6 +89,7 @@ private enum ActionLabel {
         case "ctrl", "control", "lctrl", "lcontrol", "rctrl", "rcontrol":         return "⌃"
         case "opt", "option", "alt", "lopt", "loption", "lalt", "ropt", "roption", "ralt": return "⌥"
         case "shift", "lshift", "rshift":                                         return "⇧"
+        case "fn", "function":                                                    return "fn"
         default: return nil
         }
     }
@@ -104,11 +105,17 @@ private enum ActionLabel {
         case "space":             return "Space"
         case "tab":               return "⇥"
         case "delete", "backspace": return "⌫"
+        case "forwarddelete":      return "⌦"
+        case "help":               return "Help"
         case "home":              return "Home"
         case "end":               return "End"
         case "pageup":            return "Page ↑"
         case "pagedown":          return "Page ↓"
-        default:                  return t.count == 1 ? t.uppercased() : t
+        default:
+            if t.hasPrefix("f"), let number = Int(t.dropFirst()), (1...20).contains(number) {
+                return t.uppercased()
+            }
+            return t.count == 1 ? t.uppercased() : t
         }
     }
 

@@ -66,6 +66,8 @@ enum KeyMap {
             return (CGKeyCode(kVK_Shift), flag(.maskShift, 0x2))          // NX_DEVICELSHIFTKEYMASK
         case "rshift":
             return (CGKeyCode(kVK_RightShift), flag(.maskShift, 0x4))      // NX_DEVICERSHIFTKEYMASK
+        case "fn", "function":
+            return (CGKeyCode(kVK_Function), .maskSecondaryFn)
         default:
             return nil
         }
@@ -105,8 +107,14 @@ enum KeyMap {
         "enter": kVK_Return, "return": kVK_Return,
         "space": kVK_Space, "tab": kVK_Tab,
         "delete": kVK_Delete, "backspace": kVK_Delete,
+        "forwarddelete": kVK_ForwardDelete, "help": kVK_Help,
         "home": kVK_Home, "end": kVK_End,
         "pageup": kVK_PageUp, "pagedown": kVK_PageDown,
+        "f1": kVK_F1, "f2": kVK_F2, "f3": kVK_F3, "f4": kVK_F4,
+        "f5": kVK_F5, "f6": kVK_F6, "f7": kVK_F7, "f8": kVK_F8,
+        "f9": kVK_F9, "f10": kVK_F10, "f11": kVK_F11, "f12": kVK_F12,
+        "f13": kVK_F13, "f14": kVK_F14, "f15": kVK_F15, "f16": kVK_F16,
+        "f17": kVK_F17, "f18": kVK_F18, "f19": kVK_F19, "f20": kVK_F20,
         // Punctuation. Braces { } are Shift + [ ] — write them as e.g. "cmd+shift+[".
         "[": kVK_ANSI_LeftBracket, "]": kVK_ANSI_RightBracket,
         "-": kVK_ANSI_Minus, "=": kVK_ANSI_Equal, "`": kVK_ANSI_Grave,

@@ -20,6 +20,7 @@ struct SettingsView: View {
     /// Mirrors the real SMAppService registration — never assume the toggle succeeded.
     @State private var launchAtLogin = LaunchAtLogin.state.isOn
     @State private var launchAtLoginError: String?
+    @State private var saveErrorDetail: String?
 
     /// Drives live relocalization: changing the language republishes, re-running this view's body
     /// (so every `L(...)` in the Tuning tab re-evaluates) and re-`.id()`-ing the Layout subview.
@@ -45,9 +46,19 @@ struct SettingsView: View {
                 if let config = model.config {
                     LayoutView(config: config, onSave: { newConfig in
                         // Atomic, validated write → hot-reloads → refreshes model.config. A failed
-                        // write (invalid config / permissions) leaves the old file intact; log it.
-                        do { try ConfigStore.save(newConfig) }
-                        catch { NSLog("[siriRemote] config save failed: \(error)") }
+                        // write leaves the old file intact and is now visible in the shared header.
+                        model.noteConfigSavePending(from: .layout)
+                        do {
+                            try ConfigStore.save(newConfig)
+                            // Publish the exact written snapshot immediately instead of waiting for
+                            // the file watcher. A pending debounced Tuning save will now merge onto
+                            // this Layout edit and cannot accidentally restore the previous layout.
+                            model.config = newConfig
+                            model.noteConfigSaveSucceeded(from: .layout)
+                        } catch {
+                            model.noteConfigSaveFailed(error, from: .layout)
+                            NSLog("[siriRemote] config save failed: \(error)")
+                        }
                     })
                     // LayoutView is a separate view struct with unchanged inputs, so re-running this
                     // body would not re-run its body; keying it on the language forces relocalization.
@@ -75,6 +86,14 @@ struct SettingsView: View {
         // The remote can connect/disconnect while the window is open; refresh so battery and the
         // interface map do not go stale.
         .onChange(of: model.connected) { _ in device.refresh() }
+        .alert(L("Couldn't save changes"), isPresented: Binding(
+            get: { saveErrorDetail != nil },
+            set: { if !$0 { saveErrorDetail = nil } }
+        )) {
+            Button("OK", role: .cancel) { saveErrorDetail = nil }
+        } message: {
+            Text(saveErrorDetail ?? "")
+        }
     }
 
     // MARK: - Desktop workspace
@@ -372,11 +391,50 @@ struct SettingsView: View {
             Spacer()
             tabPicker
             Spacer()
+            saveStatusPill
             statusPill
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 18)
         .background(.bar)
+    }
+
+    private var saveStatusPill: some View {
+        let appearance: (icon: String, label: String, color: Color, error: String?)
+        switch model.configSaveState {
+        case .saving:
+            appearance = ("arrow.triangle.2.circlepath", L("Saving…"), .secondary, nil)
+        case .saved:
+            appearance = ("checkmark.circle.fill", L("Auto-saved"), .green, nil)
+        case .failed(let message):
+            appearance = ("exclamationmark.triangle.fill", L("Save failed"), .red, message)
+        }
+
+        return Button {
+            if let message = appearance.error { saveErrorDetail = message }
+        } label: {
+            HStack(spacing: 6) {
+                if model.configSaveState == .saving {
+                    ProgressView().controlSize(.mini).frame(width: 11, height: 11)
+                } else {
+                    Image(systemName: appearance.icon)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(appearance.color)
+                }
+                Text(appearance.label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(appearance.error == nil ? .secondary : appearance.color)
+                    .lineLimit(1)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Capsule().fill(
+                appearance.error == nil ? Color.secondary.opacity(0.10) : Color.red.opacity(0.10)
+            ))
+        }
+        .buttonStyle(.plain)
+        .help(appearance.error ?? L("GUI changes are saved automatically to config.jsonc."))
+        .animation(.easeInOut(duration: 0.2), value: model.configSaveState)
     }
 
     private var statusPill: some View {

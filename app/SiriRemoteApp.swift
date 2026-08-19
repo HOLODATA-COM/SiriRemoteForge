@@ -68,6 +68,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // is the only way to script it.
         LaunchAtLogin.handleCommandLineIfNeeded()
 
+        // Headless AppKit bridge verification: consumes synthetic local NSEvents only, never opens
+        // the remote or posts a system keyboard event.
+        if CommandLine.arguments.contains("--test-shortcut-recorder") {
+            exit(ShortcutRecorderSelfTest.run() ? 0 : 1)
+        }
+
         // Headless self-QC: `--snapshot-layout <path>` renders the Layout settings view to a PNG
         // and exits, without seizing the remote or opening a window.
         if let idx = CommandLine.arguments.firstIndex(of: "--snapshot-layout"),
@@ -533,8 +539,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Tuning: config.jsonc's `settings` block is the source of truth — always seed from it (a
         // stale saved tune no longer shadows config edits), and re-seed on every hot-reload below.
         let model = SettingsModel(initial: TuneSettings(seed: config.settings))
-        model.onApply = { [weak self] tune in
+        model.onApply = { [weak self, weak model] tune in
             self?.applyTune(tune)
+            model?.noteConfigSavePending(from: .tuning)
             self?.scheduleTunePersist()   // write slider values back into config.jsonc (debounced)
         }
         model.config = config   // publish the live config to the Settings "Layout" tab
@@ -861,9 +868,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             s.circularScroll = t.circularConfig
         }
         // No change (e.g. this fire came from a hot-reload re-seed) → don't churn the file.
-        guard merged != base else { return }
-        do { try ConfigStore.save(merged) }
-        catch { NSLog("[siriRemote] tune persist failed: \(error)") }
+        guard merged != base else {
+            model.noteConfigSaveSucceeded(from: .tuning)
+            return
+        }
+        do {
+            try ConfigStore.save(merged)
+            // Keep the in-memory base in lockstep with the atomic write. This prevents a Layout
+            // edit made before the file watcher callback from being based on stale tuning values.
+            model.config = merged
+            model.noteConfigSaveSucceeded(from: .tuning)
+        } catch {
+            model.noteConfigSaveFailed(error, from: .tuning)
+            NSLog("[siriRemote] tune persist failed: \(error)")
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
