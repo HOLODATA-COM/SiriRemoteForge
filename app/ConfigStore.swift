@@ -39,7 +39,16 @@ enum ConfigStore {
     /// The ConfigFileWatcher WILL fire after this write and hot-reload — but it reloads the exact
     /// same values, and nothing in the reload path (`SiriRemoteApp`'s watcher closure) writes the
     /// file, so there is no save→reload→save loop.
-    enum SaveError: Error { case existingFileUnparseable }
+    enum SaveError: LocalizedError {
+        case existingFileUnparseable
+
+        var errorDescription: String? {
+            switch self {
+            case .existingFileUnparseable:
+                return L("The existing config.jsonc contains an error. Fix that file before saving GUI changes so its bindings are not overwritten.")
+            }
+        }
+    }
 
     static func save(_ config: Config) throws {
         let text = try ConfigWriter.serialize(config)

@@ -569,7 +569,9 @@ curve (`accelMin`/`accelMax`/`accelLowSpeed`/`accelHighSpeed`), `clickRiseThresh
 `holdThreshold`/`holdThreshold2`/`holdThreshold3`, `doubleTapWindow`, `spacesModeWindow`,
 `findCursorEnabled`, `statusWidgetEnabled`, `holdHUDEnabled`, `focusFollowsCursor`, and `circularScroll { enabled, minRadius, startThreshold,
 pixelsPerRadian, scrollEase, invert }`. Config is the single source of truth — Tuning-tab slider changes are written
-back to `config.jsonc` (debounced).
+back to `config.jsonc` after a short debounce. The window header always shows **Saving…**,
+**Auto-saved**, or **Save failed**; click the failure pill for the exact error. Layout edits use the
+same status indicator and save as soon as a picker changes or an editor commits.
 
 ---
 
@@ -592,7 +594,11 @@ back to `config.jsonc` (debounced).
   to its mapping; the selected input stays highlighted), an **app hub** to pick the mode, an
   **Editing: base / layer** selector (the layer × app grid), and a grouped input→action list with
   Custom / Inherited / System tags. Click any input to open a docked editor for its
-  Tap / Double-tap / Hold·· / Hold··· slots, written straight to `config.jsonc`.
+  Tap / Double-tap / Hold·· / Hold··· slots, written straight to `config.jsonc`. Keystroke,
+  Push-to-talk, and Repeat Key actions have a native recorder: click it and press the real keyboard
+  combination. It records left/right modifiers, standalone modifier chords, **Fn**, and F1–F20;
+  Escape cancels and an unmodified Delete clears. The pencil button keeps advanced text entry
+  available for pasting or hand-authoring a chord.
 
 ---
 

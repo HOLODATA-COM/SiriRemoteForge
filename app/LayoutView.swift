@@ -442,7 +442,7 @@ struct LayoutView: View {
     // MARK: - Foot
 
     private var foot: some View {
-        Text(L("Click any input to edit its Tap / Double-tap / Hold actions — changes save to config.jsonc and apply live."))
+        Text(L("Click any input to edit its Tap / Double-tap / Hold actions — changes auto-save to config.jsonc and apply live."))
             .font(.system(size: 11.5)).foregroundStyle(.secondary)
             .padding(.horizontal, 26).padding(.top, 6).padding(.bottom, 18)
     }
@@ -750,12 +750,10 @@ private struct ActionSlotEditor: View {
         case .appWheel:
             Text(L("opens the radial launcher (settings.appWheel)")).foregroundStyle(.secondary).font(.system(size: 12))
         case .keystroke, .repeatKey:
-            TextField("cmd+shift+t", text: $text).textFieldStyle(.roundedBorder).frame(width: 170)
-                .focused($focused).onSubmit(commit)
+            ShortcutRecorderField(value: text, onCommit: commitShortcut)
         case .pushToTalk:
             HStack(spacing: 8) {
-                TextField("cmd+shift+t", text: $text).textFieldStyle(.roundedBorder).frame(width: 170)
-                    .focused($focused).onSubmit(commit)
+                ShortcutRecorderField(value: text, onCommit: commitShortcut)
                 Text(L("fires on press AND on release"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
@@ -841,6 +839,25 @@ private struct ActionSlotEditor: View {
     }
 
     private func commit() { onChange(build()) }
+
+    /// Recorder commits are already normalized by ShortcutCodec. Build directly from the captured
+    /// value instead of waiting for a SwiftUI @State render pass, otherwise a fast recording could
+    /// save the previous text even though the field visibly showed the new chord.
+    private func commitShortcut(_ shortcut: String) {
+        text = shortcut
+        switch kind {
+        case .keystroke:
+            onChange(shortcut.isEmpty ? nil : .keystroke(keys: shortcut))
+        case .pushToTalk:
+            onChange(shortcut.isEmpty ? nil : .pushToTalk(keys: shortcut))
+        case .repeatKey:
+            onChange(shortcut.isEmpty
+                     ? nil
+                     : .repeatKey(keys: shortcut, delay: repDelay, interval: repInterval))
+        default:
+            break
+        }
+    }
 
     private func build() -> Action? {
         switch kind {

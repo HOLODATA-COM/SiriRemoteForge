@@ -11,6 +11,8 @@ final class LayoutSupportTests: XCTestCase {
         XCTAssertEqual(Action.keystroke(keys: "up").displayLabel, "↑")
         XCTAssertEqual(Action.keystroke(keys: "cmd+shift+[").displayLabel, "⌘⇧[")
         XCTAssertEqual(Action.keystroke(keys: "enter").displayLabel, "⏎")
+        XCTAssertEqual(Action.keystroke(keys: "fn+f12").displayLabel, "fnF12")
+        XCTAssertEqual(Action.keystroke(keys: "forwarddelete").displayLabel, "⌦")
         // Modifier-only chord (hyperkey) → just the modifier symbols, no key.
         XCTAssertEqual(Action.keystroke(keys: "rctrl+rcmd+ropt").displayLabel, "⌃⌘⌥")
     }
