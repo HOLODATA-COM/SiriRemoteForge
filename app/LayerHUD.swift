@@ -110,6 +110,23 @@ final class LayerHUD {
              tint: .secondaryLabelColor, presentationKey: "remote:disconnected")
     }
 
+    /// Immediately remove every mirrored HUD surface when its JSON visibility setting is disabled.
+    /// A pending fade completion is invalidated so it cannot mutate a later re-enabled presentation.
+    func hideImmediately() {
+        onMain { [weak self] in
+            guard let self = self else { return }
+            self.hideTimer?.invalidate()
+            self.hideTimer = nil
+            self.fadeToken += 1
+            self.isShowing = false
+            self.currentPresentationKey = nil
+            for surface in self.surfaces.values {
+                surface.window.alphaValue = 0
+                surface.window.orderOut(nil)
+            }
+        }
+    }
+
     // MARK: - Show / hide
 
     private func show(symbol: String, title: String, subtitle: String, tint: NSColor,

@@ -113,8 +113,14 @@ final class ConfigWriterTests: XCTestCase {
         "doubleTapWindow": 0.2,
         "spacesModeWindow": 5.0,
         "findCursorEnabled": true,
+        "interfaceLanguage": "zh",
+        "launchAtLoginEnabled": true,
+        "menuBarIconEnabled": false,
         "statusWidgetEnabled": true,
+        "layerHUDEnabled": false,
         "holdHUDEnabled": true,
+        "dragIndicatorEnabled": false,
+        "showSetupWizardOnFirstLaunch": false,
         "layers": [
           { "id": "BASE", "name": "Layer 1", "color": "green" },
           { "id": "L1", "name": "Layer 2", "color": "#0A84FF" }

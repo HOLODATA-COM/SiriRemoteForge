@@ -31,6 +31,10 @@ final class SettingsModel: ObservableObject {
     /// Live connection status shown in the window header.
     @Published var connected: Bool = false
 
+    /// Applying `settings.launchAtLoginEnabled` crosses into SMAppService and can be rejected by
+    /// macOS. Keep the requested JSON value intact while surfacing the real OS error in Settings.
+    @Published var launchAtLoginError: String?
+
     /// Remote battery/firmware/interfaces. Owned here rather than by the SwiftUI view so the
     /// window controller can start and stop the polling: the settings window is cached with
     /// `isReleasedWhenClosed = false`, so closing it only orders it out and SwiftUI's

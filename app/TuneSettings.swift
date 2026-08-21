@@ -2,8 +2,8 @@
 //  TuneSettings.swift
 //  HyperVibe (settings UI)
 //
-//  UI-managed tuning values (cursor + circular scroll). Persisted in UserDefaults so the
-//  Settings window is the source of truth; seeded once from the config file's settings.
+//  UI-managed tuning and interface preferences. Every value is seeded from and written back to
+//  config.jsonc; machine-local state such as window placement is intentionally not represented here.
 //
 
 import Foundation
@@ -27,8 +27,14 @@ struct TuneSettings: Codable, Equatable {
     var doubleTapWindow: Double
     var spacesModeWindow: Double
     var findCursorEnabled: Bool
+    var interfaceLanguage: String
+    var launchAtLoginEnabled: Bool
+    var menuBarIconEnabled: Bool
     var statusWidgetEnabled: Bool
+    var layerHUDEnabled: Bool
     var holdHUDEnabled: Bool
+    var dragIndicatorEnabled: Bool
+    var showSetupWizardOnFirstLaunch: Bool
     var focusFollowsCursor: Bool
     var circularEnabled: Bool
     var circularMinRadius: Double
@@ -50,7 +56,9 @@ struct TuneSettings: Codable, Equatable {
         clickRiseThreshold: 0.1, pressMoveMax: 0.025,
         holdThreshold: 0.5, holdThreshold2: 1.0, holdThreshold3: 1.6, holdCancelGrace: 1.0,
         doubleTapWindow: 0.3, spacesModeWindow: 5.0, findCursorEnabled: true,
-        statusWidgetEnabled: true, holdHUDEnabled: true,
+        interfaceLanguage: "en", launchAtLoginEnabled: false, menuBarIconEnabled: true,
+        statusWidgetEnabled: true, layerHUDEnabled: true, holdHUDEnabled: true,
+        dragIndicatorEnabled: true, showSetupWizardOnFirstLaunch: true,
         focusFollowsCursor: false,
         circularEnabled: true,
         circularMinRadius: 0.35, circularStartThreshold: 0.35, circularPixelsPerRadian: 75,
@@ -59,7 +67,7 @@ struct TuneSettings: Codable, Equatable {
         circularAccelLowSpeed: 0.010, circularAccelHighSpeed: 0.070,
         circularAccelCurve: 1.0)
 
-    /// Seed from the config file's settings block (used on first run only).
+    /// Seed from the config file's settings block at launch and on every hot reload.
     init(seed s: Config.Settings) {
         cursorSpeed = s.cursorSpeed
         cursorDeadzone = s.cursorDeadzone
@@ -78,8 +86,17 @@ struct TuneSettings: Codable, Equatable {
         doubleTapWindow = s.doubleTapWindow
         spacesModeWindow = s.spacesModeWindow
         findCursorEnabled = s.findCursorEnabled
+        // Optional core fields are migration shims. Old installs keep their locally selected
+        // language and existing SMAppService registration; the next GUI save writes both choices
+        // explicitly, after which JSON is the only source of truth.
+        interfaceLanguage = s.interfaceLanguage ?? Loc.shared.language.rawValue
+        launchAtLoginEnabled = s.launchAtLoginEnabled ?? LaunchAtLogin.state.isOn
+        menuBarIconEnabled = s.menuBarIconEnabled
         statusWidgetEnabled = s.statusWidgetEnabled
+        layerHUDEnabled = s.layerHUDEnabled
         holdHUDEnabled = s.holdHUDEnabled
+        dragIndicatorEnabled = s.dragIndicatorEnabled
+        showSetupWizardOnFirstLaunch = s.showSetupWizardOnFirstLaunch
         focusFollowsCursor = s.focusFollowsCursor
         circularEnabled = s.circularScroll.enabled
         circularMinRadius = s.circularScroll.minRadius
@@ -100,8 +117,10 @@ struct TuneSettings: Codable, Equatable {
          pressMoveMax: Double, holdThreshold: Double, holdThreshold2: Double, holdThreshold3: Double,
          holdCancelGrace: Double,
          doubleTapWindow: Double,
-         spacesModeWindow: Double, findCursorEnabled: Bool, statusWidgetEnabled: Bool,
-         holdHUDEnabled: Bool,
+         spacesModeWindow: Double, findCursorEnabled: Bool,
+         interfaceLanguage: String, launchAtLoginEnabled: Bool, menuBarIconEnabled: Bool,
+         statusWidgetEnabled: Bool, layerHUDEnabled: Bool, holdHUDEnabled: Bool,
+         dragIndicatorEnabled: Bool, showSetupWizardOnFirstLaunch: Bool,
          focusFollowsCursor: Bool,
          circularEnabled: Bool,
          circularMinRadius: Double, circularStartThreshold: Double, circularPixelsPerRadian: Double,
@@ -126,8 +145,14 @@ struct TuneSettings: Codable, Equatable {
         self.doubleTapWindow = doubleTapWindow
         self.spacesModeWindow = spacesModeWindow
         self.findCursorEnabled = findCursorEnabled
+        self.interfaceLanguage = interfaceLanguage
+        self.launchAtLoginEnabled = launchAtLoginEnabled
+        self.menuBarIconEnabled = menuBarIconEnabled
         self.statusWidgetEnabled = statusWidgetEnabled
+        self.layerHUDEnabled = layerHUDEnabled
         self.holdHUDEnabled = holdHUDEnabled
+        self.dragIndicatorEnabled = dragIndicatorEnabled
+        self.showSetupWizardOnFirstLaunch = showSetupWizardOnFirstLaunch
         self.focusFollowsCursor = focusFollowsCursor
         self.circularEnabled = circularEnabled
         self.circularMinRadius = circularMinRadius

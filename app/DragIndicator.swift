@@ -56,6 +56,18 @@ final class DragIndicator {
         }
     }
 
+    /// Preference changes are not interaction feedback: remove the badge immediately rather than
+    /// leaving its normal release fade visible after `dragIndicatorEnabled` becomes false.
+    func hideImmediately() {
+        onMain { [weak self] in
+            guard let self = self else { return }
+            self.followTimer?.invalidate()
+            self.followTimer = nil
+            self.window?.alphaValue = 0
+            self.window?.orderOut(nil)
+        }
+    }
+
     // MARK: - Following
 
     private func startFollowing() {

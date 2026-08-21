@@ -107,18 +107,44 @@ final class ConfigLoaderTests: XCTestCase {
             "{ \"settings\": { \"defaultMode\": \"g\" }, \"modes\": { \"g\": {} } }")
         XCTAssertEqual(defaults.settings.cursorSpeed, 0.6)
         XCTAssertEqual(defaults.settings.cursorDeadzone, 0.006)
+        XCTAssertNil(defaults.settings.interfaceLanguage)
+        XCTAssertNil(defaults.settings.launchAtLoginEnabled)
+        XCTAssertTrue(defaults.settings.menuBarIconEnabled)
         XCTAssertTrue(defaults.settings.statusWidgetEnabled)
+        XCTAssertTrue(defaults.settings.layerHUDEnabled)
         XCTAssertTrue(defaults.settings.holdHUDEnabled)
+        XCTAssertTrue(defaults.settings.dragIndicatorEnabled)
+        XCTAssertTrue(defaults.settings.showSetupWizardOnFirstLaunch)
 
         let overridden = try ConfigLoader.load("""
         { "settings": { "defaultMode": "g", "cursorSpeed": 0.35, "cursorDeadzone": 0.01,
-                         "statusWidgetEnabled": false, "holdHUDEnabled": false },
+                         "interfaceLanguage": "zh", "launchAtLoginEnabled": true,
+                         "menuBarIconEnabled": false, "statusWidgetEnabled": false,
+                         "layerHUDEnabled": false, "holdHUDEnabled": false,
+                         "dragIndicatorEnabled": false,
+                         "showSetupWizardOnFirstLaunch": false },
           "modes": { "g": {} } }
         """)
         XCTAssertEqual(overridden.settings.cursorSpeed, 0.35)
         XCTAssertEqual(overridden.settings.cursorDeadzone, 0.01)
+        XCTAssertEqual(overridden.settings.interfaceLanguage, "zh")
+        XCTAssertEqual(overridden.settings.launchAtLoginEnabled, true)
+        XCTAssertFalse(overridden.settings.menuBarIconEnabled)
         XCTAssertFalse(overridden.settings.statusWidgetEnabled)
+        XCTAssertFalse(overridden.settings.layerHUDEnabled)
         XCTAssertFalse(overridden.settings.holdHUDEnabled)
+        XCTAssertFalse(overridden.settings.dragIndicatorEnabled)
+        XCTAssertFalse(overridden.settings.showSetupWizardOnFirstLaunch)
+    }
+
+    func testInterfaceLanguageRejectsUnknownValue() {
+        XCTAssertThrowsError(try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "interfaceLanguage": "fr" },
+          "modes": { "g": {} } }
+        """)) { error in
+            XCTAssertEqual(error as? ConfigError,
+                           .validation("settings.interfaceLanguage must be 'en' or 'zh' (got 'fr')"))
+        }
     }
 
     func testOrderedLayersDefaultAndOverrides() throws {

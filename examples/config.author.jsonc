@@ -46,8 +46,14 @@
                                  // press, so holding the first tap longer no longer eats the window.
     "spacesModeWindow": 5.0,     // Spaces Mode: seconds without a left/right switch before it disarms
     "findCursorEnabled": true,   // shake the cursor (rapid back-and-forth) to flash a locate highlight
+    "interfaceLanguage": "zh",  // en | zh; all app surfaces update live
+    "launchAtLoginEnabled": true,
+    "menuBarIconEnabled": true,
     "statusWidgetEnabled": true, // always show Layer at rest; animate the current app/action briefly
+    "layerHUDEnabled": true,      // layer-switch + remote connect/disconnect cards
     "holdHUDEnabled": true,      // larger release-to-select progress HUD
+    "dragIndicatorEnabled": true,
+    "showSetupWizardOnFirstLaunch": true,
     // Rest the cursor on an app that FILLS a display (fullscreen or just maximised) and it becomes
     // frontmost, so keystroke bindings land where you are pointing. Only apps covering >=90% of a
     // display: raising one of those changes nothing you can see, whereas doing this to overlapping

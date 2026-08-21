@@ -278,6 +278,24 @@ final class HoldProgressHUD: NSObject {
         }
     }
 
+    /// Remove the HUD synchronously from the next main-loop turn when its JSON switch is disabled.
+    /// Unlike `end`, this is a preference change, not a gesture result, so it must not play the
+    /// confirmation fill or leave a fading surface visible after the user asked to hide it.
+    func hideImmediately() {
+        onMain { [weak self] in
+            guard let self = self else { return }
+            self.cancelPendingAppear()
+            self.stopTicking()
+            self.fadeToken += 1
+            self.isShowing = false
+            self.confirming = false
+            for surface in self.surfaces.values {
+                surface.window.alphaValue = 0
+                surface.window.orderOut(nil)
+            }
+        }
+    }
+
     // MARK: - Show / tick / hide
 
     private func reveal() {

@@ -111,8 +111,16 @@ enum ConfigStore {
         "accelerationCurvesLinked": false, // link pointer/scroll bend only; scales stay independent
         "clickRiseThreshold": 0.1,   // contact rise counted as a press (lower = freezes more readily)
         "pressMoveMax": 0.025,       // finger move above this cancels a stray press-freeze
+        // Every formal UI preference lives here. Machine-local state (window position and whether
+        // this Mac already completed onboarding) deliberately stays on this Mac.
+        "interfaceLanguage": "en",  // en | zh; hot-reloads across Settings, menu bar and HUDs
+        "launchAtLoginEnabled": false,
+        "menuBarIconEnabled": true,
         "statusWidgetEnabled": true,  // draggable always-on Layer/action status card
+        "layerHUDEnabled": true,       // layer-switch + remote connect/disconnect cards
         "holdHUDEnabled": true,       // larger release-to-select progress HUD
+        "dragIndicatorEnabled": true, // cursor-adjacent sticky-drag badge
+        "showSetupWizardOnFirstLaunch": true,
         "holdThreshold": 0.5,        // seconds held → stage 1 (".hold"). Fires on RELEASE (release-to-select).
         "holdThreshold2": 1.0,       // seconds held → stage 2 (".hold2"), a deeper hold
         "holdThreshold3": 1.6,       // seconds held → stage 3 (".hold3"), the deepest hold

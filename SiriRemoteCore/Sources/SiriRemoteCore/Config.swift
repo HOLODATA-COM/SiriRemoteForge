@@ -52,12 +52,28 @@ public struct Config: Equatable {
         public var spacesModeWindow: Double
         // Find-my-cursor: show a highlight when the cursor is shaken (rapid back-and-forth).
         public var findCursorEnabled: Bool
+        /// Runtime-switchable app language ("en" or "zh"). Optional only for migration: older
+        /// config files inherit the machine's last locally stored language until the next GUI save.
+        public var interfaceLanguage: String?
+        /// Desired SMAppService registration. Optional preserves the existing OS registration for
+        /// older config files instead of unexpectedly disabling launch-at-login during migration.
+        public var launchAtLoginEnabled: Bool?
+        /// Whether the menu-bar status item is visible. The app remains reachable by reopening the
+        /// application bundle, which opens Settings even when this is false.
+        public var menuBarIconEnabled: Bool
         /// Always-on desktop widget that shows the active layer while idle and briefly animates
         /// the current app/action. Users can turn it off, but it is part of the default experience.
         public var statusWidgetEnabled: Bool
+        /// Transient layer-switch and remote connection/disconnection cards.
+        public var layerHUDEnabled: Bool
         /// The larger release-to-select progress HUD shown while a button is held. Kept separate
         /// from the compact always-on widget so either presentation can be disabled independently.
         public var holdHUDEnabled: Bool
+        /// Small cursor-adjacent badge shown while sticky drag is active.
+        public var dragIndicatorEnabled: Bool
+        /// Whether a fresh install automatically opens the setup guide. Completion is deliberately
+        /// machine-local state; this value controls the policy, not whether another Mac finished it.
+        public var showSetupWizardOnFirstLaunch: Bool
         /// Focus the app under the cursor, but ONLY when its window is fullscreen — a fullscreen
         /// window owns its whole Space, so focusing it raises nothing and disturbs no window
         /// stack. Off by default: it changes which app receives input.
@@ -289,7 +305,9 @@ extension Config.Settings: Decodable {
         case doubleTapWindow
         case spacesModeWindow
         case findCursorEnabled
-        case statusWidgetEnabled, holdHUDEnabled
+        case interfaceLanguage, launchAtLoginEnabled, menuBarIconEnabled
+        case statusWidgetEnabled, layerHUDEnabled, holdHUDEnabled, dragIndicatorEnabled
+        case showSetupWizardOnFirstLaunch
         case focusFollowsCursor
     }
     public init(from decoder: Decoder) throws {
@@ -325,8 +343,16 @@ extension Config.Settings: Decodable {
         doubleTapWindow = try c.decodeIfPresent(Double.self, forKey: .doubleTapWindow) ?? 0.3
         spacesModeWindow = try c.decodeIfPresent(Double.self, forKey: .spacesModeWindow) ?? 5.0
         findCursorEnabled = try c.decodeIfPresent(Bool.self, forKey: .findCursorEnabled) ?? true
+        interfaceLanguage = try c.decodeIfPresent(String.self, forKey: .interfaceLanguage)
+        launchAtLoginEnabled = try c.decodeIfPresent(Bool.self, forKey: .launchAtLoginEnabled)
+        menuBarIconEnabled = try c.decodeIfPresent(Bool.self, forKey: .menuBarIconEnabled) ?? true
         statusWidgetEnabled = try c.decodeIfPresent(Bool.self, forKey: .statusWidgetEnabled) ?? true
+        layerHUDEnabled = try c.decodeIfPresent(Bool.self, forKey: .layerHUDEnabled) ?? true
         holdHUDEnabled = try c.decodeIfPresent(Bool.self, forKey: .holdHUDEnabled) ?? true
+        dragIndicatorEnabled = try c.decodeIfPresent(Bool.self, forKey: .dragIndicatorEnabled) ?? true
+        showSetupWizardOnFirstLaunch = try c.decodeIfPresent(
+            Bool.self, forKey: .showSetupWizardOnFirstLaunch
+        ) ?? true
         focusFollowsCursor = try c.decodeIfPresent(Bool.self, forKey: .focusFollowsCursor) ?? false
     }
 
@@ -432,8 +458,14 @@ extension Config.Settings: Encodable {
         try c.encode(doubleTapWindow, forKey: .doubleTapWindow)
         try c.encode(spacesModeWindow, forKey: .spacesModeWindow)
         try c.encode(findCursorEnabled, forKey: .findCursorEnabled)
+        try c.encodeIfPresent(interfaceLanguage, forKey: .interfaceLanguage)
+        try c.encodeIfPresent(launchAtLoginEnabled, forKey: .launchAtLoginEnabled)
+        try c.encode(menuBarIconEnabled, forKey: .menuBarIconEnabled)
         try c.encode(statusWidgetEnabled, forKey: .statusWidgetEnabled)
+        try c.encode(layerHUDEnabled, forKey: .layerHUDEnabled)
         try c.encode(holdHUDEnabled, forKey: .holdHUDEnabled)
+        try c.encode(dragIndicatorEnabled, forKey: .dragIndicatorEnabled)
+        try c.encode(showSetupWizardOnFirstLaunch, forKey: .showSetupWizardOnFirstLaunch)
         try c.encode(focusFollowsCursor, forKey: .focusFollowsCursor)
     }
 }
