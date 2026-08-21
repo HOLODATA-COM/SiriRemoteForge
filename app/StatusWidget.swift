@@ -10,6 +10,7 @@
 
 import AppKit
 import CoreGraphics
+import CoreText
 import QuartzCore
 
 final class StatusWidgetController: NSObject, NSWindowDelegate {
@@ -25,6 +26,18 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         override var mouseDownCanMoveWindow: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(point) ? self : nil }
         override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+    }
+
+    /// AppKit owns the material's light/dark and high-contrast decisions. Forward effective-
+    /// appearance changes to the controller so custom Core Animation content can stay in sync
+    /// with the native vibrant labels without polling or sampling the screen.
+    private final class AdaptiveMaterialView: NSVisualEffectView {
+        var appearanceDidChange: (() -> Void)?
+
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            DispatchQueue.main.async { [weak self] in self?.appearanceDidChange?() }
+        }
     }
 
     private struct Face {
@@ -72,6 +85,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         let cardView: NSVisualEffectView
         let cardLayer: CALayer
         let tintLayer: CAGradientLayer
+        /// Layer identity is deliberately independent from the action/app palette. The outer aura
+        /// lives outside the clipped card; the conic hairline stays above every card state.
+        let layerIdentityAura: CAShapeLayer
+        let layerIdentityBorder: CAGradientLayer
         let accentLayer: CALayer
         let glowLayer: CALayer
         let holdProgressContainer: CALayer
@@ -128,6 +145,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     private var configuredOrdinals: [String: Int] = [:]
     private var currentLayerID = "BASE"
     private var currentPresentationKey: String?
+    private var currentFaceTint = NSColor.controlAccentColor
     private var isTransient = false
     private var enabled = false
     private var idleGeneration = 0
@@ -175,6 +193,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     private var voiceLastReadoutTick = -1
     private var contentMorphGeneration = 0
     private var contentMorphProxyViews: [NSView] = []
+    private var contentMorphTransientLayers: [CALayer] = []
     private var releasedHold: (key: String, time: CFTimeInterval)?
     private var observerTokens: [NSObjectProtocol] = []
     /// A launch binding announces the destination before AppWatcher observes activation. Remember
@@ -190,8 +209,12 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                                         cornerRadius: cornerRadius)
         super.init()
         surface.panel.delegate = self
+        (surface.cardView as? AdaptiveMaterialView)?.appearanceDidChange = { [weak self] in
+            self?.materialAppearanceChanged()
+        }
         configureHoldProgressVisualStyle()
         normalize(layers)
+        applyLayerIdentity(animated: false)
 
         observerTokens.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -221,6 +244,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         onMain { [weak self] in
             guard let self = self else { return }
             self.normalize(layers)
+            self.applyLayerIdentity(animated: self.enabled)
             self.setEnabledOnMain(enabled)
             if self.enabled, !self.isTransient, !self.isHolding {
                 self.present(self.idleFace(), animated: false, returningToIdle: false)
@@ -250,6 +274,9 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             let previousLayerID = self.currentLayerID
             let destinationLayerID = layer?.uppercased() ?? "BASE"
             self.currentLayerID = destinationLayerID
+            self.applyLayerIdentity(
+                animated: animated && self.enabled && previousLayerID != destinationLayerID
+            )
             self.idleGeneration += 1
             guard !self.isHolding else { return }
             self.isTransient = false
@@ -680,7 +707,6 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         print("🧭 status widget shown — display \(displayID), frame \(NSStringFromRect(surface.panel.frame))")
         isTransient = false
         currentPresentationKey = nil
-        surface.cardLayer.removeAnimation(forKey: "widgetDisappear")
         configure(face: idleFace())
         surface.panel.orderFrontRegardless()
         guard entranceAnimated else {
@@ -714,20 +740,11 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         setVoiceWaveformActive(false, immediate: true)
         stopHoldRipple(immediate: true)
 
-        let restoreTransform = { [weak self] in
-            guard let self = self else { return }
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            self.surface.cardLayer.transform = CATransform3DIdentity
-            CATransaction.commit()
-        }
         guard animated else {
             surface.panel.alphaValue = 0
             surface.panel.orderOut(nil)
-            restoreTransform()
             return
         }
-        animateWidgetDisappear()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.24
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -736,27 +753,14 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             guard let self = self, self.visibilityGeneration == generation,
                   !(self.enabled && self.isConnected) else { return }
             self.surface.panel.orderOut(nil)
-            restoreTransform()
         })
     }
 
-    /// The refined entrance: the card springs up from small with a warm ring breathing outward and
-    /// the icon pops. A plain fade stands in when Reduce Motion is on.
+    /// The component's physical frame never scales: its persistent Layer edge must stay perfectly
+    /// registered with the material card. Entrance personality therefore belongs only to the icon
+    /// and internal ripples while the whole panel performs its ordinary alpha fade.
     private func animateWidgetAppear() {
-        surface.cardLayer.removeAnimation(forKey: "widgetDisappear")
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
-        scale.values = [0.74, 1.06, 0.99, 1.0]
-        scale.keyTimes = [0.0, 0.55, 0.82, 1.0]
-        let rise = CAKeyframeAnimation(keyPath: "transform.translation.y")
-        rise.values = [-10.0, 1.5, 0.0]
-        rise.keyTimes = [0.0, 0.72, 1.0]
-        let group = CAAnimationGroup()
-        group.animations = [scale, rise]
-        group.duration = 0.60
-        group.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 0.84, 0.18, 1.0)
-        surface.cardLayer.add(group, forKey: "widgetAppear")
-
         let iconPop = CAKeyframeAnimation(keyPath: "transform.scale")
         iconPop.values = [0.5, 1.14, 0.98, 1.0]
         iconPop.keyTimes = [0.0, 0.55, 0.80, 1.0]
@@ -781,23 +785,6 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             rGroup.timingFunction = CAMediaTimingFunction(name: .easeOut)
             ripple.add(rGroup, forKey: "widgetAppearRing")
         }
-    }
-
-    /// The precise exit: a small anticipation, then the card sinks and contracts as it fades. The
-    /// alpha fade and this run for the same duration, so the scale never visibly snaps back.
-    private func animateWidgetDisappear() {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
-        scale.values = [1.0, 1.03, 0.90]
-        scale.keyTimes = [0.0, 0.26, 1.0]
-        let sink = CAKeyframeAnimation(keyPath: "transform.translation.y")
-        sink.values = [0.0, 1.0, -6.0]
-        sink.keyTimes = [0.0, 0.26, 1.0]
-        let group = CAAnimationGroup()
-        group.animations = [scale, sink]
-        group.duration = 0.24
-        group.timingFunction = CAMediaTimingFunction(controlPoints: 0.40, 0.0, 0.70, 0.30)
-        surface.cardLayer.add(group, forKey: "widgetDisappear")
     }
 
     private func presentTransient(_ face: Face, duration: TimeInterval, animate: Bool) {
@@ -852,9 +839,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     }
 
     private func configure(face: Face) {
+        currentFaceTint = face.tint
         surface.iconView.image = face.image
         surface.iconView.contentTintColor = face.image?.isTemplate == true
-            ? (isHoldProgressActive ? .white : face.tint) : nil
+            ? (isHoldProgressActive ? .labelColor : face.tint) : nil
         surface.titleLabel.stringValue = face.title
         surface.subtitleLabel.stringValue = face.subtitle
         applyHoldContentContrast()
@@ -1065,6 +1053,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         label.lineBreakMode = source.lineBreakMode
         label.maximumNumberOfLines = source.maximumNumberOfLines
         label.wantsLayer = true
+        label.cell?.backgroundStyle = surface.cardView.interiorBackgroundStyle
         return label
     }
 
@@ -1072,11 +1061,14 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         contentMorphGeneration += 1
         contentMorphProxyViews.forEach { $0.removeFromSuperview() }
         contentMorphProxyViews.removeAll()
+        contentMorphTransientLayers.forEach { $0.removeFromSuperlayer() }
+        contentMorphTransientLayers.removeAll()
 
         for layer in [surface.iconView.layer, surface.titleLabel.layer,
                       surface.subtitleLabel.layer].compactMap({ $0 }) {
             layer.removeAnimation(forKey: "contentMorphIncoming")
             layer.removeAnimation(forKey: "layerMorphIncoming")
+            layer.removeAnimation(forKey: "connectedMorphIncoming")
         }
 
         let icon = copiedIconView(surface.iconView)
@@ -1105,22 +1097,524 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     private func finishContentMorph(generation: Int, after delay: TimeInterval) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self = self, self.contentMorphGeneration == generation else { return }
+            // Reveal the permanent hierarchy in the exact transaction that removes its temporary
+            // reconstruction. Letting the hide animation expire on its own even a few milliseconds
+            // earlier draws both copies for one refresh: the title looks heavier and appears to
+            // jump by the rasterisation difference between CATextLayer and NSTextField.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for layer in [self.surface.iconView.layer, self.surface.titleLabel.layer,
+                          self.surface.subtitleLabel.layer].compactMap({ $0 }) {
+                layer.removeAnimation(forKey: "connectedMorphIncoming")
+            }
             self.contentMorphProxyViews.forEach { $0.removeFromSuperview() }
             self.contentMorphProxyViews.removeAll()
+            self.contentMorphTransientLayers.forEach { $0.removeFromSuperlayer() }
+            self.contentMorphTransientLayers.removeAll()
+            CATransaction.commit()
         }
     }
 
-    /// Layer changes use the same physical flip as ordinary actions. The unchanged
-    /// "Current Layer" subtitle stays in place while the icon and layer name reveal their backs.
+    /// Layer changes and action changes share one visual grammar. The card and its persistent
+    /// Layer edge never move; only the semantic elements inside the fixed lens reconstruct.
     private func animateLayerElementMorph(from proxy: NormalContentProxy?) {
-        animateElementFlip(from: proxy, direction: 1, animateSubtitle: false)
+        animateConnectedLensMorph(from: proxy, direction: 1, animateSubtitle: false)
     }
 
     private func animateContentTransition(from proxy: NormalContentProxy?,
                                           returningToIdle: Bool) {
-        animateElementFlip(from: proxy,
-                           direction: returningToIdle ? -1 : 1,
-                           animateSubtitle: true)
+        animateConnectedLensMorph(from: proxy,
+                                  direction: returningToIdle ? -1 : 1,
+                                  animateSubtitle: true)
+    }
+
+    /// A compact connected transition influenced by Apple's spatial continuity, Fluent's
+    /// connected animation and Material's shared-axis motion. It deliberately avoids blur as the
+    /// main effect: the icon is optically sliced, unchanged letters physically retain their place,
+    /// changed letters fold through the baseline, and the subtitle follows a beat later.
+    private func animateConnectedLensMorph(from proxy: NormalContentProxy?, direction: CGFloat,
+                                           animateSubtitle: Bool) {
+        guard let proxy = proxy else { return }
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        guard !reduceMotion else {
+            animateElementFlip(from: proxy, direction: direction,
+                               animateSubtitle: animateSubtitle)
+            return
+        }
+
+        let generation = contentMorphGeneration
+        let duration: CFTimeInterval = 0.34
+        // All pieces share one future clock edge. Creating a title's temporary glyphs must not
+        // consume part of the icon's animation or make later elements miss their first frames.
+        let timelineStart = CACurrentMediaTime() + 0.016
+        let oldOpacities = proxy.views.map {
+            $0.layer?.presentation()?.opacity ?? $0.layer?.opacity ?? 1
+        }
+        if !animateSubtitle { proxy.subtitleLabel.removeFromSuperview() }
+
+        let incomingLayers = animateSubtitle
+            ? [surface.iconView.layer, surface.titleLabel.layer, surface.subtitleLabel.layer]
+            : [surface.iconView.layer, surface.titleLabel.layer]
+        // The real destination stays hidden beneath an exact temporary reconstruction. Removing
+        // the overlays at rest therefore cannot create a final flash or one-frame geometry snap.
+        for layer in incomingLayers.compactMap({ $0 }) {
+            let hidden = CAKeyframeAnimation(keyPath: "opacity")
+            hidden.values = [0, 0]
+            hidden.keyTimes = [0, 1]
+            // Cleanup explicitly removes this animation. A long hold is intentional: scheduling
+            // jitter can delay cleanup, but can never reveal the real label under its proxy.
+            hidden.duration = 2.0
+            hidden.fillMode = .both
+            hidden.isRemovedOnCompletion = false
+            layer.add(hidden, forKey: "connectedMorphIncoming")
+        }
+
+        var containers: [NSView] = []
+        let iconMorph = makeIconLensTurn(
+            outgoing: proxy.iconView, incoming: surface.iconView,
+            outgoingOpacity: oldOpacities[0], direction: direction,
+            duration: 0.30, delay: 0.008, timelineStart: timelineStart
+        )
+        containers.append(iconMorph)
+
+        let titleMorph = makeGlyphRelay(
+            outgoing: proxy.titleLabel, incoming: surface.titleLabel,
+            outgoingOpacity: oldOpacities[1], direction: direction,
+            duration: 0.30, delay: 0.018, timelineStart: timelineStart
+        )
+        containers.append(titleMorph)
+
+        if animateSubtitle {
+            let subtitleMorph = makeSharedAxisRoll(
+                outgoing: proxy.subtitleLabel, incoming: surface.subtitleLabel,
+                outgoingOpacity: oldOpacities[2], direction: direction,
+                duration: 0.25, delay: 0.062, timelineStart: timelineStart
+            )
+            containers.append(subtitleMorph)
+        }
+
+        installLensSweep(duration: duration, direction: direction,
+                         timelineStart: timelineStart)
+
+        contentMorphProxyViews = containers
+        let lead = max(0, timelineStart - CACurrentMediaTime())
+        finishContentMorph(generation: generation, after: lead + duration + 0.065)
+    }
+
+    /// The icon is one literal two-sided object. Its front reaches the vertical centre axis before
+    /// the destination face unfolds from that exact axis, so there is no scale-down dot, sliced
+    /// glitch, colour muddiness or unrelated object entering the icon slot.
+    @discardableResult
+    private func makeIconLensTurn(outgoing: NSImageView, incoming: NSImageView,
+                                  outgoingOpacity: Float, direction: CGFloat,
+                                  duration: CFTimeInterval, delay: CFTimeInterval,
+                                  timelineStart: CFTimeInterval) -> NSView {
+        let container = makeTwoSidedFlipContainer(
+            front: outgoing,
+            back: copiedIconView(incoming),
+            frame: incoming.frame,
+            frontOpacity: outgoingOpacity
+        )
+        animateTwoSidedContainer(container, angle: CGFloat.pi * direction,
+                                 x: 0, y: 1, duration: duration, delay: delay,
+                                 timelineStart: timelineStart)
+        return container
+    }
+
+    /// Characters found in both strings are one persistent object that moves to its new slot.
+    /// Only inserted/removed characters fold through the horizontal midline. This makes a title
+    /// change readable as a transformation, not two words cross-fading through one another.
+    @discardableResult
+    private func makeGlyphRelay(outgoing: NSTextField, incoming: NSTextField,
+                                outgoingOpacity: Float, direction: CGFloat,
+                                duration: CFTimeInterval, delay: CFTimeInterval,
+                                timelineStart: CFTimeInterval) -> NSView {
+        let container = NSView(frame: incoming.frame.insetBy(dx: -2, dy: -2))
+        container.wantsLayer = true
+        container.layer?.masksToBounds = true
+        container.layer?.contentsScale = surface.panel.backingScaleFactor
+        // Capture the real AppKit labels before reparenting anything. Every animated character is
+        // a pixel-exact slice of these images, so the last proxy frame is indistinguishable from
+        // the permanent raster layer that remains after the animation.
+        let oldSnapshot = makeLabelSnapshot(outgoing)
+        let newSnapshot = makeLabelSnapshot(incoming)
+        outgoing.removeFromSuperview()
+        let oldGlyphs = glyphLayout(for: outgoing)
+        let newGlyphs = glyphLayout(for: incoming)
+        // A repeated letter several slots away is not a meaningful shared element; retaining it
+        // makes unrelated words appear to scatter. Only nearby matches earn connected motion.
+        let nearbyMatches = longestCommonGlyphs(oldGlyphs.map(\.text), newGlyphs.map(\.text)).filter {
+            abs(oldGlyphs[$0.0].x - newGlyphs[$0.1].x) <= 12
+        }
+        // One isolated shared letter reads as a typo suspended between two otherwise unrelated
+        // titles. Connected typography starts only when at least a pair can carry the word shape.
+        let matches = nearbyMatches.count >= 2 ? nearbyMatches : []
+        let matchedOld = Set(matches.map(\.0))
+        let matchedNew = Set(matches.map(\.1))
+        let begin = timelineStart + delay
+        let timing = CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.20, 1.0)
+        let contentOffset = CGPoint(x: 2, y: 2)
+
+        for (oldIndex, newIndex) in matches {
+            let oldGlyph = oldGlyphs[oldIndex]
+            let newGlyph = newGlyphs[newIndex]
+            let glyphLayer = makeGlyphLayer(newGlyph, source: incoming, offset: contentOffset,
+                                            snapshot: newSnapshot,
+                                            isLast: newIndex == newGlyphs.count - 1)
+            container.layer?.addSublayer(glyphLayer)
+            let dx = oldGlyph.x - newGlyph.x
+            addConnectedKeyframes(
+                keyPath: "transform", values: [
+                    NSValue(caTransform3D: lensTransform(x: dx, scaleX: 1, scaleY: 1)),
+                    NSValue(caTransform3D: lensTransform(x: dx * 0.28, scaleX: 0.96,
+                                                        scaleY: 1.05)),
+                    NSValue(caTransform3D: CATransform3DIdentity),
+                ], keyTimes: [0, 0.64, 1], duration: duration,
+                beginTime: begin + glyphRelayStagger(newIndex),
+                timing: timing, to: glyphLayer, key: "glyphRetain"
+            )
+        }
+
+        for index in oldGlyphs.indices where !matchedOld.contains(index) {
+            let glyph = oldGlyphs[index]
+            let glyphLayer = makeGlyphLayer(glyph, source: outgoing, offset: contentOffset,
+                                            snapshot: oldSnapshot,
+                                            isLast: index == oldGlyphs.count - 1)
+            container.layer?.addSublayer(glyphLayer)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            glyphLayer.opacity = 0
+            CATransaction.commit()
+            addConnectedKeyframes(
+                keyPath: "opacity", values: [outgoingOpacity, outgoingOpacity * 0.86, 0],
+                keyTimes: [0, 0.30, 1], duration: duration * 0.58,
+                beginTime: begin + glyphRelayStagger(index),
+                timing: timing, to: glyphLayer, key: "glyphOldOpacity"
+            )
+            addConnectedKeyframes(
+                keyPath: "transform", values: [
+                    NSValue(caTransform3D: CATransform3DIdentity),
+                    NSValue(caTransform3D: lensTransform(x: -direction * 0.8,
+                                                        scaleX: 1.04, scaleY: 0.74)),
+                    NSValue(caTransform3D: lensTransform(x: -direction * 2.8,
+                                                        scaleX: 0.76, scaleY: 0.08)),
+                ], keyTimes: [0, 0.35, 1], duration: duration * 0.58,
+                beginTime: begin + glyphRelayStagger(index),
+                timing: timing, to: glyphLayer, key: "glyphOldFold"
+            )
+        }
+
+        for index in newGlyphs.indices where !matchedNew.contains(index) {
+            let glyph = newGlyphs[index]
+            let glyphLayer = makeGlyphLayer(glyph, source: incoming, offset: contentOffset,
+                                            snapshot: newSnapshot,
+                                            isLast: index == newGlyphs.count - 1)
+            container.layer?.addSublayer(glyphLayer)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            glyphLayer.opacity = 1
+            CATransaction.commit()
+            let glyphBegin = begin + duration * 0.42 + glyphRelayStagger(index)
+            addConnectedKeyframes(
+                keyPath: "opacity", values: [0, 0.08, 1], keyTimes: [0, 0.24, 1],
+                duration: duration * 0.68, beginTime: glyphBegin,
+                timing: timing, to: glyphLayer, key: "glyphNewOpacity"
+            )
+            addConnectedKeyframes(
+                keyPath: "transform", values: [
+                    NSValue(caTransform3D: lensTransform(x: direction * 2.8,
+                                                        scaleX: 0.76, scaleY: 0.08)),
+                    NSValue(caTransform3D: lensTransform(x: direction * 0.45,
+                                                        scaleX: 1.035, scaleY: 1.08)),
+                    NSValue(caTransform3D: CATransform3DIdentity),
+                ], keyTimes: [0, 0.72, 1], duration: duration * 0.68,
+                beginTime: glyphBegin, timing: timing, to: glyphLayer,
+                key: "glyphNewUnfold"
+            )
+        }
+
+        surface.contentView.addSubview(container)
+        return container
+    }
+
+    private struct GlyphLayoutItem {
+        let text: String
+        let x: CGFloat
+        let width: CGFloat
+    }
+
+    private struct LabelSnapshot {
+        let image: CGImage
+        let scale: CGFloat
+    }
+
+    private func glyphLayout(for label: NSTextField) -> [GlyphLayoutItem] {
+        let text = label.stringValue
+        guard !text.isEmpty else { return [] }
+        let font = label.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: text, attributes: attributes)
+        )
+        var result: [GlyphLayoutItem] = []
+        var index = text.startIndex
+        while index < text.endIndex {
+            let next = text.index(after: index)
+            let startOffset = index.utf16Offset(in: text)
+            let endOffset = next.utf16Offset(in: text)
+            let x = CGFloat(CTLineGetOffsetForStringIndex(line, startOffset, nil))
+            let nextX = CGFloat(CTLineGetOffsetForStringIndex(line, endOffset, nil))
+            result.append(GlyphLayoutItem(text: String(text[index..<next]),
+                                          x: x, width: max(0, nextX - x)))
+            index = next
+        }
+        return result
+    }
+
+    private func makeLabelSnapshot(_ source: NSTextField) -> LabelSnapshot? {
+        let bounds = source.bounds
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        var result: LabelSnapshot?
+        // Ask AppKit for the exact backing-store representation it already uses for this label.
+        // Unlike a hand-built bitmap context, this retains the window's real Retina scale,
+        // baseline, font smoothing and cell insets. AppKit skips a view whose backing-layer model
+        // opacity is zero, so restore that model value only inside this disabled-actions
+        // transaction. It is returned to its original value before Core Animation can commit a
+        // frame, making the semantic label drawable for caching but never visible on screen.
+        // Resolve semantic colours inside this label's effective material appearance. Without
+        // this scope an offscreen animation snapshot can accidentally inherit whichever unrelated
+        // AppKit view drew most recently, producing white glyphs for a light material.
+        source.effectiveAppearance.performAsCurrentDrawingAppearance {
+            guard let bitmap = source.bitmapImageRepForCachingDisplay(in: bounds) else { return }
+            let originalOpacity = source.layer?.opacity
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            source.layer?.opacity = 1
+            source.cacheDisplay(in: bounds, to: bitmap)
+            source.layer?.opacity = originalOpacity ?? 1
+            CATransaction.commit()
+            guard let image = bitmap.cgImage else { return }
+            let scale = max(1, CGFloat(image.width) / max(1, bounds.width))
+            result = LabelSnapshot(image: image, scale: scale)
+        }
+        return result
+    }
+
+    private func resolvedMaterialColor(_ color: NSColor) -> NSColor {
+        var result = color
+        surface.cardView.effectiveAppearance.performAsCurrentDrawingAppearance {
+            result = color.usingColorSpace(.deviceRGB) ?? color
+        }
+        return result
+    }
+
+    /// The fast path is a pixel slice of the real NSTextField, rather than a separately rendered
+    /// CATextLayer. Besides being lightweight, this guarantees identical kerning, baseline,
+    /// antialiasing and font weight at the handoff. The text-layer fallback is only for the highly
+    /// unusual case where AppKit cannot provide a cache bitmap.
+    private func makeGlyphLayer(_ glyph: GlyphLayoutItem, source: NSTextField,
+                                offset: CGPoint, snapshot: LabelSnapshot?,
+                                isLast: Bool) -> CALayer {
+        if let snapshot = snapshot {
+            let pixelWidth = snapshot.image.width
+            let startPixel = max(0, min(pixelWidth,
+                Int(floor(glyph.x * snapshot.scale))))
+            let naturalEnd = Int(floor((glyph.x + glyph.width) * snapshot.scale))
+            let endPixel = max(startPixel, min(pixelWidth,
+                isLast ? pixelWidth : naturalEnd))
+            let slice = CALayer()
+            guard startPixel < endPixel else {
+                slice.frame = CGRect(x: offset.x + glyph.x, y: offset.y,
+                                     width: 0, height: source.bounds.height)
+                return slice
+            }
+            slice.contents = snapshot.image
+            slice.contentsRect = CGRect(x: CGFloat(startPixel) / CGFloat(pixelWidth), y: 0,
+                                        width: CGFloat(endPixel - startPixel)
+                                            / CGFloat(pixelWidth),
+                                        height: 1)
+            slice.contentsGravity = .resize
+            slice.contentsScale = snapshot.scale
+            slice.minificationFilter = .linear
+            slice.magnificationFilter = .linear
+            slice.frame = CGRect(x: offset.x + CGFloat(startPixel) / snapshot.scale,
+                                 y: offset.y,
+                                 width: CGFloat(endPixel - startPixel) / snapshot.scale,
+                                 height: source.bounds.height)
+            return slice
+        }
+
+        let glyphLayer = CATextLayer()
+        let font = source.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let foreground = resolvedMaterialColor(source.textColor ?? .labelColor)
+        glyphLayer.string = NSAttributedString(
+            string: glyph.text,
+            attributes: [
+                .font: font,
+                .foregroundColor: foreground,
+            ]
+        )
+        glyphLayer.frame = CGRect(x: offset.x + glyph.x, y: offset.y,
+                                  width: glyph.width + 1.5, height: source.frame.height)
+        glyphLayer.contentsScale = surface.panel.backingScaleFactor
+        glyphLayer.alignmentMode = .left
+        glyphLayer.truncationMode = .none
+        glyphLayer.isWrapped = false
+        glyphLayer.allowsFontSubpixelQuantization = true
+        return glyphLayer
+    }
+
+    /// The relay wave saturates after seven slots. Long labels therefore retain the same visual
+    /// rhythm without extending their tail beyond the fixed cleanup/handoff boundary.
+    private func glyphRelayStagger(_ index: Int) -> CFTimeInterval {
+        min(Double(index), 7) * 0.003
+    }
+
+    private func longestCommonGlyphs(_ old: [String], _ new: [String]) -> [(Int, Int)] {
+        guard !old.isEmpty, !new.isEmpty else { return [] }
+        var table = Array(repeating: Array(repeating: 0, count: new.count + 1),
+                          count: old.count + 1)
+        for i in stride(from: old.count - 1, through: 0, by: -1) {
+            for j in stride(from: new.count - 1, through: 0, by: -1) {
+                table[i][j] = old[i] == new[j]
+                    ? table[i + 1][j + 1] + 1
+                    : max(table[i + 1][j], table[i][j + 1])
+            }
+        }
+        var result: [(Int, Int)] = []
+        var i = 0, j = 0
+        while i < old.count, j < new.count {
+            if old[i] == new[j] {
+                result.append((i, j))
+                i += 1
+                j += 1
+            } else if table[i + 1][j] >= table[i][j + 1] {
+                i += 1
+            } else {
+                j += 1
+            }
+        }
+        return result
+    }
+
+    /// The secondary line follows the title instead of competing with it. A short clipped roll is
+    /// enough to establish direction while keeping the entire component spatially stationary.
+    @discardableResult
+    private func makeSharedAxisRoll(outgoing: NSTextField, incoming: NSTextField,
+                                    outgoingOpacity: Float, direction: CGFloat,
+                                    duration: CFTimeInterval, delay: CFTimeInterval,
+                                    timelineStart: CFTimeInterval) -> NSView {
+        let container = NSView(frame: incoming.frame.insetBy(dx: -1, dy: -2))
+        container.wantsLayer = true
+        container.layer?.masksToBounds = true
+        outgoing.removeFromSuperview()
+        let oldLabel = copiedLabel(outgoing)
+        let newLabel = copiedLabel(incoming)
+        oldLabel.frame = NSRect(x: 1, y: 2, width: incoming.frame.width,
+                                height: incoming.frame.height)
+        newLabel.frame = oldLabel.frame
+        container.addSubview(oldLabel)
+        container.addSubview(newLabel)
+        let begin = timelineStart + delay
+        let timing = CAMediaTimingFunction(controlPoints: 0.20, 0.78, 0.20, 1.0)
+        let travel = direction * 5.5
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        oldLabel.layer?.opacity = 0
+        newLabel.layer?.opacity = 1
+        CATransaction.commit()
+        addConnectedKeyframes(keyPath: "opacity", values: [outgoingOpacity, 0],
+                              keyTimes: [0, 1], duration: duration * 0.62,
+                              beginTime: begin, timing: timing, to: oldLabel.layer,
+                              key: "subtitleOldOpacity")
+        addConnectedKeyframes(
+            keyPath: "transform", values: [
+                NSValue(caTransform3D: CATransform3DIdentity),
+                NSValue(caTransform3D: CATransform3DMakeTranslation(0, travel, 0)),
+            ], keyTimes: [0, 1], duration: duration * 0.62, beginTime: begin,
+            timing: timing, to: oldLabel.layer, key: "subtitleOldRoll"
+        )
+        addConnectedKeyframes(keyPath: "opacity", values: [0, 1], keyTimes: [0, 1],
+                              duration: duration * 0.66, beginTime: begin + duration * 0.25,
+                              timing: timing, to: newLabel.layer,
+                              key: "subtitleNewOpacity")
+        addConnectedKeyframes(
+            keyPath: "transform", values: [
+                NSValue(caTransform3D: CATransform3DMakeTranslation(0, -travel, 0)),
+                NSValue(caTransform3D: CATransform3DIdentity),
+            ], keyTimes: [0, 1], duration: duration * 0.66,
+            beginTime: begin + duration * 0.25, timing: timing,
+            to: newLabel.layer, key: "subtitleNewRoll"
+        )
+        surface.contentView.addSubview(container)
+        return container
+    }
+
+    /// A restrained specular relay crosses the fixed card once. It visually connects icon, title
+    /// and subtitle without changing card bounds or overpowering the persistent Layer colour.
+    private func installLensSweep(duration: CFTimeInterval, direction: CGFloat,
+                                  timelineStart: CFTimeInterval) {
+        let tint = layerAppearance(currentLayerID).tint
+        let width: CGFloat = 34
+        let lens = CAGradientLayer()
+        lens.frame = CGRect(x: -width, y: 0, width: width, height: surface.cardLayer.bounds.height)
+        lens.startPoint = CGPoint(x: 0, y: 0)
+        lens.endPoint = CGPoint(x: 1, y: 1)
+        lens.locations = [0, 0.30, 0.49, 0.62, 1]
+        lens.colors = [
+            NSColor.clear.cgColor,
+            tint.withAlphaComponent(0.012).cgColor,
+            NSColor.white.withAlphaComponent(0.065).cgColor,
+            tint.withAlphaComponent(0.025).cgColor,
+            NSColor.clear.cgColor,
+        ]
+        // The card already clips its sublayers. Leaving this narrow relay rectangular avoids the
+        // conspicuous pill-shaped "light orb" produced by rounding the travelling strip itself.
+        lens.masksToBounds = false
+        lens.opacity = 0
+        lens.zPosition = 48
+        surface.cardLayer.addSublayer(lens)
+        contentMorphTransientLayers.append(lens)
+
+        let travel = surface.cardLayer.bounds.width + width * 2
+        let sign: CGFloat = direction >= 0 ? 1 : -1
+        let startX = sign > 0 ? -width : surface.cardLayer.bounds.width
+        let endX = startX + sign * travel
+        let begin = timelineStart
+        addConnectedKeyframes(keyPath: "position.x",
+                              values: [startX + width / 2, endX + width / 2],
+                              keyTimes: [0, 1], duration: duration,
+                              beginTime: begin, timing: CAMediaTimingFunction(
+                                controlPoints: 0.22, 0.62, 0.25, 1.0),
+                              to: lens, key: "lensSweepPosition")
+        addConnectedKeyframes(keyPath: "opacity", values: [0, 0.85, 0.55, 0],
+                              keyTimes: [0, 0.22, 0.72, 1], duration: duration,
+                              beginTime: begin, timing: CAMediaTimingFunction(name: .easeInEaseOut),
+                              to: lens, key: "lensSweepOpacity")
+    }
+
+    private func lensTransform(x: CGFloat, scaleX: CGFloat,
+                               scaleY: CGFloat) -> CATransform3D {
+        var transform = CATransform3DMakeTranslation(x, 0, 0)
+        transform = CATransform3DScale(transform, scaleX, scaleY, 1)
+        return transform
+    }
+
+    private func addConnectedKeyframes(keyPath: String, values: [Any],
+                                       keyTimes: [NSNumber], duration: CFTimeInterval,
+                                       beginTime: CFTimeInterval,
+                                       timing: CAMediaTimingFunction, to layer: CALayer?,
+                                       key: String) {
+        guard let layer = layer else { return }
+        let animation = CAKeyframeAnimation(keyPath: keyPath)
+        animation.values = values
+        animation.keyTimes = keyTimes
+        animation.duration = duration
+        animation.beginTime = layer.convertTime(beginTime, from: nil)
+        animation.timingFunctions = Array(repeating: timing, count: max(0, keyTimes.count - 1))
+        animation.fillMode = .both
+        animation.isRemovedOnCompletion = false
+        layer.add(animation, forKey: key)
     }
 
     /// Treat each visual as one two-sided object. The outgoing icon rotates to its 90° edge around
@@ -1241,8 +1735,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     private func animateTwoSidedContainer(_ container: NSView, angle: CGFloat,
                                           x: CGFloat, y: CGFloat,
                                           duration: CFTimeInterval,
-                                          delay: CFTimeInterval) {
+                                          delay: CFTimeInterval,
+                                          timelineStart: CFTimeInterval? = nil) {
         guard let layer = container.layer else { return }
+        let begin = (timelineStart ?? CACurrentMediaTime()) + delay
         let turn = CAKeyframeAnimation(keyPath: "transform")
         turn.values = [flipTransform(angle: 0, x: x, y: y),
                        flipTransform(angle: angle * 0.5, x: x, y: y),
@@ -1257,7 +1753,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             CAMediaTimingFunction(name: .easeOut),
         ]
         turn.duration = duration
-        turn.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + delay
+        turn.beginTime = layer.convertTime(begin, from: nil)
         turn.fillMode = .backwards
         layer.add(turn, forKey: "twoSidedElementFlip")
 
@@ -1276,7 +1772,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         frontVisibility.values = [frontOpacity, frontOpacity, 0, 0]
         frontVisibility.keyTimes = [0, 0.47, 0.49, 1]
         frontVisibility.duration = duration
-        frontVisibility.beginTime = frontLayer.convertTime(CACurrentMediaTime(), from: nil) + delay
+        frontVisibility.beginTime = frontLayer.convertTime(begin, from: nil)
         frontVisibility.fillMode = .both
         frontVisibility.isRemovedOnCompletion = false
         frontLayer.add(frontVisibility, forKey: "twoSidedFrontVisibility")
@@ -1285,7 +1781,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         backVisibility.values = [0, 0, 1, 1]
         backVisibility.keyTimes = [0, 0.47, 0.49, 1]
         backVisibility.duration = duration
-        backVisibility.beginTime = backLayer.convertTime(CACurrentMediaTime(), from: nil) + delay
+        backVisibility.beginTime = backLayer.convertTime(begin, from: nil)
         backVisibility.fillMode = .both
         backVisibility.isRemovedOnCompletion = false
         backLayer.add(backVisibility, forKey: "twoSidedBackVisibility")
@@ -1298,20 +1794,8 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     }
 
     private func animateCardResponse() {
-        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
-        scale.values = [1.0, 0.986, 1.012, 0.998, 1.0]
-        scale.keyTimes = [0.0, 0.20, 0.56, 0.82, 1.0]
-
-        let hop = CAKeyframeAnimation(keyPath: "transform.translation.y")
-        hop.values = [0.0, -1.0, 0.7, -0.2, 0.0]
-        hop.keyTimes = scale.keyTimes
-
-        let group = CAAnimationGroup()
-        group.animations = [scale, hop]
-        group.duration = 0.28
-        group.timingFunction = CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.18, 1.0)
-        surface.cardLayer.add(group, forKey: "statusSpring")
-
+        // Repeated actions acknowledge on the icon only. The material card and its Layer identity
+        // edge are a single fixed-size object and never pulse against one another.
         let iconScale = CAKeyframeAnimation(keyPath: "transform.scale")
         iconScale.values = [0.92, 1.035, 0.99, 1.0]
         iconScale.keyTimes = [0.0, 0.50, 0.78, 1.0]
@@ -1321,20 +1805,6 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
 
         // A flat circular glow used to pulse here. Once the icon folded away it was exposed as a
         // stray coloured dot, so the icon response now carries the feedback by itself.
-    }
-
-    private func animateCardReveal() {
-        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
-        scale.values = [0.94, 1.01, 0.998, 1.0]
-        scale.keyTimes = [0.0, 0.58, 0.82, 1.0]
-        let rise = CAKeyframeAnimation(keyPath: "transform.translation.y")
-        rise.values = [-3.0, 0.5, 0.0]
-        rise.keyTimes = [0.0, 0.70, 1.0]
-        let group = CAAnimationGroup()
-        group.animations = [scale, rise]
-        group.duration = 0.28
-        group.timingFunction = CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.20, 1.0)
-        surface.cardLayer.add(group, forKey: "statusReveal")
     }
 
     // MARK: Whole-card hold progress surface
@@ -1382,7 +1852,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         renderHoldProgress(at: holdProgressLastTick)
 
         if surface.iconView.image?.isTemplate == true {
-            surface.iconView.contentTintColor = .white
+            surface.iconView.contentTintColor = .labelColor
         }
 
         CATransaction.begin()
@@ -1429,8 +1899,8 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         fade.duration = 0.14
         fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
         surface.holdProgressContainer.add(fade, forKey: "compactHoldFade")
-        // Keep white hold typography until the progress layer is actually gone. Restoring semantic
-        // secondary colours at release used to create one muddy frame over the still-visible fill.
+        // Keep the same material-driven typography until the progress layer is actually gone. A
+        // mid-fade style refresh would otherwise create one muddy frame over the visible fill.
         DispatchQueue.main.asyncAfter(deadline: .now() + fade.duration) { [weak self] in
             guard let self = self, !self.isHoldProgressActive else { return }
             self.applyHoldContentContrast()
@@ -1672,13 +2142,40 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// The selected whole-card treatment travels behind every label, not only the icon.
-    /// Hold-specific contrast keeps both typographic levels legible over its brightest region, then
-    /// restores semantic macOS colours as soon as the progress surface dismisses.
+    /// Keep the native controls attached to the material's own background classification. AppKit
+    /// then supplies vibrant label colours for the actual composited material instead of us
+    /// guessing white or black from the desktop. This is intentionally applied during holds too:
+    /// forcing white text was illegible whenever the HUD material resolved light.
     private func applyHoldContentContrast() {
-        surface.titleLabel.textColor = isHoldProgressActive ? .white : .labelColor
-        surface.subtitleLabel.textColor = isHoldProgressActive
-            ? NSColor.white.withAlphaComponent(0.80) : .secondaryLabelColor
+        let style = surface.cardView.interiorBackgroundStyle
+        surface.titleLabel.cell?.backgroundStyle = style
+        surface.subtitleLabel.cell?.backgroundStyle = style
+        surface.titleLabel.textColor = .labelColor
+        surface.subtitleLabel.textColor = .secondaryLabelColor
+        if surface.iconView.image?.isTemplate == true {
+            surface.iconView.contentTintColor = isHoldProgressActive
+                ? .labelColor : currentFaceTint
+        }
+        for label in [surface.voiceHeaderLabel, surface.voiceLiveLabel,
+                      surface.voicePitchLabel, surface.voiceBrightnessLabel] {
+            label.cell?.backgroundStyle = style
+        }
+        surface.voiceHeaderLabel.textColor = .labelColor
+        surface.voicePitchLabel.textColor = .secondaryLabelColor
+        surface.voiceBrightnessLabel.textColor = .secondaryLabelColor
+        surface.voiceLiveLabel.attributedStringValue = Self.voiceLiveAttributedText(
+            surface.voiceLiveLabel.stringValue,
+            font: surface.voiceLiveLabel.font,
+            foregroundColor: .secondaryLabelColor
+        )
+        let highlightColor = resolvedMaterialColor(.labelColor).withAlphaComponent(0.92).cgColor
+        surface.voiceBarHighlightLayers.forEach { $0.backgroundColor = highlightColor }
+    }
+
+    private func materialAppearanceChanged() {
+        applyHoldContentContrast()
+        applyLayerIdentity(animated: false)
+        renderVoiceBars(animated: false)
     }
 
     private func setVoiceWaveformActive(_ active: Bool, immediate: Bool = false) {
@@ -1960,7 +2457,8 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         let seconds = elapsed - Double(minutes * 60)
         let liveText = String(format: "● LIVE  %02d:%04.1f", minutes, seconds)
         surface.voiceLiveLabel.attributedStringValue = Self.voiceLiveAttributedText(
-            liveText, font: surface.voiceLiveLabel.font
+            liveText, font: surface.voiceLiveLabel.font,
+            foregroundColor: .secondaryLabelColor
         )
         if sample.pitchConfidence > 0.10 {
             let semitones = sample.pitchPosition * 5
@@ -2029,9 +2527,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         surface.voiceBaselineLayer.add(baselineChange, forKey: "voiceBaselineColor")
     }
 
-    private static func voiceLiveAttributedText(_ text: String, font: NSFont?) -> NSAttributedString {
+    private static func voiceLiveAttributedText(_ text: String, font: NSFont?,
+                                                foregroundColor: NSColor) -> NSAttributedString {
         var attributes: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.white.withAlphaComponent(0.82),
+            .foregroundColor: foregroundColor,
         ]
         if let font = font { attributes[.font] = font }
         let value = NSMutableAttributedString(string: text, attributes: attributes)
@@ -2077,6 +2576,69 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                        alpha: a.alphaComponent + (b.alphaComponent - a.alphaComponent) * fraction)
     }
 
+    /// Paint the current Layer as a persistent identity around the card. Action colour remains
+    /// free to communicate semantics inside the component (Voice red, Music pink, mouse teal),
+    /// while this edge never stops answering "which Layer am I in?".
+    private func applyLayerIdentity(animated: Bool) {
+        let dark = surface.panel.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let rawTint = layerAppearance(currentLayerID).tint
+        let tint = rawTint.usingColorSpace(.deviceRGB) ?? rawTint
+        let borderColors = [
+            tint.withAlphaComponent(dark ? 0.18 : 0.14).cgColor,
+            tint.withAlphaComponent(dark ? 0.44 : 0.34).cgColor,
+            tint.withAlphaComponent(dark ? 0.22 : 0.18).cgColor,
+            tint.withAlphaComponent(dark ? 0.36 : 0.29).cgColor,
+            tint.withAlphaComponent(dark ? 0.16 : 0.12).cgColor,
+        ]
+        let auraStroke = tint.withAlphaComponent(dark ? 0.10 : 0.07).cgColor
+
+        let oldBorderColors: Any?
+        if let presented = surface.layerIdentityBorder.presentation()?.value(forKeyPath: "colors") {
+            oldBorderColors = presented
+        } else {
+            oldBorderColors = surface.layerIdentityBorder.colors
+        }
+        let oldAuraStroke = surface.layerIdentityAura.presentation()?.strokeColor
+            ?? surface.layerIdentityAura.strokeColor
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        surface.layerIdentityBorder.colors = borderColors
+        surface.layerIdentityAura.strokeColor = auraStroke
+        CATransaction.commit()
+
+        guard animated else { return }
+        let duration: CFTimeInterval = 0.38
+        let timing = CAMediaTimingFunction(controlPoints: 0.20, 0.80, 0.18, 1.0)
+
+        let borderChange = CABasicAnimation(keyPath: "colors")
+        borderChange.fromValue = oldBorderColors
+        borderChange.toValue = borderColors
+        borderChange.duration = duration
+        borderChange.timingFunction = timing
+        surface.layerIdentityBorder.add(borderChange, forKey: "layerIdentityColor")
+
+        func animateColor(_ keyPath: String, from: CGColor?, to: CGColor, key: String) {
+            let change = CABasicAnimation(keyPath: keyPath)
+            change.fromValue = from
+            change.toValue = to
+            change.duration = duration
+            change.timingFunction = timing
+            surface.layerIdentityAura.add(change, forKey: key)
+        }
+        animateColor("strokeColor", from: oldAuraStroke, to: auraStroke,
+                     key: "layerIdentityAuraStroke")
+
+        // One restrained breath acknowledges the Layer change without turning the persistent
+        // border into a looping decoration. At rest it is completely static.
+        let breathe = CAKeyframeAnimation(keyPath: "opacity")
+        breathe.values = [1.0, 1.0, 0.72, 1.0]
+        breathe.keyTimes = [0, 0.22, 0.54, 1]
+        breathe.duration = duration
+        breathe.timingFunctions = [timing, timing, timing]
+        surface.layerIdentityBorder.add(breathe, forKey: "layerIdentityBreath")
+    }
+
     private func applyColors(_ tint: NSColor, animated: Bool) {
         let dark = surface.panel.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let tintRGB = tint.usingColorSpace(.deviceRGB) ?? tint
@@ -2085,7 +2647,6 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             tintRGB.withAlphaComponent(dark ? 0.07 : 0.035).cgColor,
             NSColor.clear.cgColor,
         ]
-        let border = tintRGB.withAlphaComponent(dark ? 0.34 : 0.25).cgColor
         let accent = tintRGB.withAlphaComponent(dark ? 0.92 : 0.84).cgColor
         let glow = tintRGB.withAlphaComponent(dark ? 0.24 : 0.17).cgColor
         let ripple = tintRGB.withAlphaComponent(dark ? 0.46 : 0.34).cgColor
@@ -2131,7 +2692,6 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         } else {
             oldColors = surface.tintLayer.colors
         }
-        let oldBorder = surface.cardLayer.presentation()?.borderColor ?? surface.cardLayer.borderColor
         let oldAccent = surface.accentLayer.presentation()?.backgroundColor
             ?? surface.accentLayer.backgroundColor
         let oldHoldBackground = surface.holdProgressContainer.presentation()?.backgroundColor
@@ -2161,7 +2721,6 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         surface.tintLayer.colors = colors
-        surface.cardLayer.borderColor = border
         surface.accentLayer.backgroundColor = accent
         surface.glowLayer.backgroundColor = glow
         surface.rippleLayers.forEach { $0.strokeColor = ripple }
@@ -2202,13 +2761,6 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         colorAnimation.duration = 0.22
         colorAnimation.timingFunction = timing
         surface.tintLayer.add(colorAnimation, forKey: "statusTint")
-
-        let borderAnimation = CABasicAnimation(keyPath: "borderColor")
-        borderAnimation.fromValue = oldBorder
-        borderAnimation.toValue = border
-        borderAnimation.duration = 0.22
-        borderAnimation.timingFunction = timing
-        surface.cardLayer.add(borderAnimation, forKey: "statusBorder")
 
         let accentAnimation = CABasicAnimation(keyPath: "backgroundColor")
         accentAnimation.fromValue = oldAccent
@@ -2265,6 +2817,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         scheduleMoveSettlement()
     }
 
+    func windowDidChangeBackingProperties(_ notification: Notification) {
+        applyHoldContentContrast()
+    }
+
     private func scheduleMoveSettlement() {
         moveGeneration += 1
         let generation = moveGeneration
@@ -2306,6 +2862,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         guard enabled, isConnected else { return }
         moveGeneration += 1
         restorePosition()
+        materialAppearanceChanged()
         surface.panel.orderFrontRegardless()
     }
 
@@ -2401,7 +2958,26 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         root.wantsLayer = true
         root.layer?.masksToBounds = false
 
-        let card = NSVisualEffectView(frame: cardFrame)
+        // The soft edge is a real low-alpha stroke on the transparent root, not a CALayer shadow.
+        // WindowServer can amplify coloured shadows around transparent auxiliary panels into a
+        // jagged neon fringe; this wider stroke stays smooth, quiet and colour-accurate.
+        let layerIdentityAura = CAShapeLayer()
+        layerIdentityAura.frame = root.bounds
+        let auraRect = cardFrame.insetBy(dx: -0.6, dy: -0.6)
+        layerIdentityAura.path = CGPath(
+            roundedRect: auraRect,
+            cornerWidth: cornerRadius + 0.6,
+            cornerHeight: cornerRadius + 0.6,
+            transform: nil
+        )
+        layerIdentityAura.fillColor = NSColor.clear.cgColor
+        layerIdentityAura.lineWidth = 4.0
+        layerIdentityAura.lineJoin = .round
+        layerIdentityAura.shadowOpacity = 0
+        layerIdentityAura.shouldRasterize = false
+        root.layer?.addSublayer(layerIdentityAura)
+
+        let card = AdaptiveMaterialView(frame: cardFrame)
         card.material = .hudWindow
         card.blendingMode = .behindWindow
         card.state = .active
@@ -2409,7 +2985,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         card.layer?.cornerRadius = cornerRadius
         card.layer?.cornerCurve = .continuous
         card.layer?.masksToBounds = true
-        card.layer?.borderWidth = 0.7
+        card.layer?.borderWidth = 0
 
         let tintLayer = CAGradientLayer()
         tintLayer.frame = card.bounds
@@ -2625,7 +3201,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             let label = NSTextField(labelWithString: text)
             label.frame = frame
             label.font = .monospacedSystemFont(ofSize: 7.2, weight: weight)
-            label.textColor = NSColor.white.withAlphaComponent(0.82)
+            label.textColor = .secondaryLabelColor
             label.alignment = alignment
             label.lineBreakMode = .byClipping
             label.maximumNumberOfLines = 1
@@ -2636,12 +3212,13 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         }
         let voiceHeader = voiceReadout("VOICE", frame: NSRect(x: 14, y: 56, width: 48, height: 10),
                                        weight: .bold)
-        voiceHeader.textColor = NSColor.white.withAlphaComponent(0.92)
+        voiceHeader.textColor = .labelColor
         let voiceLive = voiceReadout("● LIVE  00:00.0",
                                      frame: NSRect(x: 91, y: 56, width: 99, height: 10),
                                      alignment: .right)
         voiceLive.attributedStringValue = voiceLiveAttributedText(
-            "● LIVE  00:00.0", font: voiceLive.font
+            "● LIVE  00:00.0", font: voiceLive.font,
+            foregroundColor: .secondaryLabelColor
         )
         let voicePitch = voiceReadout("PITCH  ···",
                                       frame: NSRect(x: 14, y: 5, width: 112, height: 10))
@@ -2650,10 +3227,38 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                                            alignment: .right)
 
         card.addSubview(content)
+
+        // A conic gradient makes the hairline breathe differently around each corner while still
+        // being one uninterrupted Layer-colour ring. Keeping it above all subviews guarantees the
+        // identity survives Voice, hold progress and every transient action face.
+        let layerIdentityBorder = CAGradientLayer()
+        layerIdentityBorder.frame = card.bounds
+        layerIdentityBorder.type = .conic
+        layerIdentityBorder.startPoint = CGPoint(x: 0.5, y: 0.5)
+        layerIdentityBorder.endPoint = CGPoint(x: 0.5, y: 0)
+        layerIdentityBorder.locations = [0, 0.18, 0.43, 0.72, 1]
+        layerIdentityBorder.zPosition = 100
+        let identityMask = CAShapeLayer()
+        identityMask.frame = layerIdentityBorder.bounds
+        identityMask.path = CGPath(
+            roundedRect: layerIdentityBorder.bounds.insetBy(dx: 0.72, dy: 0.72),
+            cornerWidth: cornerRadius - 0.72,
+            cornerHeight: cornerRadius - 0.72,
+            transform: nil
+        )
+        identityMask.fillColor = NSColor.clear.cgColor
+        identityMask.strokeColor = NSColor.white.cgColor
+        identityMask.lineWidth = 1.35
+        layerIdentityBorder.mask = identityMask
+        card.layer?.addSublayer(layerIdentityBorder)
+
         root.addSubview(card)
         panel.contentView = root
         return Surface(panel: panel, cardView: card, cardLayer: card.layer!,
-                       tintLayer: tintLayer, accentLayer: accent, glowLayer: glow,
+                       tintLayer: tintLayer,
+                       layerIdentityAura: layerIdentityAura,
+                       layerIdentityBorder: layerIdentityBorder,
+                       accentLayer: accent, glowLayer: glow,
                        holdProgressContainer: holdProgress,
                        holdProgressWaterRoot: holdWaterRoot,
                        holdProgressBackWave: holdBackWave,

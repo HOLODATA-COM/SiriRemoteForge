@@ -32,12 +32,24 @@ final class SetupWizardController {
     static let completedKey = "app.setupCompleted"
     private var window: NSWindow?
     private let onFinished: () -> Void
+    private let onLanguageChosen: (AppLanguage) -> Void
+    private let onLaunchAtLoginChanged: (Bool) -> Void
 
-    init(onFinished: @escaping () -> Void = {}) { self.onFinished = onFinished }
+    init(onFinished: @escaping () -> Void = {},
+         onLanguageChosen: @escaping (AppLanguage) -> Void = { _ in },
+         onLaunchAtLoginChanged: @escaping (Bool) -> Void = { _ in }) {
+        self.onFinished = onFinished
+        self.onLanguageChosen = onLanguageChosen
+        self.onLaunchAtLoginChanged = onLaunchAtLoginChanged
+    }
 
     func show() {
         if window == nil {
-            let hosting = NSHostingController(rootView: SetupWizardView { [weak self] in self?.finish() })
+            let hosting = NSHostingController(rootView: SetupWizardView(
+                onDone: { [weak self] in self?.finish() },
+                onLanguageChosen: onLanguageChosen,
+                onLaunchAtLoginChanged: onLaunchAtLoginChanged
+            ))
             let win = NSWindow(contentViewController: hosting)
             win.styleMask = [.titled, .fullSizeContentView]
             win.titlebarAppearsTransparent = true
@@ -74,8 +86,10 @@ final class SetupModel: ObservableObject {
     /// Language, then the two permissions, then pairing, then startup, then the summary.
     static let stepCount = 6
     private var timer: Timer?
+    private let onLaunchAtLoginChanged: (Bool) -> Void
 
-    init() {
+    init(onLaunchAtLoginChanged: @escaping (Bool) -> Void = { _ in }) {
+        self.onLaunchAtLoginChanged = onLaunchAtLoginChanged
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.refresh()
@@ -114,6 +128,7 @@ final class SetupModel: ObservableObject {
     func setLaunchAtLogin(_ wanted: Bool) {
         try? LaunchAtLogin.setEnabled(wanted)
         launchAtLogin = LaunchAtLogin.state.isOn
+        onLaunchAtLoginChanged(launchAtLogin)
     }
 
     private func openSettings(_ path: String) {
@@ -125,9 +140,20 @@ final class SetupModel: ObservableObject {
 
 private struct SetupWizardView: View {
     let onDone: () -> Void
-    @StateObject private var model = SetupModel()
+    let onLanguageChosen: (AppLanguage) -> Void
+    @StateObject private var model: SetupModel
     @ObservedObject private var loc = Loc.shared
     @ObservedObject private var remote = RemoteConnection.shared
+
+    init(onDone: @escaping () -> Void,
+         onLanguageChosen: @escaping (AppLanguage) -> Void,
+         onLaunchAtLoginChanged: @escaping (Bool) -> Void) {
+        self.onDone = onDone
+        self.onLanguageChosen = onLanguageChosen
+        _model = StateObject(wrappedValue: SetupModel(
+            onLaunchAtLoginChanged: onLaunchAtLoginChanged
+        ))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -183,6 +209,7 @@ private struct SetupWizardView: View {
                 ForEach(AppLanguage.allCases) { language in
                     Button {
                         Loc.shared.choose(language)
+                        onLanguageChosen(language)
                         advance()
                     } label: {
                         HStack {

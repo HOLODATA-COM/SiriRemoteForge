@@ -17,9 +17,6 @@ struct SettingsView: View {
         self.device = model.device
     }
 
-    /// Mirrors the real SMAppService registration — never assume the toggle succeeded.
-    @State private var launchAtLogin = LaunchAtLogin.state.isOn
-    @State private var launchAtLoginError: String?
     @State private var saveErrorDetail: String?
 
     /// Drives live relocalization: changing the language republishes, re-running this view's body
@@ -76,12 +73,10 @@ struct SettingsView: View {
         .frame(minHeight: 620, idealHeight: 780, maxHeight: .infinity)
         .animation(.easeInOut(duration: 0.2), value: tab)
         // Polling start/stop lives in SettingsWindowController — `.onDisappear` never fires for
-        // this window (it is cached and only ordered out). Refresh on appear so reopening shows
-        // current values immediately, and re-read the login-item registration, which the user may
-        // have changed in System Settings → Login Items while the window was closed.
+        // this window (it is cached and only ordered out). Refresh device data on appear so a
+        // reopened window never shows a stale battery or interface list.
         .onAppear {
             device.refresh()
-            launchAtLogin = LaunchAtLogin.state.isOn
         }
         // The remote can connect/disconnect while the window is open; refresh so battery and the
         // interface map do not go stale.
@@ -664,54 +659,53 @@ struct SettingsView: View {
 
     private var startupSection: some View {
         Section {
-            Toggle(isOn: Binding(
-                get: { launchAtLogin },
-                set: { wanted in
-                    do {
-                        try LaunchAtLogin.setEnabled(wanted)
-                        launchAtLoginError = nil
-                    } catch {
-                        launchAtLoginError = error.localizedDescription
-                    }
-                    // Always re-read the real registration rather than trusting `wanted`, so the
-                    // switch cannot sit in a position macOS did not actually accept.
-                    launchAtLogin = LaunchAtLogin.state.isOn
-                }
-            )) {
+            Toggle(isOn: $model.tune.launchAtLoginEnabled) {
                 rowLabel(L("Start at login"), "arrow.up.forward.app")
             }
             .disabled(LaunchAtLogin.state == .unavailable)
+            Toggle(isOn: $model.tune.showSetupWizardOnFirstLaunch) {
+                rowLabel(L("Show setup guide on first launch"), "checklist")
+            }
         } header: {
             Text(L("Startup"))
         } footer: {
-            Text(launchAtLoginError.map { L("Couldn't change it: %@", $0) }
+            Text(model.launchAtLoginError.map { L("Couldn't change it: %@", $0) }
                  ?? LaunchAtLogin.note
-                 ?? L("Runs HyperVibe automatically after you log in. Also listed under System Settings → General → Login Items."))
+                 ?? L("Startup choices are stored in config.jsonc. Launch at login is also listed under System Settings → General → Login Items."))
                 .font(.system(size: 11))
-                .foregroundStyle(launchAtLoginError == nil ? Color.secondary : Color.red)
+                .foregroundStyle(model.launchAtLoginError == nil ? Color.secondary : Color.red)
         }
     }
 
     private var widgetSection: some View {
         Section {
+            Toggle(isOn: $model.tune.menuBarIconEnabled) {
+                rowLabel(L("Menu bar icon"), "menubar.rectangle")
+            }
             Toggle(isOn: $model.tune.statusWidgetEnabled) {
                 rowLabel(L("Always-on status widget"), "rectangle.on.rectangle")
+            }
+            Toggle(isOn: $model.tune.layerHUDEnabled) {
+                rowLabel(L("Layer and connection HUD"), "square.stack.3d.up")
             }
             Toggle(isOn: $model.tune.holdHUDEnabled) {
                 rowLabel(L("Long-press progress HUD"), "wave.3.right.circle.fill")
             }
+            Toggle(isOn: $model.tune.dragIndicatorEnabled) {
+                rowLabel(L("Sticky-drag indicator"), "hand.draw.fill")
+            }
         } header: {
             Text(L("On-screen Status"))
         } footer: {
-            Text(L("The compact widget stays above every app, shows the current Layer at rest, and follows a hold until release. The larger progress HUD visualises release-to-select stages. They can be enabled independently."))
+            Text(L("Every persistent or transient status surface can be enabled independently here or in config.jsonc."))
         }
     }
 
     private var languageSection: some View {
         Section {
             Picker(selection: Binding(
-                get: { loc.language },
-                set: { loc.language = $0 }
+                get: { AppLanguage(rawValue: model.tune.interfaceLanguage) ?? .english },
+                set: { model.tune.interfaceLanguage = $0.rawValue }
             )) {
                 ForEach(AppLanguage.allCases) { language in
                     Text(language.displayName).tag(language)

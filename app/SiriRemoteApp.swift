@@ -39,6 +39,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Independent from the compact status widget: users may keep the always-on Layer card while
     /// disabling the larger release-to-select progress HUD (or vice versa).
     private var holdHUDEnabled = true
+    private var layerHUDEnabled = true
+    private var dragIndicatorEnabled = true
+    /// Avoid asking SMAppService to re-apply the same JSON request for every unrelated slider tick.
+    private var lastLaunchAtLoginRequest: Bool?
 
     // Config engine (SiriRemoteCore)
     private var controller: Controller?
@@ -55,7 +59,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Show (or re-show) the first-run setup guide. Used both by the first-launch trigger and the
     /// menu bar's "Setup Guide" item.
     func showSetupWizard() {
-        let wizard = setupWizard ?? SetupWizardController { [weak self] in self?.setupWizard = nil }
+        let wizard = setupWizard ?? SetupWizardController(
+            onFinished: { [weak self] in self?.setupWizard = nil },
+            onLanguageChosen: { [weak self] language in
+                self?.settingsModel?.tune.interfaceLanguage = language.rawValue
+            },
+            onLaunchAtLoginChanged: { [weak self] enabled in
+                self?.settingsModel?.tune.launchAtLoginEnabled = enabled
+            }
+        )
         setupWizard = wizard
         wizard.show()
     }
@@ -557,7 +569,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // First launch: run the full setup guide (language → permissions → pairing → startup). It
         // shows once (persisted) and can be reopened any time from the menu bar.
-        if !UserDefaults.standard.bool(forKey: SetupWizardController.completedKey) {
+        if model.tune.showSetupWizardOnFirstLaunch,
+           !UserDefaults.standard.bool(forKey: SetupWizardController.completedKey) {
             DispatchQueue.main.async { [weak self] in self?.showSetupWizard() }
         }
 
@@ -638,8 +651,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Layer HUD: show a macOS-style overlay when a sticky layer toggles on/off.
         let hud = LayerHUD(layers: config.settings.layers)
         layerHUD = hud
-        remoteInputHandler?.onLayerToggle = { on, name in
-            on ? hud.showOn(name) : hud.showOff(name)
+        remoteInputHandler?.onLayerToggle = { [weak self, weak hud] on, name in
+            guard self?.layerHUDEnabled == true else { return }
+            on ? hud?.showOn(name) : hud?.showOff(name)
         }
 
         // Release-to-select needs to be visible: a track that fills while a button is held, with a
@@ -681,7 +695,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let dragBadge = DragIndicator()
         dragIndicator = dragBadge
-        remoteInputHandler?.onStickyDrag = { on in on ? dragBadge.show() : dragBadge.hide() }
+        remoteInputHandler?.onStickyDrag = { [weak self, weak dragBadge] on in
+            guard self?.dragIndicatorEnabled == true else {
+                dragBadge?.hide()
+                return
+            }
+            on ? dragBadge?.show() : dragBadge?.hide()
+        }
 
         // `--touch-monitor`: open the live view alongside normal operation, so the remote keeps
         // working while its raw data is on screen. Read-only; it only observes.
@@ -738,8 +758,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // stack up identical "Connected" cards.
                 if self.lastConnectedState != connected {
                     self.lastConnectedState = connected
-                    connected ? self.layerHUD?.showRemoteConnected()
-                              : self.layerHUD?.showRemoteDisconnected()
+                    if self.layerHUDEnabled {
+                        connected ? self.layerHUD?.showRemoteConnected()
+                                  : self.layerHUD?.showRemoteDisconnected()
+                    }
                     // The always-on status widget rests on a "not connected" face and plays a
                     // brief connect animation on the connect edge (setConnected de-duplicates the
                     // several per-interface callbacks internally).
@@ -823,11 +845,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         remoteInputHandler?.doubleTapWindow = t.doubleTapWindow
         remoteInputHandler?.spacesModeWindow = t.spacesModeWindow
         findCursorEnabled = t.findCursorEnabled
+        Loc.shared.apply(configValue: t.interfaceLanguage)
+        statusItem?.isVisible = t.menuBarIconEnabled
         statusWidget?.setEnabled(t.statusWidgetEnabled)
+        let wasShowingLayerHUD = layerHUDEnabled
+        layerHUDEnabled = t.layerHUDEnabled
+        if wasShowingLayerHUD, !t.layerHUDEnabled { layerHUD?.hideImmediately() }
         let wasShowingHoldHUD = holdHUDEnabled
         holdHUDEnabled = t.holdHUDEnabled
-        if wasShowingHoldHUD, !t.holdHUDEnabled { holdHUD?.end(firedIndex: 0) }
+        if wasShowingHoldHUD, !t.holdHUDEnabled { holdHUD?.hideImmediately() }
+        let wasShowingDragIndicator = dragIndicatorEnabled
+        dragIndicatorEnabled = t.dragIndicatorEnabled
+        if wasShowingDragIndicator, !t.dragIndicatorEnabled { dragIndicator?.hideImmediately() }
         focusFollower?.enabled = t.focusFollowsCursor
+        if lastLaunchAtLoginRequest != t.launchAtLoginEnabled {
+            lastLaunchAtLoginRequest = t.launchAtLoginEnabled
+            do {
+                try LaunchAtLogin.setEnabled(t.launchAtLoginEnabled)
+                settingsModel?.launchAtLoginError = nil
+            } catch {
+                settingsModel?.launchAtLoginError = error.localizedDescription
+                NSLog("[siriRemote] launch-at-login apply failed: \(error)")
+            }
+        }
     }
 
     /// Persist Tuning-tab changes back into config.jsonc so config stays the single source of truth
@@ -862,8 +902,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             s.doubleTapWindow = t.doubleTapWindow
             s.spacesModeWindow = t.spacesModeWindow
             s.findCursorEnabled = t.findCursorEnabled
+            s.interfaceLanguage = t.interfaceLanguage
+            s.launchAtLoginEnabled = t.launchAtLoginEnabled
+            s.menuBarIconEnabled = t.menuBarIconEnabled
             s.statusWidgetEnabled = t.statusWidgetEnabled
+            s.layerHUDEnabled = t.layerHUDEnabled
             s.holdHUDEnabled = t.holdHUDEnabled
+            s.dragIndicatorEnabled = t.dragIndicatorEnabled
+            s.showSetupWizardOnFirstLaunch = t.showSetupWizardOnFirstLaunch
             s.focusFollowsCursor = t.focusFollowsCursor
             s.circularScroll = t.circularConfig
         }

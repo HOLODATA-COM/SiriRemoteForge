@@ -34,19 +34,20 @@ final class Loc: ObservableObject {
     static let shared = Loc()
     static let didChange = Notification.Name("com.hypervibe.languageChanged")
 
-    private static let defaultsKey = "app.language"
+    /// Read-only migration key from builds that stored language outside config.jsonc. New builds
+    /// never write it; a GUI/config save makes `settings.interfaceLanguage` explicit instead.
+    private static let legacyDefaultsKey = "app.language"
 
-    /// Default is English. Changing this persists and broadcasts so every surface relocalizes.
+    /// Default is English. Config application broadcasts so every surface relocalizes live.
     @Published var language: AppLanguage {
         didSet {
             guard oldValue != language else { return }
-            UserDefaults.standard.set(language.rawValue, forKey: Self.defaultsKey)
             NotificationCenter.default.post(name: Loc.didChange, object: nil)
         }
     }
 
     private init() {
-        if let raw = UserDefaults.standard.string(forKey: Self.defaultsKey),
+        if let raw = UserDefaults.standard.string(forKey: Self.legacyDefaultsKey),
            let stored = AppLanguage(rawValue: raw) {
             language = stored
         } else {
@@ -54,20 +55,17 @@ final class Loc: ObservableObject {
         }
     }
 
-    /// Whether the user has ever explicitly picked a language. `false` on a fresh install (the key is
-    /// absent and `language` fell back to English), which is what triggers the first-run chooser.
-    var hasChosenLanguage: Bool {
-        UserDefaults.standard.string(forKey: Self.defaultsKey) != nil
+    /// Apply a validated JSON value. Invalid values are rejected by ConfigLoader before this point;
+    /// the guard is defensive for callers constructing a TuneSettings value directly.
+    func apply(configValue: String) {
+        guard let configured = AppLanguage(rawValue: configValue) else { return }
+        language = configured
     }
 
-    /// Record a deliberate choice. Persists even when the pick equals the current default (English),
-    /// so the first-run chooser is never shown twice.
+    /// Apply a deliberate first-run choice immediately. SetupWizard's injected callback writes the
+    /// same value to config.jsonc, so this method owns presentation only, not persistence.
     func choose(_ newLanguage: AppLanguage) {
-        if language != newLanguage {
-            language = newLanguage            // didSet persists + posts didChange
-        } else {
-            UserDefaults.standard.set(newLanguage.rawValue, forKey: Self.defaultsKey)
-        }
+        language = newLanguage
     }
 
     func string(_ english: String) -> String {
@@ -235,13 +233,17 @@ extension Loc {
         "Pointer and scroll use the same normalised curve shape. Click to edit independently.": "指针与滚动使用相同的归一化曲线形状。点击可独立编辑。",
         "Click to lock both normalised curve shapes. Numeric speed and gain ranges stay independent.": "点击可锁定两条归一化曲线形状。数值速度与增益范围保持独立。",
         "Start at login": "登录时启动",
+        "Show setup guide on first launch": "首次启动时显示设置指南",
         "Startup": "启动",
         "Couldn't change it: %@": "无法更改:%@",
-        "Runs HyperVibe automatically after you log in. Also listed under System Settings → General → Login Items.": "登录后自动运行 HyperVibe。也会列在「系统设置 → 通用 → 登录项」中。",
+        "Startup choices are stored in config.jsonc. Launch at login is also listed under System Settings → General → Login Items.": "启动选项保存在 config.jsonc 中。登录时启动也会列在「系统设置 → 通用 → 登录项」中。",
+        "Menu bar icon": "菜单栏图标",
         "Always-on status widget": "常驻状态浮窗",
+        "Layer and connection HUD": "层级与连接 HUD",
         "Long-press progress HUD": "长按进度 HUD",
+        "Sticky-drag indicator": "持续拖动提示",
         "On-screen Status": "屏幕状态",
-        "The compact widget stays above every app, shows the current Layer at rest, and follows a hold until release. The larger progress HUD visualises release-to-select stages. They can be enabled independently.": "紧凑浮窗始终位于所有应用之上,静止时显示当前层,并跟随长按直至松手。较大的进度 HUD 可视化「松手选择」的各阶段。二者可独立启用。",
+        "Every persistent or transient status surface can be enabled independently here or in config.jsonc.": "每一个常驻或临时状态界面都可以在这里或 config.jsonc 中独立开关。",
         "Reset to defaults": "恢复默认",
         "Button, ring, and swipe mappings live in %@": "按钮、圆环与滑动映射保存在 %@",
 

@@ -22,6 +22,11 @@ public enum ConfigLoader {
         guard c.modes[c.settings.defaultMode] != nil else {
             throw ConfigError.validation("defaultMode '\(c.settings.defaultMode)' not in modes")
         }
+        if let language = c.settings.interfaceLanguage, !["en", "zh"].contains(language) {
+            throw ConfigError.validation(
+                "settings.interfaceLanguage must be 'en' or 'zh' (got '\(language)')"
+            )
+        }
         let layers = c.settings.layers
         let usesLayerCycle = c.modes.values.contains { mode in
             mode.bindings.values.contains { $0 == .layerCycle }

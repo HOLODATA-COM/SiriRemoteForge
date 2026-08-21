@@ -281,8 +281,14 @@ setup — push-to-talk, per-app Music/browser/terminal modes, layers — is in
       { "id": "L1", "name": "Spaces", "color": "blue" },
       { "id": "L2", "name": "Arrows", "color": "purple" }
     ],
+    "interfaceLanguage": "en",
+    "launchAtLoginEnabled": true,
+    "menuBarIconEnabled": true,
     "statusWidgetEnabled": true,
-    "holdHUDEnabled": true
+    "layerHUDEnabled": true,
+    "holdHUDEnabled": true,
+    "dragIndicatorEnabled": true,
+    "showSetupWizardOnFirstLaunch": true
   },
 
   // Frontmost app's bundle id → mode name (plus a "default").
@@ -416,7 +422,9 @@ speaker's slowly learned centre stays cyan, and rising intonation warms toward a
 confidence controls saturation, so breaths and unvoiced consonants fall gracefully back to the
 current Layer tint instead of flashing random colours. A small luminous cap reflects spectral
 brightness, and a restrained whole-card radial field follows the current pitch colour behind the
-console. Every state change uses shared-element geometry rather than moving or fading a page. The
+console. Labels, symbols, and temporary animation snapshots resolve through the material view's
+live `interiorBackgroundStyle`, so the same card stays readable over both light and dark apps
+without screen capture permission. Every state change uses shared-element geometry rather than moving or fading a page. The
 icon is treated as one two-sided object inside a shared temporary hinge: its current face turns to
 the 90° edge around Y, swaps while edge-on, and the next icon returns from −90° on that exact axis.
 Both text rows use the same construction around X, reading as a compact vertical page turn. A Layer
@@ -424,7 +432,7 @@ change uses the same physics but leaves the unchanged
 `Current Layer` subtitle physically continuous. Voice makes the waveform the icon's back face: 25
 short bars turn into view across the original icon's full 40 pt footprint, then spread into the real
 waveform while the two text rows flip and divide into four corner readouts. Its live indicator uses
-a dedicated red recording dot while the label and timer remain white. Releasing runs the entire
+a dedicated red recording dot while the label and timer use adaptive semantic contrast. Releasing runs the entire
 mapping backwards—without a circular nucleus, background colour dot, `Completed` intermediary, or
 page motion. All analysis runs off the real-time audio callback and changes display only.
 Layer actions skip the redundant
@@ -567,11 +575,18 @@ dead zone, so summoning it and pressing Select does nothing by accident.
 All live in `settings` and in the app's **Tuning** tab: `cursorSpeed`, `cursorDeadzone`, pointer-accel
 curve (`accelMin`/`accelMax`/`accelLowSpeed`/`accelHighSpeed`), `clickRiseThreshold`, `pressMoveMax`,
 `holdThreshold`/`holdThreshold2`/`holdThreshold3`, `doubleTapWindow`, `spacesModeWindow`,
-`findCursorEnabled`, `statusWidgetEnabled`, `holdHUDEnabled`, `focusFollowsCursor`, and `circularScroll { enabled, minRadius, startThreshold,
-pixelsPerRadian, scrollEase, invert }`. Config is the single source of truth — Tuning-tab slider changes are written
+`findCursorEnabled`, `interfaceLanguage`, `launchAtLoginEnabled`, `menuBarIconEnabled`,
+`statusWidgetEnabled`, `layerHUDEnabled`, `holdHUDEnabled`, `dragIndicatorEnabled`,
+`showSetupWizardOnFirstLaunch`, `focusFollowsCursor`, and `circularScroll { enabled, minRadius,
+startThreshold, pixelsPerRadian, scrollEase, invert }`. Config is the single source of truth — Tuning-tab changes are written
 back to `config.jsonc` after a short debounce. The window header always shows **Saving…**,
 **Auto-saved**, or **Save failed**; click the failure pill for the exact error. Layout edits use the
 same status indicator and save as soon as a picker changes or an editor commits.
+
+All formal presentation choices are JSON-controlled. The menu-bar item, persistent status widget,
+layer/connection HUD, long-press HUD, and sticky-drag badge can each be hidden independently. Only
+machine-local state stays outside the portable config: the dragged widget position (which contains a
+Mac-specific display ID) and the fact that this particular Mac has completed its one-time setup guide.
 
 ---
 

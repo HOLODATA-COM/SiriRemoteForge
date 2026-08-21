@@ -41,8 +41,10 @@ enum LaunchAtLogin {
     /// leaving the toggle in a state that does not match reality.
     static func setEnabled(_ enabled: Bool) throws {
         if enabled {
-            // Registering while already registered throws; treat that as success.
-            guard SMAppService.mainApp.status != .enabled else { return }
+            // `.requiresApproval` is already registered too; registering it again throws and does
+            // not bypass the user's pending System Settings decision. Treat both states as success.
+            guard SMAppService.mainApp.status != .enabled,
+                  SMAppService.mainApp.status != .requiresApproval else { return }
             try SMAppService.mainApp.register()
         } else {
             guard SMAppService.mainApp.status != .notRegistered else { return }
