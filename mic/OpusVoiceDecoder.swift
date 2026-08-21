@@ -2,10 +2,10 @@
 //  OpusVoiceDecoder.swift
 //  HyperVibe — voice pipeline (stage ③: Opus → PCM)
 //
-//  Decodes the Siri Remote's microphone frames. The 3rd-gen remote (A2854) streams its
-//  mic as raw Opus packets — CELT-only, wideband (16 kHz), 20 ms per frame, TOC 0xb8 —
-//  one packet per BLE HID report 0xFA, only while the Siri button is held. The remote
-//  only ever SENDS audio, so this is DECODE-ONLY: no encoder is linked into the app.
+//  Decodes the Siri Remote's microphone frames. The 2nd-gen A2540 and 3rd-gen A2854 stream
+//  their mics as raw Opus packets — CELT-only, wideband (16 kHz), 20 ms per frame, TOC 0xb8 —
+//  one packet per BLE HID report 0xFA, only while the Siri button is held. The remote only
+//  ever SENDS audio, so this is DECODE-ONLY: no encoder is linked into the app.
 //
 //  Frames reach here already stripped of their report header by the HCI parser (stage ②);
 //  this takes the bare Opus payload and returns 48 kHz mono PCM. The decoder is created at

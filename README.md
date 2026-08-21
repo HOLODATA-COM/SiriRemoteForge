@@ -224,9 +224,9 @@ triggered. During the guard, touches and other buttons are still read but do not
 
 ## 🎙️ Turn the remote into a microphone
 
-The 3rd-gen Siri Remote has a genuinely good close-talk microphone — the one you'd hold up and speak
-into. macOS never exposes it (it isn't a standard Bluetooth audio device), so `mic/` builds one: a
-CoreAudio device named **"Siri Remote Mic"** that any app can select.
+The 2nd- and 3rd-gen aluminum Siri Remotes have a genuinely good close-talk microphone — the one
+you'd hold up and speak into. macOS never exposes it (it isn't a standard Bluetooth audio device),
+so `mic/` builds one: a CoreAudio device named **"Siri Remote Mic"** that any app can select.
 
 **Hold the Siri button and speak → your voice arrives from the remote's close mic. Let go → it
 seamlessly falls back to the Mac's built-in mic.** Pair that with a push-to-talk binding and it's a

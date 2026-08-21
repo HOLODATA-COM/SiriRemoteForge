@@ -108,10 +108,19 @@ Definitive GO. Concretely, from one live capture:
   cleanly through `OpusVoiceDecoder` (0 errors)**, RMS 3232 (non-silent). WAV written and played back;
   user: "很清楚" (crystal clear).
 
-**Exact voice-frame format — the reference for the live parser (verified against 804 real frames):**
-- Voice = an **ATT Handle-Value-Notification (opcode `0x1B`) on attribute handle `0x0035`**, arriving
-  on the remote's ACL connection handle (dynamic; was `0x0406` this session). Filter signature in the
-  raw bytes: `04 00 1B 35 00` (L2CAP CID 0x0004 = ATT, opcode 0x1B, handle 0x0035).
+**Exact voice-frame format — the reference for the live parser (verified on both aluminum remote
+generations):**
+- Voice = an **ATT Handle-Value-Notification (opcode `0x1B`)** arriving on the remote's dynamic ACL
+  connection handle. The generation-specific attribute handles and raw filter signatures are:
+
+  | Remote | Attribute handle | Signature |
+  | --- | --- | --- |
+  | A2540, 2nd gen (Lightning) | `0x0036` | `04 00 1B 36 00` |
+  | A2854, 3rd gen (USB-C) | `0x0035` | `04 00 1B 35 00` |
+
+  The A2540 path was verified on one physical remote over Bluetooth on macOS 26.5. Its sequence,
+  length, and Opus payload layout matched the A2854 path; no raw device identifiers or captures are
+  included here.
 - ATT value layout: `[4-byte sequence/header][1-byte Opus length L][Opus frame of L bytes]`, the Opus
   frame beginning with **TOC `0xB8`** (CELT-only wideband, 20 ms).
 - Decode each frame at 48 kHz mono → 960 samples. ~50 fps.
