@@ -1827,7 +1827,9 @@ feel that evening; if any of these is wrong, this is where to look:
   secondary and tertiary layers. On macOS 15+ symbol-to-symbol changes use Magic Replace with a
   by-layer Replace fallback; macOS 14 uses by-layer Replace directly; macOS 13 keeps the existing
   Core Animation fallback. Layer reconstruction uses Draw On by layer on macOS 26 and a cleared
-  by-layer Appear state on older supported Symbols runtimes. Volume uses variable colour; directional,
+  by-layer Appear state on older supported Symbols runtimes. Draw On is also guarded with
+  `#if compiler(>=6.2)`: runtime `#available` alone is insufficient because the Xcode 16/macOS 15 SDK
+  used by GitHub CI cannot parse a macOS 26 symbol name. Volume uses variable colour; directional,
   media, brightness, destructive, sleep, search, copy/paste/cut and pointer families each have a
   deterministic native effect inside the existing 0.2–0.3 s interaction envelope.
 - The web-only `morphicons` library was deliberately not embedded: it morphs supplied SVG/path data,

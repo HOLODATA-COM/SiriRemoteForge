@@ -359,11 +359,18 @@ enum ActionSymbolStyle {
                 imageView.addSymbolEffect(.bounce.down.byLayer, options: options)
             }
         case .layer:
+            // `#available` protects runtime use, but an older SDK still has to parse every symbol
+            // name in the branch. Xcode 16 / macOS 15 SDK does not declare DrawOnSymbolEffect, so
+            // keep the shipping fallback visible to that compiler as well as to older systems.
+#if compiler(>=6.2)
             if #available(macOS 26.0, *) {
                 imageView.addSymbolEffect(.drawOn.byLayer, options: options)
             } else {
                 imageView.addSymbolEffect(.appear.up.byLayer, options: options)
             }
+#else
+            imageView.addSymbolEffect(.appear.up.byLayer, options: options)
+#endif
         case .destructive, .contextClick:
             imageView.addSymbolEffect(.pulse.byLayer, options: options)
         case .sleep:
