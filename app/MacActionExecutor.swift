@@ -58,6 +58,8 @@ final class MacActionExecutor: ActionExecutor {
             // Synthesize the hardware brightness keys so ALL displays move (DisplayServices misses
             // some externals). Low value → dim to minimum, high → restore to maximum.
             if value < 0.5 { Brightness.dimToMin() } else { Brightness.restoreToMax() }
+        case .brightnessStep(let direction):
+            Brightness.step(direction)
         case .mode, .layer, .layerCycle:
             break // handled inside Controller / RemoteInputHandler; never reaches the executor
         }

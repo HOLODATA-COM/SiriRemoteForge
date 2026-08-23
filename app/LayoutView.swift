@@ -674,6 +674,7 @@ private struct ActionSlotEditor: View {
              media = "Media", mouse = "Mouse",
              launchApp = "Launch app", openURL = "Open URL", shell = "Shell",
              applescript = "AppleScript", space = "Switch space", brightness = "Brightness",
+             brightnessStep = "Brightness step",
              layer = "Layer", layerCycle = "Layer cycle", mode = "Mode", repeatKey = "Repeat key",
              fullscreen = "Full screen", minimize = "Minimise",
              closeWindow = "Close window", appWheel = "App wheel"
@@ -712,6 +713,7 @@ private struct ActionSlotEditor: View {
                     Text(L(Kind.media.rawValue)).tag(Kind.media)
                     Text(L(Kind.mouse.rawValue)).tag(Kind.mouse)
                     Text(L(Kind.brightness.rawValue)).tag(Kind.brightness)
+                    Text(L(Kind.brightnessStep.rawValue)).tag(Kind.brightnessStep)
                 }
                 Section(L("Apps & web")) {
                     Text(L(Kind.launchApp.rawValue)).tag(Kind.launchApp)
@@ -790,6 +792,8 @@ private struct ActionSlotEditor: View {
                     .frame(width: 130)
                 Text("\(Int(value*100))%").font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
             }
+        case .brightnessStep:
+            enumPicker(["down", "up"])
         }
     }
 
@@ -822,6 +826,7 @@ private struct ActionSlotEditor: View {
         case .appWheel:               kind = .appWheel
         case .repeatKey(let k, let d, let i): kind = .repeatKey; text = k; repDelay = d; repInterval = i
         case .brightness(let v):      kind = .brightness; value = v
+        case .brightnessStep(let d):  kind = .brightnessStep; pick = d < 0 ? "down" : "up"
         }
     }
 
@@ -833,6 +838,7 @@ private struct ActionSlotEditor: View {
         case .media:        pick = "playpause"
         case .mouse:        pick = "click"
         case .space:        pick = "left"
+        case .brightnessStep: pick = "up"
         case .layer, .mode: pick = modeNames.first ?? "global"
         default:            pick = ""
         }
@@ -880,6 +886,7 @@ private struct ActionSlotEditor: View {
         case .layerCycle:  return .layerCycle
         case .mode:        return pick.isEmpty ? nil : .mode(to: pick)
         case .brightness:  return .brightness(value)
+        case .brightnessStep: return .brightnessStep(direction: pick == "down" ? -1 : 1)
         }
     }
 }

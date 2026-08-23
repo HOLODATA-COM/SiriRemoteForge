@@ -22,11 +22,22 @@ enum ActionVisual {
     struct Visual {
         let label: String
         let image: NSImage?
+        /// Retain the source name when this is an SF Symbol. AppKit's public Symbols framework
+        /// can animate symbol topology directly, but it intentionally does not expose SVG paths
+        /// from an arbitrary `NSImage`; explicit provenance is therefore safer than guessing.
+        let symbolName: String?
         /// True when `image` is the real icon of the app being opened. An app icon already says
         /// which app this is, and it is a picture rather than a glyph — pairing it with the name
         /// only makes the two fight over the same optical centre. So the HUD shows it alone, and
         /// bigger. Writing an explicit `label` in config turns this off and puts the name back.
         let iconOnly: Bool
+        /// Shared across every action surface. A custom config icon may change the drawing, but it
+        /// must not erase the action's severity or physical behaviour.
+        let tint: NSColor
+        let symbolCue: ActionSymbolCue
+        /// Real system state for a stateful control symbol. Volume up/down and brightness up/down
+        /// share one symbol family; this value, not the direction key, determines its visible fill.
+        let controlState: ControlVisualState?
     }
 
     /// Sizes chosen so a solo app icon carries the card on its own, while a symbol sitting beside
@@ -35,22 +46,48 @@ enum ActionVisual {
     private static let inlineSize: CGFloat = 28
 
     static func resolve(_ action: Action, _ presentation: Config.Presentation?,
-                        prefersTargetAppIcon: Bool = true) -> Visual {
+                        prefersTargetAppIcon: Bool = true,
+                        controlStateOverride: ControlVisualState? = nil) -> Visual {
         let named = presentation?.label.flatMap { $0.isEmpty ? nil : $0 }
+        let style = ActionSymbolStyle.presentation(for: action)
+        let controlState = controlStateOverride ?? SystemControlState.snapshot(for: action)
+
+        // Volume +/- and brightness +/- are changes to one system state, not four unrelated
+        // commands. Canonicalise the old speaker/sun config symbols onto Apple's variable-value
+        // families while still respecting a genuinely custom icon chosen by the user.
+        if let controlState,
+           permitsStateSymbol(presentation?.icon, for: controlState.kind) {
+            let symbolName = stateSymbolName(for: controlState)
+            if let image = symbol(symbolName, size: inlineSize,
+                                  variableValue: controlState.isMuted ? nil : controlState.value) {
+                return Visual(label: stateLabel(named: named, action: action,
+                                                state: controlState), image: image,
+                              symbolName: symbolName, iconOnly: false,
+                              tint: style.tint, symbolCue: style.cue,
+                              controlState: controlState)
+            }
+        }
 
         // A custom SF Symbol always wins, and always keeps its label — it was chosen deliberately.
         if let iconName = presentation?.icon, !iconName.isEmpty,
            let sym = symbol(iconName, size: inlineSize) {
-            return Visual(label: named ?? fallbackLabel(action), image: sym, iconOnly: false)
+            return Visual(label: named ?? fallbackLabel(action), image: sym,
+                          symbolName: iconName, iconOnly: false,
+                          tint: style.tint, symbolCue: style.cue,
+                          controlState: controlState)
         }
 
         if let app = launchedAppName(action), let icon = appIcon(named: app) {
             if let named = named {
                 icon.size = NSSize(width: inlineSize, height: inlineSize)
-                return Visual(label: named, image: icon, iconOnly: false)
+                return Visual(label: named, image: icon, symbolName: nil, iconOnly: false,
+                              tint: style.tint, symbolCue: style.cue,
+                              controlState: controlState)
             }
             icon.size = NSSize(width: soloSize, height: soloSize)
-            return Visual(label: app, image: icon, iconOnly: true)
+            return Visual(label: app, image: icon, symbolName: nil, iconOnly: true,
+                          tint: style.tint, symbolCue: style.cue,
+                          controlState: controlState)
         }
 
         // An action AIMED at an app (rather than one that opens it) still shows that app's icon —
@@ -59,13 +96,24 @@ enum ActionVisual {
         if prefersTargetAppIcon,
            let app = targetedAppName(action), let icon = appIcon(named: app) {
             icon.size = NSSize(width: inlineSize, height: inlineSize)
-            return Visual(label: named ?? fallbackLabel(action), image: icon, iconOnly: false)
+            return Visual(label: named ?? fallbackLabel(action), image: icon,
+                          symbolName: nil, iconOnly: false,
+                          tint: style.tint, symbolCue: style.cue,
+                          controlState: controlState)
         }
 
+        let preferredName = defaultSymbolName(action)
+        if let image = symbol(preferredName, size: inlineSize) {
+            return Visual(label: named ?? fallbackLabel(action), image: image,
+                          symbolName: preferredName, iconOnly: false,
+                          tint: style.tint, symbolCue: style.cue,
+                          controlState: controlState)
+        }
         return Visual(label: named ?? fallbackLabel(action),
-                      image: symbol(defaultSymbolName(action), size: inlineSize)
-                          ?? symbol("command", size: inlineSize),
-                      iconOnly: false)
+                      image: symbol("command", size: inlineSize),
+                      symbolName: "command", iconOnly: false,
+                      tint: style.tint, symbolCue: style.cue,
+                      controlState: controlState)
     }
 
     private static func fallbackLabel(_ action: Action) -> String {
@@ -77,6 +125,24 @@ enum ActionVisual {
         // The engine's English display label is used as the translation key so HUD action names
         // localize at the presentation boundary without coupling SiriRemoteCore to the UI language.
         return L(action.displayLabel)
+    }
+
+    /// Mute is a binary state, not a direction. The compact surface therefore names the measured
+    /// result after the command: a slashed speaker reads `Mute`, and an unslashed speaker reads
+    /// `Unmute`. A deliberately custom label still wins; the conventional Mute/Unmute labels are
+    /// the only configured strings that opt into this live-state wording.
+    private static func stateLabel(named: String?, action: Action,
+                                   state: ControlVisualState) -> String {
+        guard state.kind == .volume,
+              SystemControlState.isSystemOutputMuteToggle(action) else {
+            return named ?? fallbackLabel(action)
+        }
+        if let named {
+            let conventional = Set(["mute", "unmute", L("Mute").lowercased(),
+                                    L("Unmute").lowercased()])
+            if !conventional.contains(named.lowercased()) { return named }
+        }
+        return state.isMuted ? L("Mute") : L("Unmute")
     }
 
     // MARK: - App icons
@@ -150,23 +216,53 @@ enum ActionVisual {
 
     // MARK: - SF Symbols
 
-    private static func symbol(_ name: String, size: CGFloat) -> NSImage? {
+    private static func symbol(_ name: String, size: CGFloat,
+                               variableValue: Double? = nil) -> NSImage? {
         let cfg = NSImage.SymbolConfiguration(pointSize: size * 0.82, weight: .medium)
-        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(cfg)
+        let image: NSImage?
+        if let variableValue {
+            image = NSImage(systemSymbolName: name,
+                            variableValue: min(1, max(0, variableValue)),
+                            accessibilityDescription: nil)
+        } else {
+            image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        }
+        return image?.withSymbolConfiguration(cfg)
+    }
+
+    private static func permitsStateSymbol(_ configuredName: String?,
+                                           for kind: ControlVisualKind) -> Bool {
+        guard let configuredName, !configuredName.isEmpty else { return true }
+        let lower = configuredName.lowercased()
+        switch kind {
+        case .volume: return lower.hasPrefix("speaker")
+        case .brightness: return lower.hasPrefix("sun.")
+        }
+    }
+
+    private static func stateSymbolName(for state: ControlVisualState) -> String {
+        switch state.kind {
+        case .volume:
+            return state.isMuted ? "speaker.slash.fill" : "speaker.wave.3.fill"
+        case .brightness:
+            // `sun.max.fill` is visually static even when created with `variableValue`. Apple's
+            // outlined circle variant is the actual variable symbol: its authored ring advances
+            // continuously with measured display brightness while the sun stays recognisable.
+            return "sun.max.circle"
+        }
     }
 
     /// A reasonable symbol per action kind, so nothing ever shows up blank.
     private static func defaultSymbolName(_ action: Action) -> String {
         switch action {
-        case .keystroke:   return "keyboard"
+        case .keystroke(let keys): return keystrokeSymbolName(keys)
         case .pushToTalk:  return "mic.fill"
         case .media(let key):
             switch key.lowercased() {
             case "next": return "forward.end.fill"
             case "previous", "prev": return "backward.end.fill"
-            case "volup", "volumeup": return "speaker.wave.3.fill"
-            case "voldown", "volumedown": return "speaker.wave.1.fill"
+            case "volup", "volumeup", "voldown", "volumedown":
+                return "speaker.wave.3.fill"
             case "mute": return "speaker.slash.fill"
             default: return "playpause.fill"
             }
@@ -178,13 +274,22 @@ enum ActionVisual {
             default: return "cursorarrow.click"
             }
         case .launch:      return "arrow.up.forward.app"
-        case .shell:       return "terminal"
+        case .shell(let command):
+            let lower = command.lowercased()
+            if lower.contains("sleep") || lower.contains("pmset") { return "moon.fill" }
+            return "terminal"
         case .applescript(let script):
             let lower = script.lowercased()
             if lower.contains("next track") { return "forward.end.fill" }
             if lower.contains("previous track") { return "backward.end.fill" }
             if lower.contains("playpause") || lower.contains("play pause") {
                 return "playpause.fill"
+            }
+            if lower.contains("output muted") || lower.contains("set volume") {
+                return "speaker.slash.fill"
+            }
+            if lower.contains(" to quit") || lower.contains("quit application") {
+                return "power"
             }
             return "applescript"
         case .mode:        return "rectangle.on.rectangle"
@@ -194,8 +299,41 @@ enum ActionVisual {
         case .minimize:    return "arrow.down.right.and.arrow.up.left"
         case .closeWindow: return "xmark.circle.fill"
         case .appWheel:    return "circle.grid.3x3.fill"
-        case .repeatKey:   return "repeat"
-        case .brightness(let value): return value <= 0.25 ? "sun.min.fill" : "sun.max.fill"
+        case .repeatKey(let keys, _, _): return keystrokeSymbolName(keys)
+        case .brightness: return "sun.max.fill"
+        case .brightnessStep: return "sun.max.fill"
         }
+    }
+
+    /// Prefer the actual object/action inside a shortcut over a generic keyboard. This keeps
+    /// config-authored shortcuts visually alive too: arrows move directionally, copy/paste retain
+    /// their document layers, and destructive window/app commands gain unmistakable geometry.
+    private static func keystrokeSymbolName(_ keys: String) -> String {
+        let tokens = keys.lowercased().split(separator: "+").map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let set = Set(tokens)
+        let hasCommand = !set.isDisjoint(with: ["cmd", "command", "lcmd", "rcmd"])
+        let hasShift = !set.isDisjoint(with: ["shift", "lshift", "rshift"])
+
+        if set.contains("delete") || set.contains("backspace") { return "delete.left.fill" }
+        if set.contains("forwarddelete") { return "delete.right.fill" }
+        if hasCommand, set.contains("q") { return "power" }
+        if hasCommand, set.contains("w") { return "xmark.square.fill" }
+        if hasCommand, set.contains("c") { return "doc.on.doc" }
+        if hasCommand, set.contains("v") { return "doc.on.clipboard" }
+        if hasCommand, set.contains("x") { return "scissors" }
+        if hasCommand, set.contains("space") { return "magnifyingglass" }
+        if hasCommand, hasShift, set.contains("t") { return "arrow.counterclockwise" }
+        if hasCommand, set.contains("=") { return "plus.magnifyingglass" }
+        if hasCommand, set.contains("-") { return "minus.magnifyingglass" }
+        if set.contains("left") { return "arrow.left" }
+        if set.contains("right") { return "arrow.right" }
+        if set.contains("up") { return "arrow.up" }
+        if set.contains("down") { return "arrow.down" }
+        if set.contains("enter") || set.contains("return") { return "return" }
+        if set.contains("tab") { return "arrow.right.to.line" }
+        if set.contains("esc") || set.contains("escape") { return "escape" }
+        return "keyboard"
     }
 }

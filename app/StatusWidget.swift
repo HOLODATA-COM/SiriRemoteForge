@@ -12,6 +12,7 @@ import AppKit
 import CoreGraphics
 import CoreText
 import QuartzCore
+import Symbols
 
 final class StatusWidgetController: NSObject, NSWindowDelegate {
 
@@ -45,8 +46,18 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         let title: String
         let subtitle: String
         let image: NSImage?
+        let symbolName: String?
+        let symbolCue: SymbolCue?
         let tint: NSColor
+        /// When present, the symbol describes a measured system state rather than the direction
+        /// of the binding that requested the change. Kept separate from `key` so a value update is
+        /// an in-place redraw, never a fresh content transition.
+        let controlState: ControlVisualState?
     }
+
+    /// Shared with the large hold HUD and transient Layer HUD: one action can no longer acquire a
+    /// different colour or physical meaning merely because it appears on another surface.
+    private typealias SymbolCue = ActionSymbolCue
 
     private struct HoldItem {
         let key: String
@@ -78,6 +89,30 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     private enum HoldProgressVisualStyle: Equatable {
         case water
         case glass
+    }
+
+    /// Motion is semantic, never random: once users learn how an App, tap, hold stage or Layer
+    /// arrives, that movement becomes another readable dimension of the status surface.
+    private enum IconMotion {
+        case ordinary
+        case layerRebuild(direction: CGFloat)
+        case applicationArrival
+        /// The App Wheel is nine independent destinations. Reveal its real SF Symbol pixels as a
+        /// diagonal relay instead of scaling the complete 3×3 mark like an indivisible bitmap.
+        case appWheelWave
+        case actionImpulse(count: Int)
+        case returnSweep
+        case holdSequence
+        case settleToLayer
+
+        var titleDirection: CGFloat {
+            switch self {
+            case .layerRebuild(let direction): return direction
+            case .returnSweep: return -1
+            case .settleToLayer: return -1
+            default: return 1
+            }
+        }
     }
 
     private struct Surface {
@@ -125,6 +160,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         let iconView: NSImageView
         let titleLabel: NSTextField
         let subtitleLabel: NSTextField
+        let symbolName: String?
 
         var views: [NSView] { [iconView, titleLabel, subtitleLabel] }
     }
@@ -145,6 +181,9 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     private var configuredOrdinals: [String: Int] = [:]
     private var currentLayerID = "BASE"
     private var currentPresentationKey: String?
+    private var currentSymbolName: String?
+    private var currentSymbolCue: SymbolCue?
+    private var currentControlState: ControlVisualState?
     private var currentFaceTint = NSColor.controlAccentColor
     private var isTransient = false
     private var enabled = false
@@ -162,6 +201,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     private var isConnected = false
     private var holdBase: HoldItem?
     private var holdStages: [TimedHoldItem] = []
+    private var holdStageDelays: [TimeInterval] = []
     private var holdVisualWorkItems: [DispatchWorkItem] = []
     private var activeHoldKey: String?
     private var holdVisualIsVisible = false
@@ -194,6 +234,11 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     private var contentMorphGeneration = 0
     private var contentMorphProxyViews: [NSView] = []
     private var contentMorphTransientLayers: [CALayer] = []
+    /// Invalidates delayed CoreAudio samples when another physical action arrives. A mute press can
+    /// happen while the previous 280 ms icon transition is still landing; without this generation,
+    /// that stale result could draw the wrong slash after a very fast second press.
+    private var controlStateRefreshGeneration = 0
+    private var pendingControlRefresh: (generation: Int, state: ControlVisualState)?
     private var releasedHold: (key: String, time: CFTimeInterval)?
     private var observerTokens: [NSObjectProtocol] = []
     /// A launch binding announces the destination before AppWatcher observes activation. Remember
@@ -201,6 +246,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     /// a second, visually noisy bounce of the same icon.
     private var pendingActivation: (name: String, time: CFTimeInterval)?
     private var lastEvent: (key: String, time: CFTimeInterval)?
+    /// Rate-driven controls own one stable presentation for the complete burst. Their input can
+    /// arrive faster than a 220 ms animation, so subsequent ticks extend the dwell (or atomically
+    /// update direction) instead of replaying the entrance/effect from frame zero.
+    private var activeContinuousFamily: String?
 
     init(layers: [Config.LayerDefinition], enabled: Bool,
          defaults: UserDefaults = .standard) {
@@ -271,6 +320,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     func setLayer(_ layer: String?, animated: Bool = true) {
         onMain { [weak self] in
             guard let self = self else { return }
+            self.activeContinuousFamily = nil
             let previousLayerID = self.currentLayerID
             let destinationLayerID = layer?.uppercased() ?? "BASE"
             self.currentLayerID = destinationLayerID
@@ -281,8 +331,13 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             guard !self.isHolding else { return }
             self.isTransient = false
             guard self.enabled else { return }
+            let iconMotion: IconMotion = animated && previousLayerID != destinationLayerID
+                ? .layerRebuild(direction: self.layerTransitionDirection(
+                    from: previousLayerID, to: destinationLayerID
+                ))
+                : .ordinary
             self.present(self.idleFace(), animated: animated, returningToIdle: false,
-                         layerRoll: animated && previousLayerID != destinationLayerID)
+                         iconMotion: iconMotion)
         }
     }
 
@@ -298,12 +353,14 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             self.pendingActivation = nil
             self.releasedHold = nil
             self.lastEvent = nil
+            self.activeContinuousFamily = nil
             self.idleGeneration += 1
             if self.isHolding {
                 self.isHolding = false
                 self.holdGeneration += 1
                 self.holdBase = nil
                 self.holdStages = []
+                self.holdStageDelays = []
                 self.activeHoldKey = nil
                 self.holdVisualIsVisible = false
                 self.cancelHoldVisualWork()
@@ -326,6 +383,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     func showApplication(bundleID: String, duration: TimeInterval = 0.90) {
         onMain { [weak self] in
             guard let self = self, self.enabled, self.isConnected, !self.isHolding else { return }
+            self.activeContinuousFamily = nil
             let info = self.applicationInfo(bundleID: bundleID)
             let now = CACurrentMediaTime()
             let confirmsPendingLaunch: Bool
@@ -339,13 +397,17 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             self.pendingActivation = nil
 
             let face = Face(key: "app:\(bundleID)", title: info.name, subtitle: L("Active App"),
-                            image: info.icon, tint: self.tint(forBundleID: bundleID))
-            self.presentTransient(face, duration: duration, animate: !confirmsPendingLaunch)
+                            image: info.icon, symbolName: nil, symbolCue: nil,
+                            tint: self.tint(forBundleID: bundleID), controlState: nil)
+            self.presentTransient(face, duration: duration, animate: !confirmsPendingLaunch,
+                                  iconMotion: .applicationArrival,
+                                  accentSweep: true)
         }
     }
 
     func showAction(_ handled: Controller.HandledAction,
-                    durationOverride: TimeInterval? = nil) {
+                    durationOverride: TimeInterval? = nil,
+                    controlStateOverride: ControlVisualState? = nil) {
         onMain { [weak self] in
             guard let self = self, self.enabled, self.isConnected, !self.isHolding else { return }
             // Layer actions already produce `setLayer` with the actual destination name/colour.
@@ -354,7 +416,11 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             case .layer, .layerCycle: return
             default: break
             }
+            self.controlStateRefreshGeneration += 1
+            self.pendingControlRefresh = nil
             let now = CACurrentMediaTime()
+            let duration = durationOverride
+                ?? self.duration(for: handled.key, action: handled.action)
             // A release-to-select action is reported immediately after `endHold`. Its face is
             // already on screen and has been visible for the whole hold, so only extend the dwell;
             // bouncing it again on key-up makes a frequent interaction feel nervous.
@@ -363,33 +429,94 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                 self.releasedHold = nil
                 self.lastEvent = (handled.key, now)
                 self.scheduleIdle(after: 0.48)
+                if let presentationKey = self.currentPresentationKey {
+                    self.scheduleControlStateRefresh(
+                        for: handled, expectedPresentationKey: presentationKey,
+                        duration: 0.48, disabled: controlStateOverride != nil
+                    )
+                }
                 return
             }
             self.releasedHold = nil
+            let continuousFamily = self.continuousFeedbackFamily(for: handled.action)
+            // One physical mute edge is one visual transaction. `Controller` calls this immediately
+            // before executing the action, so invert the measured state for the first frame. The
+            // scheduled CoreAudio read below only confirms it; on success it is a no-op, while an
+            // execution failure can still correct the face without leaving the UI dishonest.
+            let visualStateOverride = controlStateOverride
+                ?? SystemControlState.predictedMuteResult(for: handled.action)
+            let face = self.actionFace(key: handled.key, action: handled.action,
+                                       presentation: handled.presentation,
+                                       subtitle: self.gestureLabel(for: handled.key),
+                                       controlStateOverride: visualStateOverride)
+
+            if let continuousFamily,
+               self.isTransient,
+               self.activeContinuousFamily == continuousFamily {
+                // One volume/brightness/scroll burst is one visual state. An unchanged direction
+                // needs no redraw at all; a direction change updates atomically without inserting
+                // another 3D turn or restarting an SF Symbol effect.
+                self.lastEvent = (handled.key, now)
+                if self.currentPresentationKey == face.key,
+                   self.currentControlState == face.controlState {
+                    self.scheduleIdle(after: duration)
+                } else {
+                    self.presentTransient(face, duration: duration, animate: false,
+                                          playSymbolCue: false)
+                }
+                self.scheduleControlStateRefresh(
+                    for: handled, expectedPresentationKey: face.key,
+                    duration: duration, disabled: controlStateOverride != nil
+                )
+                return
+            }
+            self.activeContinuousFamily = continuousFamily
             // Keep a held media/repeat action from re-springing the card on every timer tick. A
             // multi-tap gesture resolves to its own `.double`/`.triple` key and still animates; two
             // very fast identical base events share one visible pulse but extend its dwell.
             if let previous = self.lastEvent,
                previous.key == handled.key, now - previous.time < 0.22 {
                 self.lastEvent = (handled.key, now)
-                self.scheduleIdle(after: self.duration(for: handled.key, action: handled.action))
+                self.scheduleIdle(after: duration)
+                self.scheduleControlStateRefresh(
+                    for: handled, expectedPresentationKey: face.key,
+                    duration: duration, disabled: controlStateOverride != nil
+                )
                 return
             }
             self.lastEvent = (handled.key, now)
 
-            let face = self.actionFace(key: handled.key, action: handled.action,
-                                       presentation: handled.presentation,
-                                       subtitle: self.gestureLabel(for: handled.key))
-
-            if let launched = self.launchedAppName(handled.action) {
+            let launched = self.launchedAppName(handled.action)
+            if let launched = launched {
                 self.pendingActivation = (launched, now)
             } else {
                 self.pendingActivation = nil
             }
+            let iconMotion: IconMotion
+            if launched != nil {
+                // Opening an app is an arrival, not another button impact. Real app artwork gets
+                // the same spatial aperture grammar as foreground-app recognition.
+                iconMotion = .applicationArrival
+            } else if self.isAppWheelAction(handled.action) {
+                iconMotion = .appWheelWave
+            } else if self.isBackButtonKey(handled.key) {
+                iconMotion = .returnSweep
+            } else {
+                iconMotion = .actionImpulse(count: self.tapImpulseCount(for: handled.key))
+            }
             self.presentTransient(face,
-                                  duration: durationOverride
-                                      ?? self.duration(for: handled.key, action: handled.action),
-                                  animate: true)
+                                  duration: duration,
+                                  animate: true,
+                                  iconMotion: iconMotion,
+                                  // A sweep is punctuation, not wallpaper. Reserve it for the
+                                  // high-level event of opening an app; frequent commands keep the
+                                  // quieter symbol/text choreography.
+                                  accentSweep: launched != nil,
+                                  playSymbolCue: continuousFamily == nil)
+            self.scheduleControlStateRefresh(
+                for: handled, expectedPresentationKey: face.key,
+                duration: duration, disabled: controlStateOverride != nil
+            )
         }
     }
 
@@ -415,6 +542,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             self.holdVisualIsVisible = false
             self.releasedHold = nil
             self.pendingActivation = nil
+            self.activeContinuousFamily = nil
             self.holdBase = base.map {
                 HoldItem(key: $0.key, action: $0.action,
                          presentation: $0.presentation, isCancel: false)
@@ -425,6 +553,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                                              presentation: $0.presentation,
                                              isCancel: $0.isCancel))
             }
+            self.holdStageDelays = self.holdStages.map(\.threshold)
 
             // Match the large HUD's deliberate 0.18 s visual lead-in. This preview does not
             // claim the gesture: the base action is still what release selects until the first
@@ -432,60 +561,22 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             // whole-card treatment instead of making progress appear at the first boundary.
             let now = CACurrentMediaTime()
             if !self.holdStages.isEmpty {
-                let delay = max(0, startedAt + self.holdProgressAppearDelay - now)
+                // One work item only starts the visual clock. Stage faces are deliberately NOT
+                // scheduled as independent callbacks: the same per-frame elapsed sample below now
+                // chooses the face and water state atomically. If a configured threshold precedes
+                // 180 ms, reveal at that real boundary rather than trailing the input state.
+                let firstVisualDelay = min(self.holdProgressAppearDelay,
+                                           self.holdStages[0].threshold)
+                let delay = max(0, startedAt + firstVisualDelay - now)
                 let previewWork = DispatchWorkItem { [weak self] in
                     guard let self = self, self.enabled, self.isHolding,
                           self.holdGeneration == generation else { return }
                     self.holdVisualIsVisible = true
                     self.startHoldRipple()
                     self.startHoldProgress(startedAt: startedAt)
-
-                    // A Layer base action is implementation state (for example layerCycle), not a
-                    // useful face. Keep the actual current Layer visible and let whole-card progress
-                    // carry the progress until its first real non-layer stage arrives.
-                    if let base = self.holdBase, !self.isLayerStateAction(base.action) {
-                        let nextLabel = self.holdStages.first.map {
-                            ActionVisual.resolve($0.item.action, $0.item.presentation,
-                                                 prefersTargetAppIcon: false).label
-                        }
-                        self.presentHold(base,
-                                         subtitle: nextLabel.map { L("Hold for %@", $0) }
-                                             ?? L("Keep holding"),
-                                         animated: true)
-                    }
                 }
                 self.holdVisualWorkItems.append(previewWork)
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: previewWork)
-            }
-
-            // Every action face still changes at the real input threshold, using the immutable
-            // startedAt anchor shared with release selection. If a stage is unusually earlier than
-            // the 0.18 s preview, start the progress surface there so feedback never trails an action already
-            // selected by the input state machine.
-            for stage in self.holdStages {
-                let delay = max(0, startedAt + stage.threshold - now)
-                let work = DispatchWorkItem { [weak self] in
-                    guard let self = self, self.enabled, self.isHolding,
-                          self.holdGeneration == generation else { return }
-                    // Layer actions are state transitions, not useful previews. The actual
-                    // destination arrives through Controller.onLayerChanged and is the only layer
-                    // face this widget should ever show.
-                    guard !self.isLayerStateAction(stage.item.action) else { return }
-                    if !self.holdVisualIsVisible {
-                        self.holdVisualIsVisible = true
-                        self.startHoldRipple()
-                        self.startHoldProgress(startedAt: startedAt)
-                    }
-                    self.presentHold(
-                        stage.item,
-                        subtitle: stage.item.isCancel
-                            ? L("Release to cancel")
-                            : L("Release to choose"),
-                        animated: true
-                    )
-                }
-                self.holdVisualWorkItems.append(work)
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
             }
         }
     }
@@ -504,19 +595,22 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                 selected = nil
             }
 
+            let selectedIsLayer = selected.map { self.isLayerStateAction($0.action) } ?? false
+            let selectedIsCancel = selected?.isCancel == true
             let hadVisibleHold = self.holdVisualIsVisible
             self.isHolding = false
             self.holdVisualIsVisible = false
             self.holdGeneration += 1
             self.cancelHoldVisualWork()
-            self.stopHoldRipple()
-            self.stopHoldProgress()
+            self.stopHoldRipple(immediate: selectedIsCancel)
+            self.stopHoldProgress(immediate: selectedIsCancel)
             self.setVoiceWaveformActive(false)
-            let selectedIsLayer = selected.map { self.isLayerStateAction($0.action) } ?? false
-            if selectedIsLayer {
+            if selectedIsLayer || selectedIsCancel {
                 // A quick layer-cycle tap used to pass through `presentHold` here and briefly show
                 // “Next Layer” even though showAction correctly suppressed it later. Return straight
-                // to the already-updated destination Layer instead.
+                // to the already-updated destination Layer instead. The deepest hold's cancel face
+                // follows the same rule: release is the interaction boundary, so it must reveal the
+                // Layer immediately rather than dwelling on a redundant “Cancelled” confirmation.
                 self.isTransient = false
                 let destination = self.idleFace()
                 self.present(destination,
@@ -534,9 +628,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             }
             self.holdBase = nil
             self.holdStages = []
+            self.holdStageDelays = []
             self.activeHoldKey = nil
-            if selectedIsLayer { return }
-            self.scheduleIdle(after: selected?.isCancel == true ? 0.36 : 0.48)
+            if selectedIsLayer || selectedIsCancel { return }
+            self.scheduleIdle(after: 0.48)
         }
     }
 
@@ -605,6 +700,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         releasedHold = nil
         holdBase = nil
         holdStages = []
+        holdStageDelays = []
         activeHoldKey = nil
     }
 
@@ -706,6 +802,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         let displayID = bestScreen(for: surface.panel.frame)?.hudDisplayID ?? 0
         print("🧭 status widget shown — display \(displayID), frame \(NSStringFromRect(surface.panel.frame))")
         isTransient = false
+        activeContinuousFamily = nil
         currentPresentationKey = nil
         configure(face: idleFace())
         surface.panel.orderFrontRegardless()
@@ -729,10 +826,12 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         let generation = visibilityGeneration
         idleGeneration += 1
         pendingActivation = nil
+        activeContinuousFamily = nil
         isHolding = false
         holdGeneration += 1
         holdBase = nil
         holdStages = []
+        holdStageDelays = []
         activeHoldKey = nil
         holdVisualIsVisible = false
         cancelHoldVisualWork()
@@ -745,6 +844,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             surface.panel.orderOut(nil)
             return
         }
+        animateWidgetDisappear()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.24
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -761,35 +861,98 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     /// and internal ripples while the whole panel performs its ordinary alpha fade.
     private func animateWidgetAppear() {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        let iconPop = CAKeyframeAnimation(keyPath: "transform.scale")
-        iconPop.values = [0.5, 1.14, 0.98, 1.0]
-        iconPop.keyTimes = [0.0, 0.55, 0.80, 1.0]
-        iconPop.duration = 0.56
-        iconPop.timingFunction = CAMediaTimingFunction(controlPoints: 0.18, 0.86, 0.20, 1.0)
+        if #available(macOS 14.0, *), currentSymbolName != nil {
+            let options = SymbolEffectOptions.speed(2.65)
+            surface.iconView.addSymbolEffect(.appear.up.byLayer, options: options)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { [weak self] in
+                self?.surface.iconView.removeSymbolEffect(ofType: .appear,
+                                                          options: options, animated: false)
+            }
+        }
+
+        let iconPop = CAKeyframeAnimation(keyPath: "transform")
+        iconPop.values = [
+            NSValue(caTransform3D: spatialTransform(z: -16, scale: 0.76,
+                                                    rotateX: -0.72, rotateY: 0.22,
+                                                    perspective: 300)),
+            NSValue(caTransform3D: spatialTransform(z: 6, scale: 1.04,
+                                                    rotateX: 0.06, rotateY: -0.02,
+                                                    perspective: 300)),
+            NSValue(caTransform3D: spatialTransform(perspective: 300)),
+        ]
+        iconPop.keyTimes = [0.0, 0.72, 1.0]
+        iconPop.duration = 0.28
+        iconPop.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 0.84, 0.20, 1.0)
         surface.iconView.layer?.add(iconPop, forKey: "widgetAppearIcon")
 
         for (index, ripple) in surface.rippleLayers.enumerated() {
             ripple.removeAnimation(forKey: "holdRipple")
             let rScale = CAKeyframeAnimation(keyPath: "transform.scale")
-            rScale.values = [0.90, 1.16]
+            rScale.values = [0.96, 1.08]
             rScale.keyTimes = [0.0, 1.0]
             let rOpacity = CAKeyframeAnimation(keyPath: "opacity")
-            rOpacity.values = [0.0, 0.50, 0.0]
-            rOpacity.keyTimes = [0.0, 0.30, 1.0]
+            rOpacity.values = [0.0, 0.22, 0.0]
+            rOpacity.keyTimes = [0.0, 0.24, 1.0]
             let rGroup = CAAnimationGroup()
             rGroup.animations = [rScale, rOpacity]
-            rGroup.duration = 0.90
+            let offset = Double(index) * 0.024
+            rGroup.duration = 0.28 - offset
             rGroup.beginTime = ripple.convertTime(CACurrentMediaTime(), from: nil)
-                + 0.08 + Double(index) * 0.14
+                + offset
             rGroup.fillMode = .backwards
             rGroup.timingFunction = CAMediaTimingFunction(name: .easeOut)
             ripple.add(rGroup, forKey: "widgetAppearRing")
         }
     }
 
-    private func presentTransient(_ face: Face, duration: TimeInterval, animate: Bool) {
+    /// Disconnect is the inverse relationship, not a reversed celebration: the semantic content
+    /// resolves inward while the panel performs its independent 240 ms fade. The card itself never
+    /// scales, so its location remains a stable frame of reference until it is gone.
+    private func animateWidgetDisappear() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        if #available(macOS 14.0, *), currentSymbolName != nil {
+            let options = SymbolEffectOptions.speed(2.8)
+            surface.iconView.addSymbolEffect(.disappear.down.byLayer, options: options)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) { [weak self] in
+                self?.surface.iconView.removeSymbolEffect(ofType: .disappear,
+                                                          options: options, animated: false)
+            }
+        }
+
+        let icon = CAKeyframeAnimation(keyPath: "transform")
+        icon.values = [
+            NSValue(caTransform3D: spatialTransform(perspective: 300)),
+            NSValue(caTransform3D: spatialTransform(z: 3, scale: 0.97,
+                                                    rotateX: -0.08,
+                                                    perspective: 300)),
+            NSValue(caTransform3D: spatialTransform(z: -18, scale: 0.68,
+                                                    rotateX: 0.72, rotateY: -0.24,
+                                                    perspective: 300)),
+        ]
+        icon.keyTimes = [0.0, 0.34, 1.0]
+        icon.duration = 0.22
+        icon.timingFunction = CAMediaTimingFunction(controlPoints: 0.30, 0, 1, 1)
+        surface.iconView.layer?.add(icon, forKey: "widgetDisappearIcon")
+
+        for (index, label) in [surface.titleLabel, surface.subtitleLabel].enumerated() {
+            let drift = CABasicAnimation(keyPath: "transform.translation.x")
+            drift.fromValue = 0
+            drift.toValue = -1.5
+            drift.duration = 0.18 + Double(index) * 0.02
+            drift.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            label.layer?.add(drift, forKey: "widgetDisappearText")
+        }
+    }
+
+    private func presentTransient(_ face: Face, duration: TimeInterval, animate: Bool,
+                                  iconMotion: IconMotion = .ordinary,
+                                  accentSweep: Bool = false,
+                                  playSymbolCue: Bool = true) {
         isTransient = true
-        present(face, animated: animate, returningToIdle: false)
+        present(face, animated: animate, returningToIdle: false,
+                iconMotion: iconMotion,
+                accentSweep: accentSweep,
+                playSymbolCue: playSymbolCue)
         scheduleIdle(after: duration)
     }
 
@@ -799,12 +962,15 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
             guard let self = self, self.enabled, self.idleGeneration == generation else { return }
             self.isTransient = false
-            self.present(self.idleFace(), animated: true, returningToIdle: true)
+            self.activeContinuousFamily = nil
+            self.present(self.idleFace(), animated: true, returningToIdle: true,
+                         iconMotion: .settleToLayer)
         }
     }
 
     private func present(_ face: Face, animated: Bool, returningToIdle: Bool,
-                         layerRoll: Bool = false) {
+                         iconMotion: IconMotion? = nil, accentSweep: Bool = false,
+                         playSymbolCue: Bool = true) {
         // Content updates never surface the panel while it is intentionally hidden (no remote).
         guard enabled, isConnected else { return }
         ensureReachable()
@@ -815,12 +981,18 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         configure(face: face)
         currentPresentationKey = face.key
         if animated {
-            if layerRoll && contentChanges {
-                animateLayerElementMorph(from: outgoing)
-            } else if contentChanges {
-                animateContentTransition(from: outgoing, returningToIdle: returningToIdle)
+            if contentChanges {
+                animateContentTransition(from: outgoing,
+                                         iconMotion: iconMotion
+                                             ?? (returningToIdle ? .settleToLayer : .ordinary),
+                                         accentSweep: accentSweep,
+                                         symbolCue: playSymbolCue ? currentSymbolCue : nil)
             } else {
-                animateCardResponse()
+                if playSymbolCue, #available(macOS 14.0, *), currentSymbolName != nil {
+                    applyNativeSymbolCue(currentSymbolCue, to: surface.iconView)
+                } else {
+                    animateCardResponse()
+                }
             }
         }
     }
@@ -830,7 +1002,8 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         let face = actionFace(key: item.key, action: item.action,
                               presentation: item.presentation, subtitle: subtitle)
         activeHoldKey = item.key
-        present(face, animated: animated, returningToIdle: false)
+        present(face, animated: animated, returningToIdle: false,
+                iconMotion: isAppWheelAction(item.action) ? .appWheelWave : .holdSequence)
     }
 
     private func cancelHoldVisualWork() {
@@ -840,9 +1013,24 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
 
     private func configure(face: Face) {
         currentFaceTint = face.tint
-        surface.iconView.image = face.image
-        surface.iconView.contentTintColor = face.image?.isTemplate == true
-            ? (isHoldProgressActive ? .labelColor : face.tint) : nil
+        currentSymbolName = face.symbolName
+        currentSymbolCue = face.symbolCue
+        currentControlState = face.controlState
+        if #available(macOS 14.0, *) {
+            surface.iconView.removeAllSymbolEffects(options: .default, animated: false)
+        }
+        if face.symbolName != nil, let source = face.image {
+            // Hierarchical rendering uses the symbol's authored primary/secondary/tertiary layers
+            // and derives accessible depth from one semantic system colour. It falls back to
+            // monochrome automatically for a symbol without hierarchy.
+            surface.iconView.image = ActionSymbolStyle.hierarchicalImage(
+                source, symbolName: face.symbolName, tint: face.tint
+            )
+            surface.iconView.contentTintColor = nil
+        } else {
+            surface.iconView.image = face.image
+            surface.iconView.contentTintColor = face.image?.isTemplate == true ? face.tint : nil
+        }
         surface.titleLabel.stringValue = face.title
         surface.subtitleLabel.stringValue = face.subtitle
         applyHoldContentContrast()
@@ -853,13 +1041,24 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     // MARK: - Faces
 
     private func actionFace(key: String, action: Action,
-                            presentation: Config.Presentation?, subtitle: String) -> Face {
-        let visual = ActionVisual.resolve(action, presentation, prefersTargetAppIcon: false)
+                            presentation: Config.Presentation?, subtitle: String,
+                            controlStateOverride: ControlVisualState? = nil) -> Face {
+        let visual = ActionVisual.resolve(
+            action, presentation, prefersTargetAppIcon: false,
+            controlStateOverride: controlStateOverride
+        )
+        // A generic command placed on the physical Back key still reads as Back. An action with
+        // stronger semantics wins: Close Window / Quit App must remain destructive and red.
+        let cue: SymbolCue = visual.symbolCue == .generic && isBackButtonKey(key)
+            ? .back : visual.symbolCue
         return Face(key: "action:\(key):\(visual.label)",
                     title: visual.label,
                     subtitle: subtitle,
                     image: visual.image,
-                    tint: tint(for: action))
+                    symbolName: visual.symbolName,
+                    symbolCue: cue,
+                    tint: visual.tint,
+                    controlState: visual.controlState)
     }
 
     private func isLayerStateAction(_ action: Action) -> Bool {
@@ -869,12 +1068,20 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func isAppWheelAction(_ action: Action) -> Bool {
+        if case .appWheel = action { return true }
+        return false
+    }
+
     private func idleFace() -> Face {
         let appearance = layerAppearance(currentLayerID)
         return Face(key: "layer:\(currentLayerID)", title: appearance.label,
                     subtitle: L("Current Layer"),
                     image: symbol("square.stack.3d.up.fill", size: 26),
-                    tint: appearance.tint)
+                    symbolName: "square.stack.3d.up.fill",
+                    symbolCue: .layer,
+                    tint: appearance.tint,
+                    controlState: nil)
     }
 
     private func applicationInfo(bundleID: String) -> (name: String, icon: NSImage?) {
@@ -921,6 +1128,18 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         return L("Action")
     }
 
+    /// Match direct-action feedback to the gesture that caused it. The rings are not decoration:
+    /// one, two or three brief impulses make tap count readable before the subtitle is parsed.
+    private func tapImpulseCount(for key: String) -> Int {
+        if key.hasSuffix(".triple") { return 3 }
+        if key.hasSuffix(".double") { return 2 }
+        return 1
+    }
+
+    private func isBackButtonKey(_ key: String) -> Bool {
+        key == "button.menu" || key == "button.menu.tap"
+    }
+
     private func duration(for key: String, action: Action) -> TimeInterval {
         if key.hasSuffix(".taphold3") || key.hasSuffix(".hold3") { return 1.35 }
         if key.hasSuffix(".taphold2") || key.hasSuffix(".hold2") { return 1.20 }
@@ -947,6 +1166,22 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         }
         configuredLayers = definitions
         configuredOrdinals = ordinals
+    }
+
+    /// Choose the shortest direction through the configured cyclic layer order. The normal
+    /// next-layer path therefore keeps moving forward even on the last → first wrap, while a
+    /// programmatic jump back one layer rolls the opposite way.
+    private func layerTransitionDirection(from sourceID: String, to destinationID: String) -> CGFloat {
+        guard configuredOrdinals.count > 1,
+              let source = configuredOrdinals[sourceID.uppercased()],
+              let destination = configuredOrdinals[destinationID.uppercased()]
+        else { return 1 }
+        let count = configuredOrdinals.count
+        let sourceIndex = source - 1
+        let destinationIndex = destination - 1
+        let forward = (destinationIndex - sourceIndex + count) % count
+        let backward = (sourceIndex - destinationIndex + count) % count
+        return forward <= backward ? 1 : -1
     }
 
     private func layerAppearance(_ rawID: String) -> (label: String, tint: NSColor) {
@@ -1019,19 +1254,6 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         return .controlAccentColor
     }
 
-    private func tint(for action: Action) -> NSColor {
-        switch action {
-        case .media: return .systemPink
-        case .launch, .appWheel: return .systemIndigo
-        case .space, .fullscreen, .minimize, .closeWindow: return .systemBlue
-        case .mouse: return .systemTeal
-        case .brightness: return .systemOrange
-        case .pushToTalk: return .systemRed
-        case .layer, .layerCycle: return layerAppearance(currentLayerID).tint
-        default: return .controlAccentColor
-        }
-    }
-
     // MARK: - Animation
 
     private func copiedIconView(_ source: NSImageView) -> NSImageView {
@@ -1059,35 +1281,39 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
 
     private func makeNormalContentProxy() -> NormalContentProxy {
         contentMorphGeneration += 1
-        contentMorphProxyViews.forEach { $0.removeFromSuperview() }
-        contentMorphProxyViews.removeAll()
-        contentMorphTransientLayers.forEach { $0.removeFromSuperlayer() }
-        contentMorphTransientLayers.removeAll()
-
+        // A new input is allowed to interrupt the previous 220–280 ms transformation. Resolve the
+        // permanent destination hierarchy and discard its exact temporary reconstruction in one
+        // disabled-actions transaction. Reading a stale presentation opacity here used to create a
+        // fully empty card for ~150 ms when two actions arrived close together.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         for layer in [surface.iconView.layer, surface.titleLabel.layer,
                       surface.subtitleLabel.layer].compactMap({ $0 }) {
             layer.removeAnimation(forKey: "contentMorphIncoming")
             layer.removeAnimation(forKey: "layerMorphIncoming")
             layer.removeAnimation(forKey: "connectedMorphIncoming")
+            layer.opacity = 1
+            layer.transform = CATransform3DIdentity
         }
+        contentMorphProxyViews.forEach { $0.removeFromSuperview() }
+        contentMorphProxyViews.removeAll()
+        contentMorphTransientLayers.forEach { $0.removeFromSuperlayer() }
+        contentMorphTransientLayers.removeAll()
+        CATransaction.commit()
 
         let icon = copiedIconView(surface.iconView)
         let title = copiedLabel(surface.titleLabel)
         let subtitle = copiedLabel(surface.subtitleLabel)
         let proxy = NormalContentProxy(iconView: icon, titleLabel: title,
-                                       subtitleLabel: subtitle)
+                                       subtitleLabel: subtitle,
+                                       symbolName: currentSymbolName)
         for view in proxy.views { surface.contentView.addSubview(view) }
 
-        let pairs: [(CALayer?, CALayer?)] = [
-            (surface.iconView.layer, icon.layer),
-            (surface.titleLabel.layer, title.layer),
-            (surface.subtitleLabel.layer, subtitle.layer),
-        ]
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for (source, destination) in pairs {
-            destination?.opacity = source?.presentation()?.opacity ?? source?.opacity ?? 1
-            destination?.transform = source?.presentation()?.transform ?? CATransform3DIdentity
+        for destination in [icon.layer, title.layer, subtitle.layer] {
+            destination?.opacity = 1
+            destination?.transform = CATransform3DIdentity
         }
         CATransaction.commit()
         contentMorphProxyViews = proxy.views
@@ -1115,17 +1341,16 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Layer changes and action changes share one visual grammar. The card and its persistent
-    /// Layer edge never move; only the semantic elements inside the fixed lens reconstruct.
-    private func animateLayerElementMorph(from proxy: NormalContentProxy?) {
-        animateConnectedLensMorph(from: proxy, direction: 1, animateSubtitle: false)
-    }
-
     private func animateContentTransition(from proxy: NormalContentProxy?,
-                                          returningToIdle: Bool) {
+                                          iconMotion: IconMotion,
+                                          accentSweep: Bool,
+                                          symbolCue: SymbolCue?) {
         animateConnectedLensMorph(from: proxy,
-                                  direction: returningToIdle ? -1 : 1,
-                                  animateSubtitle: true)
+                                  direction: iconMotion.titleDirection,
+                                  animateSubtitle: true,
+                                  iconMotion: iconMotion,
+                                  accentSweep: accentSweep,
+                                  symbolCue: symbolCue)
     }
 
     /// A compact connected transition influenced by Apple's spatial continuity, Fluent's
@@ -1133,7 +1358,8 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     /// main effect: the icon is optically sliced, unchanged letters physically retain their place,
     /// changed letters fold through the baseline, and the subtitle follows a beat later.
     private func animateConnectedLensMorph(from proxy: NormalContentProxy?, direction: CGFloat,
-                                           animateSubtitle: Bool) {
+                                           animateSubtitle: Bool, iconMotion: IconMotion,
+                                           accentSweep: Bool, symbolCue: SymbolCue?) {
         guard let proxy = proxy else { return }
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         guard !reduceMotion else {
@@ -1143,81 +1369,1510 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         }
 
         let generation = contentMorphGeneration
-        let duration: CFTimeInterval = 0.34
-        // All pieces share one future clock edge. Creating a title's temporary glyphs must not
-        // consume part of the icon's animation or make later elements miss their first frames.
-        let timelineStart = CACurrentMediaTime() + 0.016
+        // 280 ms is the complete interval for this compact multi-track transformation. The
+        // semantic object itself finishes in 220–280 ms; the final overlap is only an exact proxy →
+        // permanent-view handoff, keeping every visible transition inside the requested 0.2–0.3 s.
+        let duration: CFTimeInterval = 0.28
         let oldOpacities = proxy.views.map {
             $0.layer?.presentation()?.opacity ?? $0.layer?.opacity ?? 1
         }
+
+        // Rasterise every endpoint before the animation clock exists. Core Animation commits only
+        // after this main-thread turn returns; starting its clock before AppKit cacheDisplay calls
+        // made the icon's entire first half elapse before the first composited frame.
+        let oldIconSnapshot = makeViewSnapshot(proxy.iconView)
+        let newIconSnapshot = makeViewSnapshot(surface.iconView)
+        let oldTitleSnapshot = makeViewSnapshot(proxy.titleLabel)
+        let newTitleSnapshot = makeViewSnapshot(surface.titleLabel)
+        let oldSubtitleSnapshot = animateSubtitle ? makeViewSnapshot(proxy.subtitleLabel) : nil
+        let newSubtitleSnapshot = animateSubtitle ? makeViewSnapshot(surface.subtitleLabel) : nil
+        // All pieces start only after their expensive AppKit snapshots exist. Hold boundaries are
+        // already driven by the water's display tick, so start that icon transaction at this exact
+        // compositor commit; the other one-shot transitions retain a one-frame preparation edge.
+        let isHoldBoundary: Bool
+        if case .holdSequence = iconMotion { isHoldBoundary = true } else { isHoldBoundary = false }
+        let timelineStart = CACurrentMediaTime() + (isHoldBoundary ? 0 : 0.016)
         if !animateSubtitle { proxy.subtitleLabel.removeFromSuperview() }
 
-        let incomingLayers = animateSubtitle
-            ? [surface.iconView.layer, surface.titleLabel.layer, surface.subtitleLabel.layer]
-            : [surface.iconView.layer, surface.titleLabel.layer]
+        var incomingLayers: [CALayer?] = [surface.titleLabel.layer]
+        incomingLayers.insert(surface.iconView.layer, at: 0)
+        if animateSubtitle { incomingLayers.append(surface.subtitleLabel.layer) }
         // The real destination stays hidden beneath an exact temporary reconstruction. Removing
         // the overlays at rest therefore cannot create a final flash or one-frame geometry snap.
         for layer in incomingLayers.compactMap({ $0 }) {
             let hidden = CAKeyframeAnimation(keyPath: "opacity")
-            hidden.values = [0, 0]
-            hidden.keyTimes = [0, 1]
-            // Cleanup explicitly removes this animation. A long hold is intentional: scheduling
-            // jitter can delay cleanup, but can never reveal the real label under its proxy.
-            hidden.duration = 2.0
+            hidden.values = [0, 0, 1]
+            hidden.keyTimes = [0, 0.86, 1]
+            hidden.timingFunctions = [
+                CAMediaTimingFunction(name: .linear),
+                CAMediaTimingFunction(name: .easeInEaseOut),
+            ]
+            hidden.duration = duration
+            hidden.beginTime = layer.convertTime(timelineStart, from: nil)
             hidden.fillMode = .both
             hidden.isRemovedOnCompletion = false
             layer.add(hidden, forKey: "connectedMorphIncoming")
         }
 
         var containers: [NSView] = []
-        let iconMorph = makeIconLensTurn(
-            outgoing: proxy.iconView, incoming: surface.iconView,
-            outgoingOpacity: oldOpacities[0], direction: direction,
-            duration: 0.30, delay: 0.008, timelineStart: timelineStart
-        )
-        containers.append(iconMorph)
+        if !requiresAuthoredIconTransition(iconMotion),
+           supportsNativeSymbolMorph(from: proxy.symbolName, to: currentSymbolName),
+           let oldImage = proxy.iconView.image,
+           let newImage = surface.iconView.image {
+            let iconMorph = makeNativeSymbolMorph(
+                outgoing: proxy.iconView, incoming: surface.iconView,
+                oldImage: oldImage, newImage: newImage,
+                outgoingOpacity: oldOpacities[0], motion: iconMotion,
+                cue: symbolCue,
+                duration: semanticIconDuration(for: iconMotion),
+                delay: isHoldBoundary ? 0 : 0.004,
+                timelineStart: timelineStart
+            )
+            containers.append(iconMorph)
+        } else {
+            switch iconMotion {
+            case .ordinary:
+                let iconMorph = makeWholeSurfaceTurn(
+                outgoing: proxy.iconView, incoming: surface.iconView,
+                oldSnapshot: oldIconSnapshot, newSnapshot: newIconSnapshot,
+                outgoingOpacity: oldOpacities[0], direction: direction,
+                axisX: 0, axisY: 1, duration: 0.22,
+                delay: 0.004, timelineStart: timelineStart
+            )
+                containers.append(iconMorph)
+            default:
+                let semanticIcon = makeSemanticIconTransition(
+                outgoing: proxy.iconView, incoming: surface.iconView,
+                oldSnapshot: oldIconSnapshot, newSnapshot: newIconSnapshot,
+                outgoingOpacity: oldOpacities[0], motion: iconMotion,
+                duration: semanticIconDuration(for: iconMotion),
+                delay: isHoldBoundary ? 0 : 0.004,
+                timelineStart: timelineStart
+            )
+                containers.append(semanticIcon)
+            }
+        }
 
-        let titleMorph = makeGlyphRelay(
+        let titleMorph = makeWholeSurfaceTurn(
             outgoing: proxy.titleLabel, incoming: surface.titleLabel,
+            oldSnapshot: oldTitleSnapshot, newSnapshot: newTitleSnapshot,
             outgoingOpacity: oldOpacities[1], direction: direction,
-            duration: 0.30, delay: 0.018, timelineStart: timelineStart
+            axisX: 1, axisY: 0, duration: 0.22,
+            delay: 0.030, timelineStart: timelineStart
         )
         containers.append(titleMorph)
 
         if animateSubtitle {
-            let subtitleMorph = makeSharedAxisRoll(
+            let subtitleMorph = makeWholeSurfaceTurn(
                 outgoing: proxy.subtitleLabel, incoming: surface.subtitleLabel,
+                oldSnapshot: oldSubtitleSnapshot, newSnapshot: newSubtitleSnapshot,
                 outgoingOpacity: oldOpacities[2], direction: direction,
-                duration: 0.25, delay: 0.062, timelineStart: timelineStart
+                axisX: 1, axisY: 0, duration: 0.20,
+                delay: 0.052, timelineStart: timelineStart
             )
             containers.append(subtitleMorph)
         }
 
-        installLensSweep(duration: duration, direction: direction,
-                         timelineStart: timelineStart)
+        // The animated back faces and the permanent AppKit views overlap for the final 50 ms.
+        // Their opacity sum remains one, hiding even sub-pixel rasterisation differences instead
+        // of exposing them as a last-frame translation or font-weight pop.
+        let landingBegin = timelineStart + duration * 0.86
+        for (index, container) in containers.enumerated() {
+            addConnectedKeyframes(
+                keyPath: "opacity", values: [1, 0], keyTimes: [0, 1],
+                duration: duration * 0.14, beginTime: landingBegin,
+                timing: CAMediaTimingFunction(name: .easeInEaseOut),
+                to: container.layer, key: "wholeSurfaceLanding\(index)"
+            )
+        }
+
+        // App/launch emphasis is carried by the icon's spatial aperture. A previous full-card
+        // light trace crossed the labels like a scratch and competed with the component-level
+        // motion, so `accentSweep` intentionally adds no second overlay here.
+        _ = accentSweep
 
         contentMorphProxyViews = containers
         let lead = max(0, timelineStart - CACurrentMediaTime())
-        finishContentMorph(generation: generation, after: lead + duration + 0.065)
+        finishContentMorph(generation: generation, after: lead + duration + 0.035)
     }
 
-    /// The icon is one literal two-sided object. Its front reaches the vertical centre axis before
-    /// the destination face unfolds from that exact axis, so there is no scale-down dot, sliced
-    /// glitch, colour muddiness or unrelated object entering the icon slot.
+    /// Treat the complete icon or line of text as one coherent optical surface. The icon is a true
+    /// two-sided object: its front face turns through the vertical centre and the next symbol is
+    /// literally its reverse face. Text uses a mutually-exclusive shallow page turn, so a title
+    /// never becomes two superimposed words or an edge-on grille. Both endpoints are exact Retina
+    /// snapshots of the real AppKit views.
     @discardableResult
-    private func makeIconLensTurn(outgoing: NSImageView, incoming: NSImageView,
-                                  outgoingOpacity: Float, direction: CGFloat,
-                                  duration: CFTimeInterval, delay: CFTimeInterval,
-                                  timelineStart: CFTimeInterval) -> NSView {
-        let container = makeTwoSidedFlipContainer(
-            front: outgoing,
-            back: copiedIconView(incoming),
-            frame: incoming.frame,
-            frontOpacity: outgoingOpacity
+    private func makeWholeSurfaceTurn(outgoing: NSView, incoming: NSView,
+                                      oldSnapshot: LabelSnapshot?, newSnapshot: LabelSnapshot?,
+                                      outgoingOpacity: Float, direction: CGFloat,
+                                      axisX: CGFloat, axisY: CGFloat,
+                                      duration: CFTimeInterval, delay: CFTimeInterval,
+                                      timelineStart: CFTimeInterval) -> NSView {
+        let container = NSView(frame: incoming.frame)
+        container.wantsLayer = true
+        container.layer?.masksToBounds = false
+        outgoing.removeFromSuperview()
+        surface.contentView.addSubview(container)
+
+        guard let oldSnapshot = oldSnapshot, let newSnapshot = newSnapshot else {
+            // Caching can fail for a view detached during application shutdown. Preserve a safe,
+            // non-crashing handoff in that exceptional path; normal UI transitions always use the
+            // coherent two-sided surface above.
+            return makeSnapshotFallback(outgoing: outgoing, incoming: incoming,
+                                        in: container, outgoingOpacity: outgoingOpacity,
+                                        duration: duration, delay: delay,
+                                        timelineStart: timelineStart)
+        }
+
+        // A line of text is much wider than it is tall. Modelling it as a 90-degree adjacent face
+        // makes both words project into the same pixels for half the turn. The compact split-flap
+        // treatment below keeps only one face visible at a time, swaps it at identical 56-degree
+        // foreshortening, and never exposes a blank horizontal edge.
+        if axisX > axisY {
+            let frontView = makeSnapshotView(oldSnapshot, frame: container.bounds)
+            let backView = makeSnapshotView(newSnapshot, frame: container.bounds)
+            frontView.alphaValue = CGFloat(outgoingOpacity)
+            backView.alphaValue = 0
+            container.addSubview(frontView)
+            container.addSubview(backView)
+            animateLabelPageTurn(front: frontView, back: backView,
+                                 direction: direction, duration: duration,
+                                 begin: timelineStart + delay, container: container)
+            return container
+        }
+
+        let rig = CATransformLayer()
+        rig.bounds = container.bounds
+        rig.position = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
+        rig.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        let front = makeSnapshotLayer(oldSnapshot, frame: container.bounds)
+        let back = makeSnapshotLayer(newSnapshot, frame: container.bounds)
+        front.opacity = outgoingOpacity
+        front.isDoubleSided = false
+        back.isDoubleSided = false
+
+        let sign: CGFloat = direction >= 0 ? 1 : -1
+        var reverseFace = CATransform3DIdentity
+        reverseFace = CATransform3DRotate(reverseFace, -sign * .pi,
+                                           axisX, axisY, 0)
+        back.transform = reverseFace
+        rig.addSublayer(front)
+        rig.addSublayer(back)
+        container.layer?.addSublayer(rig)
+
+        // A literal front/back flip. The narrow spectral edge is the only thing visible at 90°;
+        // it makes the topology legible without adding blur, a second icon, or a full-card scale.
+        let begin = timelineStart + delay
+        let angles: [CGFloat] = [0, sign * .pi * 0.34, sign * .pi * 0.48,
+                                 sign * .pi * 0.52, sign * .pi * 0.86,
+                                 sign * .pi]
+        let depths: [CGFloat] = [0, 5.5, 8.0, 8.0, 3.0, 0]
+        let scales: [CGFloat] = [1, 1.025, 1.038, 1.038, 1.012, 1]
+        let transforms = zip(zip(angles, depths), scales).map { pair, scale in
+            NSValue(caTransform3D: spatialTransform(
+                z: pair.1, scale: scale,
+                rotateX: pair.0 * axisX, rotateY: pair.0 * axisY,
+                perspective: axisY > axisX ? 310 : 520
+            ))
+        }
+        addConnectedKeyframes(
+            keyPath: "transform", values: transforms,
+            keyTimes: [0, 0.32, 0.46, 0.54, 0.80, 1], duration: duration,
+            beginTime: begin, timing: CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.18, 1),
+            to: rig, key: "spatialPrismTurn"
         )
-        animateTwoSidedContainer(container, angle: CGFloat.pi * direction,
-                                 x: 0, y: 1, duration: duration, delay: delay,
-                                 timelineStart: timelineStart)
+        if axisY > axisX {
+            installPrismEdgeFlash(in: container, axisX: axisX, axisY: axisY,
+                                  duration: duration, begin: begin)
+        }
+        return container
+    }
+
+    private func semanticIconDuration(for motion: IconMotion) -> CFTimeInterval {
+        switch motion {
+        case .actionImpulse: return 0.22
+        case .returnSweep: return 0.25
+        case .settleToLayer: return 0.22
+        case .layerRebuild, .applicationArrival, .appWheelWave: return 0.28
+        case .holdSequence: return 0.26
+        case .ordinary: return 0.22
+        }
+    }
+
+    private func requiresAuthoredIconTransition(_ motion: IconMotion) -> Bool {
+        if case .appWheelWave = motion { return true }
+        return false
+    }
+
+    /// Morphicons' public engine consumes stroke-path data, while AppKit deliberately exposes an
+    /// SF Symbol as `NSImage` rather than public SVG geometry. On supported systems the Symbols
+    /// framework is the native topology-aware path: Magic Replace preserves related layers and
+    /// falls back cleanly for unrelated symbols. macOS 13 keeps the compositor-only 3D fallback.
+    private func supportsNativeSymbolMorph(from oldName: String?, to newName: String?) -> Bool {
+        guard ActionSymbolStyle.supportsTopologyAwareReplacement(from: oldName, to: newName)
+        else { return false }
+        if #available(macOS 14.0, *) { return true }
+        return false
+    }
+
+    /// Keep AppKit's live symbol view in the hierarchy so the Symbols framework can animate its
+    /// real vector layers. A shallow parent-camera move and a semantic contour distinguish Layer,
+    /// tap, return and hold events without fighting the native path morph inside the image view.
+    @discardableResult
+    private func makeNativeSymbolMorph(outgoing: NSImageView, incoming: NSImageView,
+                                       oldImage: NSImage, newImage: NSImage,
+                                       outgoingOpacity: Float, motion: IconMotion,
+                                       cue: SymbolCue?,
+                                       duration: CFTimeInterval, delay: CFTimeInterval,
+                                       timelineStart: CFTimeInterval) -> NSView {
+        let container = NSView(frame: incoming.frame)
+        container.wantsLayer = true
+        container.layer?.masksToBounds = false
+        outgoing.removeFromSuperview()
+        outgoing.frame = container.bounds
+        outgoing.image = oldImage
+        outgoing.alphaValue = CGFloat(outgoingOpacity)
+        container.addSubview(outgoing)
+        surface.contentView.addSubview(container)
+
+        let begin = timelineStart + delay
+        let spatial: [NSValue]
+        let times: [NSNumber]
+        switch motion {
+        case .layerRebuild(let direction):
+            let sign: CGFloat = direction >= 0 ? 1 : -1
+            spatial = [
+                NSValue(caTransform3D: spatialTransform(perspective: 300)),
+                NSValue(caTransform3D: spatialTransform(z: 8, scale: 1.055,
+                                                        rotateX: -0.08,
+                                                        rotateY: sign * 0.30,
+                                                        perspective: 300)),
+                NSValue(caTransform3D: spatialTransform(z: 5, scale: 1.035,
+                                                        rotateX: 0.06,
+                                                        rotateY: -sign * 0.16,
+                                                        perspective: 300)),
+                NSValue(caTransform3D: spatialTransform(perspective: 300)),
+            ]
+            times = [0, 0.34, 0.70, 1]
+        case .actionImpulse:
+            spatial = [
+                NSValue(caTransform3D: spatialTransform(perspective: 280)),
+                NSValue(caTransform3D: spatialTransform(z: 10, scale: 1.07,
+                                                        rotateX: -0.10,
+                                                        perspective: 280)),
+                NSValue(caTransform3D: spatialTransform(z: -2, scale: 0.985,
+                                                        rotateX: 0.04,
+                                                        perspective: 280)),
+                NSValue(caTransform3D: spatialTransform(perspective: 280)),
+            ]
+            times = [0, 0.38, 0.76, 1]
+        case .returnSweep:
+            spatial = [
+                NSValue(caTransform3D: spatialTransform(perspective: 285)),
+                NSValue(caTransform3D: spatialTransform(x: -1.2, z: 7, scale: 1.04,
+                                                        rotateY: -0.38,
+                                                        perspective: 285)),
+                NSValue(caTransform3D: spatialTransform(x: 0.3, z: 2, scale: 1.015,
+                                                        rotateY: 0.06,
+                                                        perspective: 285)),
+                NSValue(caTransform3D: spatialTransform(perspective: 285)),
+            ]
+            times = [0, 0.42, 0.82, 1]
+        case .holdSequence:
+            spatial = [
+                NSValue(caTransform3D: spatialTransform(perspective: 290)),
+                NSValue(caTransform3D: spatialTransform(y: 0.8, z: 8, scale: 1.045,
+                                                        rotateX: -0.28,
+                                                        perspective: 290)),
+                NSValue(caTransform3D: spatialTransform(y: -0.2, z: 2,
+                                                        rotateX: 0.055,
+                                                        perspective: 290)),
+                NSValue(caTransform3D: spatialTransform(perspective: 290)),
+            ]
+            times = [0, 0.38, 0.80, 1]
+        case .settleToLayer:
+            spatial = [
+                NSValue(caTransform3D: spatialTransform(z: -5, scale: 0.92,
+                                                        rotateX: 0.24,
+                                                        perspective: 310)),
+                NSValue(caTransform3D: spatialTransform(z: 5, scale: 1.035,
+                                                        rotateX: -0.06,
+                                                        perspective: 310)),
+                NSValue(caTransform3D: spatialTransform(perspective: 310)),
+            ]
+            times = [0, 0.70, 1]
+        case .ordinary, .applicationArrival, .appWheelWave:
+            spatial = [
+                NSValue(caTransform3D: spatialTransform(perspective: 320)),
+                NSValue(caTransform3D: spatialTransform(z: 6, scale: 1.035,
+                                                        rotateY: 0.10,
+                                                        perspective: 320)),
+                NSValue(caTransform3D: spatialTransform(perspective: 320)),
+            ]
+            times = [0, 0.52, 1]
+        }
+        addConnectedKeyframes(
+            keyPath: "transform", values: spatial, keyTimes: times,
+            duration: duration, beginTime: begin,
+            timing: CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.18, 1),
+            to: container.layer, key: "nativeSymbolCamera"
+        )
+        installNativeSymbolAccent(in: container, motion: motion,
+                                  duration: duration, begin: begin)
+
+        let generation = contentMorphGeneration
+        let wait = max(0, begin - CACurrentMediaTime())
+        let destinationTint = incoming.contentTintColor
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self, weak outgoing] in
+            guard let self, let outgoing,
+                  self.contentMorphGeneration == generation,
+                  outgoing.superview != nil else { return }
+            outgoing.contentTintColor = destinationTint
+            if #available(macOS 14.0, *) {
+                ActionSymbolStyle.replaceSymbol(in: outgoing, with: newImage, cue: cue)
+            }
+        }
+        return container
+    }
+
+    /// Controls whose physical input is naturally rate-driven. The first event establishes a
+    /// readable face; later events in the same family are state updates, not new animation beats.
+    private func continuousFeedbackFamily(for action: Action) -> String? {
+        switch action {
+        case .media(let key):
+            switch key.lowercased() {
+            case "volup", "volumeup", "voldown", "volumedown": return "volume"
+            default: return nil
+            }
+        case .brightness, .brightnessStep:
+            return "brightness"
+        case .repeatKey(let keys, _, _):
+            return "repeat:\(keys.lowercased())"
+        case .mouse(let op):
+            switch op.lowercased() {
+            case "move", "scroll": return "mouse:\(op.lowercased())"
+            default: return nil
+            }
+        default:
+            return nil
+        }
+    }
+
+    /// `Controller` reports an action just before its executor posts the real system key. Continuous
+    /// values use the current measurement for zero-latency feedback, then this sampler confirms the
+    /// result after macOS applies the key. Mute is predicted as one post-toggle transaction up front,
+    /// so its normal confirmation is a no-op; only a failed/missed edge causes a corrective replace.
+    /// Absolute brightness actions receive extra samples because their implementation ramps through
+    /// hardware-key notches.
+    private func scheduleControlStateRefresh(
+        for handled: Controller.HandledAction,
+        expectedPresentationKey: String,
+        duration: TimeInterval,
+        disabled: Bool
+    ) {
+        guard !disabled else { return }
+        let refreshGeneration = controlStateRefreshGeneration
+        let delays: [TimeInterval]
+        switch handled.action {
+        case .media(let key):
+            guard ["volup", "volumeup", "voldown", "volumedown", "mute"]
+                .contains(key.lowercased()) else { return }
+            // MediaController posts key-up at 50 ms; sample after that edge has reached CoreAudio.
+            delays = [0.085]
+        case .applescript where SystemControlState.isSystemOutputMuteToggle(handled.action):
+            // AppleScript normally commits well before the first sample. The second is a cheap
+            // fallback for a busy system and is de-duplicated against the same measured state.
+            delays = [0.085, 0.18]
+        case .brightnessStep:
+            delays = [0.070, 0.16]
+        case .brightness:
+            delays = [0.070, 0.16, 0.27]
+        default:
+            return
+        }
+
+        for delay in delays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self,
+                      self.controlStateRefreshGeneration == refreshGeneration,
+                      self.enabled, self.isConnected, !self.isHolding, self.isTransient,
+                      self.currentPresentationKey == expectedPresentationKey,
+                      self.lastEvent?.key == handled.key else { return }
+                let refreshed = self.actionFace(
+                    key: handled.key,
+                    action: handled.action,
+                    presentation: handled.presentation,
+                    subtitle: self.gestureLabel(for: handled.key)
+                )
+                guard refreshed.controlState != nil,
+                      refreshed.controlState != self.currentControlState else { return }
+                if SystemControlState.isSystemOutputMuteToggle(handled.action) {
+                    self.refreshMuteState(
+                        refreshed,
+                        expectedPresentationKey: expectedPresentationKey,
+                        handledKey: handled.key,
+                        duration: duration,
+                        generation: refreshGeneration
+                    )
+                } else {
+                    self.presentTransient(refreshed, duration: duration, animate: false,
+                                          playSymbolCue: false)
+                }
+            }
+        }
+    }
+
+    /// Apply a measured mute edge to the live symbol view. Apple's Magic Replace owns the speaker
+    /// topology, so the slash draws on/off while the speaker body stays spatially continuous. If a
+    /// Layer → Mute entrance is still using exact snapshot proxies, wait for that handoff before
+    /// starting the native transition; otherwise the slash animation would run behind an overlay
+    /// and only its final frame would be visible.
+    private func refreshMuteState(
+        _ face: Face,
+        expectedPresentationKey: String,
+        handledKey: String,
+        duration: TimeInterval,
+        generation: Int
+    ) {
+        guard let state = face.controlState else { return }
+        if !contentMorphProxyViews.isEmpty {
+            if let pending = pendingControlRefresh,
+               pending.generation == generation, pending.state == state { return }
+            pendingControlRefresh = (generation, state)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.27) { [weak self] in
+                guard let self,
+                      self.controlStateRefreshGeneration == generation,
+                      let pending = self.pendingControlRefresh,
+                      pending.generation == generation, pending.state == state else { return }
+                self.pendingControlRefresh = nil
+                guard self.enabled, self.isConnected, !self.isHolding, self.isTransient,
+                      self.currentPresentationKey == expectedPresentationKey,
+                      self.lastEvent?.key == handledKey else { return }
+                self.applyMuteState(face, duration: duration)
+            }
+            return
+        }
+        pendingControlRefresh = nil
+        applyMuteState(face, duration: duration)
+    }
+
+    private func applyMuteState(_ face: Face, duration: TimeInterval) {
+        guard let source = face.image else {
+            presentTransient(face, duration: duration, animate: false, playSymbolCue: false)
+            return
+        }
+        let oldSymbolName = currentSymbolName
+        let image = ActionSymbolStyle.hierarchicalImage(
+            source, symbolName: face.symbolName, tint: face.tint
+        ) ?? source
+
+        currentFaceTint = face.tint
+        currentSymbolName = face.symbolName
+        currentSymbolCue = face.symbolCue
+        currentControlState = face.controlState
+        currentPresentationKey = face.key
+        surface.titleLabel.stringValue = face.title
+        surface.subtitleLabel.stringValue = face.subtitle
+        surface.iconView.contentTintColor = nil
+        applyHoldContentContrast()
+        applyColors(face.tint, animated: false)
+
+        if supportsNativeSymbolMorph(from: oldSymbolName, to: face.symbolName),
+           #available(macOS 14.0, *) {
+            // No secondary mute cue: Magic Replace itself is the complete state feedback. Adding
+            // variable-colour on top would restart the speaker layers and make the slash flicker.
+            ActionSymbolStyle.replaceSymbol(in: surface.iconView, with: image,
+                                            cue: nil, speed: 2.8)
+        } else {
+            surface.iconView.image = image
+        }
+        scheduleIdle(after: duration)
+    }
+
+    /// Use the symbol's authored internal layers as the moving parts. Speeds are intentionally
+    /// brisk because these effects share the same 220–280 ms interaction envelope as the rest of
+    /// the widget; the permanent icon takes over before any lingering ornamental tail can form.
+    private func applyNativeSymbolCue(_ cue: SymbolCue?, to imageView: NSImageView) {
+        guard let cue, #available(macOS 14.0, *) else { return }
+        ActionSymbolStyle.apply(cue, to: imageView)
+    }
+
+    private func installNativeSymbolAccent(in container: NSView, motion: IconMotion,
+                                           duration: CFTimeInterval,
+                                           begin: CFTimeInterval) {
+        guard let root = container.layer else { return }
+        let tint = (surface.iconView.contentTintColor ?? currentFaceTint)
+            .usingColorSpace(.deviceRGB) ?? .controlAccentColor
+        let timing = CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.18, 1)
+
+        switch motion {
+        case .layerRebuild(let direction):
+            let sign: CGFloat = direction >= 0 ? 1 : -1
+            for index in 0..<3 {
+                let sheet = CAShapeLayer()
+                sheet.frame = container.bounds
+                sheet.path = layerSheetPath(in: container.bounds)
+                sheet.fillColor = tint.withAlphaComponent(0.035 + CGFloat(index) * 0.02).cgColor
+                sheet.strokeColor = tint.withAlphaComponent(0.58).cgColor
+                sheet.lineWidth = 0.85
+                sheet.opacity = 0
+                root.insertSublayer(sheet, at: 0)
+                let depth = CGFloat(index - 1) * 7
+                addConnectedKeyframes(
+                    keyPath: "transform", values: [
+                        NSValue(caTransform3D: spatialTransform(scale: 0.78,
+                                                                perspective: 270)),
+                        NSValue(caTransform3D: spatialTransform(
+                            x: sign * CGFloat(index - 1) * 2.0,
+                            y: CGFloat(index - 1) * 5.0, z: depth,
+                            scale: 1.05, rotateX: CGFloat(index - 1) * 0.12,
+                            rotateY: sign * CGFloat(index - 1) * 0.10,
+                            perspective: 270
+                        )),
+                        NSValue(caTransform3D: spatialTransform(scale: 0.86,
+                                                                perspective: 270)),
+                    ], keyTimes: [0, 0.52, 1], duration: duration,
+                    beginTime: begin + Double(index) * 0.008,
+                    timing: timing, to: sheet, key: "nativeLayerSheet\(index)"
+                )
+                addConnectedKeyframes(
+                    keyPath: "opacity", values: [0, 0.78, 0],
+                    keyTimes: [0, 0.42, 1], duration: duration,
+                    beginTime: begin + Double(index) * 0.008,
+                    timing: timing, to: sheet, key: "nativeLayerSheetOpacity\(index)"
+                )
+            }
+
+        case .actionImpulse(let requestedCount):
+            let count = max(1, min(3, requestedCount))
+            for index in 0..<count {
+                let ring = CAShapeLayer()
+                ring.frame = container.bounds
+                ring.fillColor = nil
+                ring.strokeColor = tint.withAlphaComponent(0.62).cgColor
+                ring.lineWidth = 1.0
+                ring.opacity = 0
+                root.insertSublayer(ring, at: 0)
+                let paths: [CGPath] = [4.0, 11.5, 18.5].map { radius in
+                    CGPath(ellipseIn: CGRect(x: container.bounds.midX - radius,
+                                             y: container.bounds.midY - radius,
+                                             width: radius * 2, height: radius * 2),
+                           transform: nil)
+                }
+                let stagger = Double(index) * 0.022
+                addConnectedKeyframes(keyPath: "path", values: paths,
+                                      keyTimes: [0, 0.46, 1], duration: duration - stagger,
+                                      beginTime: begin + stagger, timing: timing,
+                                      to: ring, key: "nativeImpulsePath\(index)")
+                addConnectedKeyframes(keyPath: "opacity", values: [0, 0.62, 0],
+                                      keyTimes: [0, 0.30, 1], duration: duration - stagger,
+                                      beginTime: begin + stagger, timing: timing,
+                                      to: ring, key: "nativeImpulseOpacity\(index)")
+            }
+
+        case .returnSweep:
+            let trail = CAShapeLayer()
+            trail.frame = container.bounds
+            trail.path = returnArcPath(in: container.bounds)
+            trail.fillColor = nil
+            trail.strokeColor = tint.withAlphaComponent(0.76).cgColor
+            trail.lineWidth = 1.15
+            trail.lineCap = .round
+            trail.opacity = 0
+            root.addSublayer(trail)
+            addConnectedKeyframes(keyPath: "strokeEnd", values: [0, 0.86, 1],
+                                  keyTimes: [0, 0.72, 1], duration: duration,
+                                  beginTime: begin, timing: timing, to: trail,
+                                  key: "nativeReturnDraw")
+            addConnectedKeyframes(keyPath: "strokeStart", values: [0, 0, 0.70],
+                                  keyTimes: [0, 0.64, 1], duration: duration,
+                                  beginTime: begin, timing: timing, to: trail,
+                                  key: "nativeReturnErase")
+            addConnectedKeyframes(keyPath: "opacity", values: [0, 0.88, 0],
+                                  keyTimes: [0, 0.30, 1], duration: duration,
+                                  beginTime: begin, timing: timing, to: trail,
+                                  key: "nativeReturnOpacity")
+
+        case .holdSequence:
+            for side: CGFloat in [-1, 1] {
+                let rail = CAShapeLayer()
+                rail.frame = container.bounds
+                let x = container.bounds.midX + side * 15
+                let path = CGMutablePath()
+                path.move(to: CGPoint(x: x, y: container.bounds.midY - 9))
+                path.addLine(to: CGPoint(x: x, y: container.bounds.midY + 9))
+                rail.path = path
+                rail.fillColor = nil
+                rail.strokeColor = tint.withAlphaComponent(0.52).cgColor
+                rail.lineWidth = 0.85
+                rail.lineCap = .round
+                rail.opacity = 0
+                root.addSublayer(rail)
+                addConnectedKeyframes(keyPath: "strokeEnd", values: [0, 1, 1],
+                                      keyTimes: [0, 0.50, 1], duration: duration,
+                                      beginTime: begin, timing: timing, to: rail,
+                                      key: "nativeHoldRailDraw\(side)")
+                addConnectedKeyframes(keyPath: "opacity", values: [0, 0.62, 0],
+                                      keyTimes: [0, 0.36, 1], duration: duration,
+                                      beginTime: begin, timing: timing, to: rail,
+                                      key: "nativeHoldRailOpacity\(side)")
+            }
+
+        case .settleToLayer:
+            let seam = CAShapeLayer()
+            seam.frame = container.bounds
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: container.bounds.midX - 13, y: container.bounds.midY))
+            path.addLine(to: CGPoint(x: container.bounds.midX + 13, y: container.bounds.midY))
+            seam.path = path
+            seam.fillColor = nil
+            seam.strokeColor = tint.withAlphaComponent(0.62).cgColor
+            seam.lineWidth = 1.0
+            seam.lineCap = .round
+            seam.opacity = 0
+            root.insertSublayer(seam, at: 0)
+            addConnectedKeyframes(keyPath: "strokeStart", values: [0, 0.42, 0.50],
+                                  keyTimes: [0, 0.58, 1], duration: duration,
+                                  beginTime: begin, timing: timing, to: seam,
+                                  key: "nativeSettleStart")
+            addConnectedKeyframes(keyPath: "strokeEnd", values: [1, 0.58, 0.50],
+                                  keyTimes: [0, 0.58, 1], duration: duration,
+                                  beginTime: begin, timing: timing, to: seam,
+                                  key: "nativeSettleEnd")
+            addConnectedKeyframes(keyPath: "opacity", values: [0, 0.70, 0],
+                                  keyTimes: [0, 0.32, 1], duration: duration,
+                                  beginTime: begin, timing: timing, to: seam,
+                                  key: "nativeSettleOpacity")
+
+        case .ordinary, .applicationArrival, .appWheelWave:
+            break
+        }
+    }
+
+    /// Icon motion is the status widget's interaction grammar. Geometry remains constrained to the
+    /// icon's fixed frame; auxiliary contours may briefly breathe outside it, but neither the card,
+    /// its Layer border, nor the text layout moves. All paths finish inside the same 220–280 ms
+    /// window so a newer input can replace them without waiting.
+    @discardableResult
+    private func makeSemanticIconTransition(outgoing: NSView, incoming: NSView,
+                                             oldSnapshot: LabelSnapshot?,
+                                             newSnapshot: LabelSnapshot?,
+                                             outgoingOpacity: Float, motion: IconMotion,
+                                             duration: CFTimeInterval, delay: CFTimeInterval,
+                                             timelineStart: CFTimeInterval) -> NSView {
+        let container = NSView(frame: incoming.frame)
+        container.wantsLayer = true
+        container.layer?.masksToBounds = false
+        outgoing.removeFromSuperview()
+        surface.contentView.addSubview(container)
+
+        guard let oldSnapshot, let newSnapshot else {
+            return makeSnapshotFallback(outgoing: outgoing, incoming: incoming,
+                                        in: container, outgoingOpacity: outgoingOpacity,
+                                        duration: duration, delay: delay,
+                                        timelineStart: timelineStart)
+        }
+
+        let front = makeSnapshotView(oldSnapshot, frame: container.bounds)
+        let back = makeSnapshotView(newSnapshot, frame: container.bounds)
+        front.alphaValue = CGFloat(outgoingOpacity)
+        back.alphaValue = 0
+        container.addSubview(front)
+        container.addSubview(back)
+
+        let tint = (surface.iconView.contentTintColor ?? currentFaceTint)
+            .usingColorSpace(.deviceRGB) ?? .controlAccentColor
+        var structureLayers: [CAShapeLayer] = []
+        var apertureMask: CAShapeLayer?
+        var sheetRig: CATransformLayer?
+        var appWheelDots: [CALayer] = []
+        var impactShards: [CAShapeLayer] = []
+        var returnTrail: CAShapeLayer?
+        var depthRails: [CAShapeLayer] = []
+        var settleSeam: CAShapeLayer?
+
+        switch motion {
+        case .layerRebuild:
+            // Three clean sheets become a real 3D hierarchy. The stack itself is the object: it
+            // opens in Z, changes order under a shallow camera yaw, then closes as the new Layer.
+            let rig = CATransformLayer()
+            rig.bounds = container.bounds
+            rig.position = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
+            rig.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            if let backLayer = back.layer {
+                container.layer?.insertSublayer(rig, above: backLayer)
+            } else {
+                container.layer?.addSublayer(rig)
+            }
+            sheetRig = rig
+            for index in 0..<3 {
+                let sheet = CAShapeLayer()
+                sheet.frame = container.bounds
+                sheet.path = layerSheetPath(in: container.bounds)
+                sheet.fillColor = tint.withAlphaComponent(0.08 + CGFloat(index) * 0.025).cgColor
+                sheet.strokeColor = tint.withAlphaComponent(0.96 - CGFloat(index) * 0.12).cgColor
+                sheet.lineWidth = index == 1 ? 1.35 : 1.10
+                sheet.lineJoin = .round
+                sheet.opacity = 0
+                sheet.shadowColor = tint.cgColor
+                sheet.shadowOpacity = index == 1 ? 0.20 : 0.10
+                sheet.shadowRadius = index == 1 ? 3.2 : 1.8
+                sheet.shadowOffset = .zero
+                rig.addSublayer(sheet)
+                structureLayers.append(sheet)
+            }
+        case .applicationArrival:
+            let mask = CAShapeLayer()
+            mask.frame = container.bounds
+            back.layer?.mask = mask
+            apertureMask = mask
+
+            for index in 0..<3 {
+                let orbit = CAShapeLayer()
+                orbit.frame = container.bounds
+                orbit.fillColor = nil
+                orbit.strokeColor = (index == 1 ? NSColor.white : tint)
+                    .withAlphaComponent(index == 1 ? 0.72 : 0.60).cgColor
+                orbit.lineWidth = index == 1 ? 1.15 : 0.85
+                orbit.lineCap = .round
+                orbit.lineDashPattern = index == 1 ? nil : [5, 3]
+                orbit.opacity = 0
+                orbit.shadowColor = tint.cgColor
+                orbit.shadowOpacity = index == 1 ? 0.28 : 0.14
+                orbit.shadowRadius = index == 1 ? 3 : 1.5
+                orbit.shadowOffset = .zero
+                container.layer?.addSublayer(orbit)
+                structureLayers.append(orbit)
+            }
+        case .appWheelWave:
+            // These are pixel slices of the real destination SF Symbol, not substitute circles.
+            // The relay can therefore address all nine destinations independently and still land
+            // on the exact AppKit-rendered glyph without a final size/weight jump.
+            appWheelDots = makeAppWheelDotLayers(from: newSnapshot,
+                                                 in: container.bounds)
+            for dot in appWheelDots {
+                container.layer?.addSublayer(dot)
+            }
+        case .actionImpulse(let count):
+            for _ in 0..<max(1, min(3, count)) {
+                let ring = CAShapeLayer()
+                ring.frame = container.bounds
+                ring.fillColor = nil
+                ring.strokeColor = tint.withAlphaComponent(0.78).cgColor
+                ring.lineWidth = 1.20
+                ring.opacity = 0
+                container.layer?.insertSublayer(ring, at: 0)
+                structureLayers.append(ring)
+            }
+            // Eight tiny radial facets make the press feel like a point impact, without adding a
+            // persistent glow or particle system that would cost energy while the widget is idle.
+            for index in 0..<8 {
+                let shard = CAShapeLayer()
+                shard.frame = container.bounds
+                let angle = CGFloat(index) * .pi / 4
+                let inner: CGFloat = 12.5
+                let outer: CGFloat = 15.5
+                let path = CGMutablePath()
+                path.move(to: CGPoint(x: container.bounds.midX + cos(angle) * inner,
+                                      y: container.bounds.midY + sin(angle) * inner))
+                path.addLine(to: CGPoint(x: container.bounds.midX + cos(angle) * outer,
+                                         y: container.bounds.midY + sin(angle) * outer))
+                shard.path = path
+                shard.fillColor = nil
+                shard.strokeColor = tint.withAlphaComponent(0.78).cgColor
+                shard.lineWidth = 1.15
+                shard.lineCap = .round
+                shard.opacity = 0
+                container.layer?.addSublayer(shard)
+                impactShards.append(shard)
+            }
+        case .returnSweep:
+            let trail = CAShapeLayer()
+            trail.frame = container.bounds
+            trail.path = returnArcPath(in: container.bounds)
+            trail.fillColor = nil
+            trail.strokeColor = tint.withAlphaComponent(0.82).cgColor
+            trail.lineWidth = 1.25
+            trail.lineCap = .round
+            trail.strokeStart = 0
+            trail.strokeEnd = 0
+            trail.opacity = 0
+            trail.shadowColor = tint.cgColor
+            trail.shadowOpacity = 0.24
+            trail.shadowRadius = 2.5
+            trail.shadowOffset = .zero
+            container.layer?.addSublayer(trail)
+            returnTrail = trail
+        case .holdSequence:
+            for side: CGFloat in [-1, 1] {
+                let rail = CAShapeLayer()
+                rail.frame = container.bounds
+                let path = CGMutablePath()
+                let x = container.bounds.midX + side * 15
+                path.move(to: CGPoint(x: x, y: container.bounds.midY - 9))
+                path.addLine(to: CGPoint(x: x, y: container.bounds.midY + 9))
+                rail.path = path
+                rail.fillColor = nil
+                rail.strokeColor = tint.withAlphaComponent(0.58).cgColor
+                rail.lineWidth = 0.9
+                rail.lineCap = .round
+                rail.opacity = 0
+                container.layer?.addSublayer(rail)
+                depthRails.append(rail)
+            }
+        case .settleToLayer:
+            let seam = CAShapeLayer()
+            seam.frame = container.bounds
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: container.bounds.midX - 13,
+                                  y: container.bounds.midY))
+            path.addLine(to: CGPoint(x: container.bounds.midX + 13,
+                                     y: container.bounds.midY))
+            seam.path = path
+            seam.fillColor = nil
+            seam.strokeColor = tint.withAlphaComponent(0.76).cgColor
+            seam.lineWidth = 1.2
+            seam.lineCap = .round
+            seam.opacity = 0
+            seam.shadowColor = tint.cgColor
+            seam.shadowOpacity = 0.20
+            seam.shadowRadius = 2.2
+            seam.shadowOffset = .zero
+            container.layer?.addSublayer(seam)
+            settleSeam = seam
+        case .ordinary:
+            break
+        }
+
+        let begin = timelineStart + delay
+        let standard = CAMediaTimingFunction(controlPoints: 0.20, 0, 0, 1)
+        let decelerate = CAMediaTimingFunction(controlPoints: 0, 0, 0, 1)
+        let accelerate = CAMediaTimingFunction(controlPoints: 0.30, 0, 1, 1)
+        func spatialValue(x: CGFloat = 0, y: CGFloat = 0, z: CGFloat = 0,
+                          scale: CGFloat = 1, scaleX: CGFloat = 1, scaleY: CGFloat = 1,
+                          rotateX: CGFloat = 0, rotateY: CGFloat = 0,
+                          rotateZ: CGFloat = 0,
+                          perspective: CGFloat = 340) -> NSValue {
+            NSValue(caTransform3D: spatialTransform(
+                x: x, y: y, z: z, scale: scale, scaleX: scaleX, scaleY: scaleY,
+                rotateX: rotateX, rotateY: rotateY, rotateZ: rotateZ,
+                perspective: perspective
+            ))
+        }
+        func opacity(_ values: [Float], _ times: [NSNumber], _ target: CALayer?,
+                     _ timing: CAMediaTimingFunction, _ key: String,
+                     duration localDuration: CFTimeInterval? = nil,
+                     begin localBegin: CFTimeInterval? = nil) {
+            addConnectedKeyframes(keyPath: "opacity", values: values, keyTimes: times,
+                                  duration: localDuration ?? duration,
+                                  beginTime: localBegin ?? begin, timing: timing,
+                                  to: target, key: key)
+        }
+        func transforms(_ values: [NSValue], _ times: [NSNumber], _ target: CALayer?,
+                        _ timing: CAMediaTimingFunction, _ key: String,
+                        duration localDuration: CFTimeInterval? = nil,
+                        begin localBegin: CFTimeInterval? = nil) {
+            addConnectedKeyframes(keyPath: "transform", values: values, keyTimes: times,
+                                  duration: localDuration ?? duration,
+                                  beginTime: localBegin ?? begin, timing: timing,
+                                  to: target, key: key)
+        }
+
+        switch motion {
+        case .layerRebuild(let direction):
+            let sign: CGFloat = direction >= 0 ? 1 : -1
+            opacity([outgoingOpacity, outgoingOpacity, 0, 0],
+                    [0, 0.14, 0.31, 1], front.layer, accelerate, "layerOld")
+            transforms([
+                spatialValue(),
+                spatialValue(z: 3, scale: 1.04, rotateY: sign * 0.18),
+                spatialValue(z: -14, scale: 0.72, rotateY: sign * 1.05),
+            ], [0, 0.18, 1], front.layer, accelerate, "layerOldDepth")
+            opacity([0, 0, 0.22, 1], [0, 0.61, 0.75, 1],
+                    back.layer, decelerate, "layerNew")
+            transforms([
+                spatialValue(z: -13, scale: 0.70, rotateY: -sign * 0.92),
+                spatialValue(z: 4, scale: 1.045, rotateY: -sign * 0.12),
+                spatialValue(),
+            ], [0, 0.78, 1], back.layer, decelerate, "layerNewDepth")
+
+            if let sheetRig {
+                transforms([
+                    spatialValue(z: -3, scale: 0.88, rotateX: -0.08,
+                                 rotateY: sign * 0.08, perspective: 270),
+                    spatialValue(z: 11, scale: 1.08, rotateX: -0.16,
+                                 rotateY: sign * 0.42, perspective: 270),
+                    spatialValue(z: 8, scale: 1.05, rotateX: 0.12,
+                                 rotateY: -sign * 0.31, perspective: 270),
+                    spatialValue(z: 0, scale: 0.96, rotateY: 0, perspective: 270),
+                ], [0, 0.34, 0.68, 1], sheetRig, standard, "layerRigOrbit")
+            }
+
+            let offsets: [CGFloat] = [-6.4, 0, 6.4]
+            let depths: [CGFloat] = [12, 1.5, -9]
+            for (index, sheet) in structureLayers.enumerated() {
+                let stagger = Double(index) * 0.012
+                let localBegin = begin + stagger
+                let localDuration = duration - stagger
+                transforms([
+                    spatialValue(scale: 0.82, perspective: 270),
+                    spatialValue(x: sign * CGFloat(index - 1) * 1.8,
+                                 y: offsets[index], z: depths[index],
+                                 scale: 1.02, rotateX: CGFloat(index - 1) * -0.12,
+                                 rotateY: sign * CGFloat(index - 1) * 0.10,
+                                 perspective: 270),
+                    spatialValue(x: -sign * CGFloat(index - 1) * 1.8,
+                                 y: -offsets[index], z: -depths[index],
+                                 scale: 1.02, rotateX: CGFloat(index - 1) * 0.12,
+                                 rotateY: -sign * CGFloat(index - 1) * 0.10,
+                                 perspective: 270),
+                    spatialValue(scale: 0.88, perspective: 270),
+                ], [0, 0.35, 0.67, 1], sheet, standard, "layerSheetMove\(index)",
+                   duration: localDuration, begin: localBegin)
+                opacity([0, 0.96, 0.88, 0], [0, 0.17, 0.76, 1],
+                        sheet, standard, "layerSheetOpacity\(index)",
+                        duration: localDuration, begin: localBegin)
+            }
+
+        case .applicationArrival:
+            opacity([outgoingOpacity, outgoingOpacity * 0.64, 0], [0, 0.28, 1],
+                    front.layer, standard, "appOld")
+            transforms([
+                spatialValue(),
+                spatialValue(z: -18, scale: 0.54, rotateX: 0.92, rotateZ: -0.10,
+                             perspective: 285),
+            ], [0, 1], front.layer, accelerate, "appOldFocus")
+            opacity([0, 0, 0.74, 1], [0, 0.22, 0.52, 1], back.layer, decelerate, "appNew")
+            transforms([
+                spatialValue(z: -30, scale: 0.38, rotateX: -1.18,
+                             rotateY: 0.32, rotateZ: 0.16, perspective: 285),
+                spatialValue(z: 7, scale: 1.075, rotateX: 0.08,
+                             rotateY: -0.04, rotateZ: -0.025, perspective: 285),
+                spatialValue(z: 0, scale: 1, perspective: 285),
+            ], [0, 0.76, 1], back.layer, decelerate, "appNewFocus")
+            let maxRadius = hypot(container.bounds.width, container.bounds.height) * 0.54
+            let radii: [CGFloat] = [1.2, maxRadius * 0.46, maxRadius]
+            let paths = radii.map { radius in
+                CGPath(ellipseIn: CGRect(x: container.bounds.midX - radius,
+                                         y: container.bounds.midY - radius,
+                                         width: radius * 2, height: radius * 2),
+                       transform: nil)
+            }
+            addConnectedKeyframes(keyPath: "path", values: paths, keyTimes: [0, 0.54, 1],
+                                  duration: duration, beginTime: begin, timing: decelerate,
+                                  to: apertureMask, key: "appAperture")
+            for (index, orbit) in structureLayers.enumerated() {
+                let radiusScale = 0.78 + CGFloat(index) * 0.18
+                let orbitPaths = radii.map { radius in
+                    let r = radius * radiusScale
+                    return CGPath(ellipseIn: CGRect(x: container.bounds.midX - r,
+                                                    y: container.bounds.midY - r,
+                                                    width: r * 2, height: r * 2),
+                                  transform: nil)
+                }
+                let stagger = Double(index) * 0.014
+                let localBegin = begin + stagger
+                let localDuration = duration - stagger
+                addConnectedKeyframes(keyPath: "path", values: orbitPaths,
+                                      keyTimes: [0, 0.50, 1], duration: localDuration,
+                                      beginTime: localBegin, timing: decelerate,
+                                      to: orbit, key: "appOrbitPath\(index)")
+                addConnectedKeyframes(keyPath: "strokeEnd", values: [0.08, 0.78, 1],
+                                      keyTimes: [0, 0.62, 1], duration: localDuration,
+                                      beginTime: localBegin, timing: standard,
+                                      to: orbit, key: "appOrbitDraw\(index)")
+                opacity([0, index == 1 ? 0.76 : 0.52, 0], [0, 0.46, 1],
+                        orbit, standard, "appOrbitOpacity\(index)",
+                        duration: localDuration, begin: localBegin)
+                transforms([
+                    spatialValue(z: -8, scale: 0.42,
+                                 rotateX: 1.10 - CGFloat(index) * 0.12,
+                                 rotateZ: CGFloat(index - 1) * 0.42, perspective: 270),
+                    spatialValue(z: 5, scale: 1.06,
+                                 rotateX: 0.34 - CGFloat(index) * 0.06,
+                                 rotateZ: CGFloat(index - 1) * -0.18, perspective: 270),
+                    spatialValue(scale: 1.18, rotateX: 0,
+                                 rotateZ: CGFloat(index - 1) * 0.10, perspective: 270),
+                ], [0, 0.62, 1], orbit, decelerate, "appOrbitSpatial\(index)",
+                   duration: localDuration, begin: localBegin)
+            }
+
+        case .appWheelWave:
+            // The old semantic object yields quickly, then the nine real symbol components travel
+            // through a diagonal relay. No whole-icon pop occurs: each destination establishes
+            // itself, overshoots by less than one logical pixel, and settles inside 280 ms.
+            opacity([outgoingOpacity, outgoingOpacity * 0.66, 0, 0],
+                    [0, 0.16, 0.40, 1], front.layer, accelerate, "wheelOld")
+            transforms([
+                spatialValue(perspective: 330),
+                spatialValue(y: 0.7, z: -7, scale: 0.86,
+                             rotateX: 0.16, perspective: 330),
+            ], [0, 1], front.layer, accelerate, "wheelOldSettle",
+                       duration: duration * 0.42, begin: begin)
+
+            // The complete destination snapshot only enters during the landing overlap. Until
+            // then the user sees the nine independently moving pieces, not an icon hidden below
+            // them. This last crossfade also makes the proxy → permanent-view handoff pixel exact.
+            opacity([0, 0, 1], [0, 0.82, 1], back.layer, standard, "wheelExactLanding")
+
+            // Row-major layer indexes mapped onto a diagonal wave. Every rank is unique, so the
+            // nine dots appear one by one instead of three rows blinking in unison.
+            let relayRank = [0, 2, 5,
+                             1, 4, 7,
+                             3, 6, 8]
+            for (index, dot) in appWheelDots.enumerated() {
+                let rank = relayRank[index]
+                let appear = 0.030 + Double(rank) * 0.0115
+                let crest = appear + 0.050
+                let settle = min(0.205, crest + 0.044)
+                let appearT = NSNumber(value: appear / duration)
+                let crestT = NSNumber(value: crest / duration)
+                let settleT = NSNumber(value: settle / duration)
+                opacity([0, 0, 0.44, 1, 1, 0],
+                        [0, appearT, NSNumber(value: (appear + 0.020) / duration),
+                         crestT, 0.82, 1], dot, decelerate,
+                        "wheelDotOpacity\(index)")
+                transforms([
+                    spatialValue(y: -1.7, z: -3, scale: 0.24, perspective: 300),
+                    spatialValue(y: -1.7, z: -3, scale: 0.24, perspective: 300),
+                    spatialValue(y: 0.55, z: 3.5, scale: 1.13, perspective: 300),
+                    spatialValue(perspective: 300),
+                    spatialValue(perspective: 300),
+                ], [0, appearT, crestT, settleT, 1], dot, decelerate,
+                           "wheelDotRelay\(index)")
+            }
+
+        case .actionImpulse(let requestedCount):
+            opacity([outgoingOpacity, outgoingOpacity * 0.42, 0], [0, 0.24, 1],
+                    front.layer, standard, "actionOld")
+            transforms([
+                spatialValue(),
+                spatialValue(y: -1.5, z: -19, scale: 0.70,
+                             rotateX: 0.48, rotateY: -0.14, perspective: 255),
+            ], [0, 1], front.layer, accelerate, "actionOldCompress")
+            opacity([0, 0.72, 1], [0, 0.36, 1], back.layer, decelerate, "actionNew")
+            transforms([
+                spatialValue(y: 1.8, z: 22, scale: 0.58,
+                             rotateX: -0.62, rotateY: 0.16, perspective: 255),
+                spatialValue(y: -0.35, z: 4, scale: 1.085,
+                             rotateX: 0.06, rotateY: -0.025, perspective: 255),
+                spatialValue(perspective: 255),
+            ], [0, 0.70, 1],
+                       back.layer, decelerate, "actionNewImpulse")
+            let count = max(1, min(3, requestedCount))
+            for index in 0..<count {
+                let stagger = Double(index) * 0.026
+                let localBegin = begin + stagger
+                let localDuration = duration - stagger
+                let radii: [CGFloat] = [4.2, 10.8, 18.2]
+                let paths = radii.map { radius in
+                    CGPath(ellipseIn: CGRect(x: container.bounds.midX - radius,
+                                             y: container.bounds.midY - radius,
+                                             width: radius * 2, height: radius * 2),
+                           transform: nil)
+                }
+                addConnectedKeyframes(keyPath: "path", values: paths,
+                                      keyTimes: [0, 0.46, 1], duration: localDuration,
+                                      beginTime: localBegin, timing: decelerate,
+                                      to: structureLayers[index], key: "actionRingPath\(index)")
+                opacity([0, 0.58, 0], [0, 0.26, 1], structureLayers[index], standard,
+                        "actionRingOpacity\(index)", duration: localDuration,
+                        begin: localBegin)
+                transforms([
+                    spatialValue(scale: 0.52, rotateX: 0.96,
+                                 rotateZ: CGFloat(index) * 0.16, perspective: 245),
+                    spatialValue(z: 5, scale: 1.05, rotateX: 0.22,
+                                 rotateZ: CGFloat(index) * -0.08, perspective: 245),
+                    spatialValue(scale: 1.12, rotateX: 0,
+                                 rotateZ: CGFloat(index) * -0.12, perspective: 245),
+                ], [0, 0.48, 1], structureLayers[index], decelerate,
+                   "actionRingSpatial\(index)", duration: localDuration,
+                   begin: localBegin)
+            }
+            for (index, shard) in impactShards.enumerated() {
+                let localBegin = begin + 0.030 + Double(index % 2) * 0.006
+                let localDuration = max(0.12, duration - 0.030)
+                opacity([0, 0.46, 0], [0, 0.28, 1], shard, standard,
+                        "actionShardOpacity\(index)", duration: localDuration,
+                        begin: localBegin)
+                transforms([
+                    spatialValue(scale: 0.48, rotateZ: -0.08, perspective: 260),
+                    spatialValue(z: 4, scale: 1.10, rotateZ: 0.03, perspective: 260),
+                    spatialValue(scale: 1.34, rotateZ: 0.08, perspective: 260),
+                ], [0, 0.42, 1], shard, decelerate,
+                   "actionShardSpatial\(index)", duration: localDuration,
+                   begin: localBegin)
+            }
+
+        case .returnSweep:
+            // The old face closes around a left-side hinge. The new Back face swings off the same
+            // axis and lands with one restrained counter-rotation, while a drawn arc exposes the
+            // path of that hinge. It reads as "go back", not merely "something changed".
+            opacity([outgoingOpacity, outgoingOpacity * 0.62, 0], [0, 0.34, 1],
+                    front.layer, accelerate, "returnOld")
+            transforms([
+                spatialValue(perspective: 265),
+                spatialValue(x: -5.8, z: -8, scale: 0.84,
+                             rotateY: -1.24, rotateZ: -0.06, perspective: 265),
+            ], [0, 1], front.layer, accelerate, "returnOldDirection")
+            opacity([0, 0.72, 1], [0, 0.38, 1], back.layer, decelerate, "returnNew")
+            transforms([
+                spatialValue(x: 5.5, z: -10, scale: 0.80,
+                             rotateY: 1.18, rotateZ: 0.05, perspective: 265),
+                spatialValue(x: -0.9, z: 4, scale: 1.055,
+                             rotateY: -0.10, rotateZ: -0.018, perspective: 265),
+                spatialValue(perspective: 265),
+            ], [0, 0.78, 1],
+                       back.layer, decelerate, "returnNewDirection")
+            if let trail = returnTrail {
+                addConnectedKeyframes(keyPath: "strokeEnd", values: [0, 0.82, 1],
+                                      keyTimes: [0, 0.68, 1], duration: duration,
+                                      beginTime: begin, timing: standard,
+                                      to: trail, key: "returnTrailDraw")
+                addConnectedKeyframes(keyPath: "strokeStart", values: [0, 0.12, 0.76],
+                                      keyTimes: [0, 0.54, 1], duration: duration,
+                                      beginTime: begin, timing: standard,
+                                      to: trail, key: "returnTrailErase")
+                opacity([0, 0.74, 0], [0, 0.32, 1], trail, standard,
+                        "returnTrailOpacity")
+                transforms([
+                    spatialValue(scale: 0.76, rotateX: 0.56, perspective: 250),
+                    spatialValue(z: 5, scale: 1.03, rotateX: 0.12, perspective: 250),
+                    spatialValue(scale: 1.08, perspective: 250),
+                ], [0, 0.62, 1], trail, decelerate, "returnTrailSpatial")
+            }
+            installPrismEdgeFlash(in: container, axisX: 0, axisY: 1,
+                                  duration: duration, begin: begin)
+
+        case .holdSequence:
+            // The stage edge is also the water-reset edge. Expose the destination immediately as a
+            // small, foreshortened object instead of hiding it for the first 42% of the animation;
+            // this makes the semantic change readable on the same frame while preserving depth.
+            opacity([outgoingOpacity, outgoingOpacity * 0.42, 0], [0, 0.30, 1],
+                    front.layer, standard, "holdOld")
+            transforms([
+                spatialValue(perspective: 285),
+                spatialValue(y: 5.2, z: -24, scale: 0.68,
+                             rotateX: 0.54, perspective: 285),
+            ], [0, 1], front.layer, accelerate, "holdOldDepth")
+            opacity([0.18, 0.74, 1], [0, 0.38, 1], back.layer, decelerate, "holdNew")
+            transforms([
+                spatialValue(y: -5.4, z: 20, scale: 0.66,
+                             rotateX: -0.64, perspective: 285),
+                spatialValue(y: 0.5, z: 4, scale: 1.055,
+                             rotateX: 0.06, perspective: 285),
+                spatialValue(perspective: 285),
+            ], [0, 0.78, 1], back.layer, decelerate, "holdNewDepth")
+            for (index, rail) in depthRails.enumerated() {
+                let sign: CGFloat = index == 0 ? -1 : 1
+                opacity([0, 0.52, 0], [0, 0.44, 1], rail, standard,
+                        "holdRailOpacity\(index)")
+                transforms([
+                    spatialValue(x: -sign * 2.2, scaleY: 0.08,
+                                 rotateX: 0.76, perspective: 270),
+                    spatialValue(x: sign * 0.8, z: 7, scaleY: 1.12,
+                                 rotateX: 0.12, perspective: 270),
+                    spatialValue(x: sign * 2.0, scaleY: 0.32,
+                                 perspective: 270),
+                ], [0, 0.56, 1], rail, decelerate, "holdRailDepth\(index)")
+            }
+
+        case .settleToLayer:
+            opacity([outgoingOpacity, outgoingOpacity * 0.70, 0], [0, 0.36, 1],
+                    front.layer, standard, "settleOld")
+            transforms([
+                spatialValue(perspective: 300),
+                spatialValue(z: -10, scaleX: 0.76, scaleY: 0.055,
+                             rotateX: 0.42, perspective: 300),
+            ], [0, 1], front.layer, accelerate, "settleOldDepth")
+            opacity([0, 0.72, 1], [0, 0.46, 1], back.layer, decelerate, "settleNew")
+            transforms([
+                spatialValue(z: 10, scaleX: 0.74, scaleY: 0.06,
+                             rotateX: -0.48, perspective: 300),
+                spatialValue(z: 3, scale: 1.045, scaleY: 1.04,
+                             rotateX: 0.045, perspective: 300),
+                spatialValue(perspective: 300),
+            ], [0, 0.76, 1], back.layer, decelerate, "settleNewDepth")
+            if let seam = settleSeam {
+                opacity([0, 0.78, 0.42, 0], [0, 0.34, 0.62, 1], seam, standard,
+                        "settleSeamOpacity")
+                transforms([
+                    spatialValue(scaleX: 0.05, perspective: 300),
+                    spatialValue(z: 5, scaleX: 1.08, perspective: 300),
+                    spatialValue(scaleX: 0.22, perspective: 300),
+                ], [0, 0.52, 1], seam, decelerate, "settleSeamSpatial")
+            }
+
+        case .ordinary:
+            opacity([outgoingOpacity, 0], [0, 1], front.layer, standard, "semanticOld")
+            opacity([0, 1], [0, 1], back.layer, standard, "semanticNew")
+        }
+        return container
+    }
+
+    /// Split the final App Wheel snapshot into its nine authored dots. `contentsRect` references
+    /// the full Retina snapshot while each layer occupies only one dot's logical rectangle, so the
+    /// pixels, antialiasing, configured weight and palette are exactly the ones AppKit will show at
+    /// rest. The normalised centres were measured from the actual 40×40 production image view.
+    private func makeAppWheelDotLayers(from snapshot: LabelSnapshot,
+                                       in bounds: CGRect) -> [CALayer] {
+        let xCentres: [CGFloat] = [0.200, 0.481, 0.768]
+        let yCentres: [CGFloat] = [0.231, 0.494, 0.753]
+        let side = min(bounds.width, bounds.height) * 0.262
+        let pixel = 1 / max(1, snapshot.scale)
+        func snap(_ value: CGFloat) -> CGFloat { (value / pixel).rounded() * pixel }
+
+        return yCentres.flatMap { y in
+            xCentres.map { x in
+                let centre = CGPoint(x: bounds.minX + bounds.width * x,
+                                     y: bounds.minY + bounds.height * y)
+                let rect = CGRect(x: snap(centre.x - side / 2),
+                                  y: snap(centre.y - side / 2),
+                                  width: snap(side), height: snap(side))
+                    .intersection(bounds)
+                let dot = CALayer()
+                dot.frame = rect
+                dot.contents = snapshot.image
+                dot.contentsRect = CGRect(
+                    x: (rect.minX - bounds.minX) / bounds.width,
+                    y: (rect.minY - bounds.minY) / bounds.height,
+                    width: rect.width / bounds.width,
+                    height: rect.height / bounds.height
+                )
+                dot.contentsGravity = .resize
+                dot.contentsScale = snapshot.scale
+                dot.minificationFilter = .linear
+                dot.magnificationFilter = .linear
+                dot.opacity = 0
+                return dot
+            }
+        }
+    }
+
+    private func layerSheetPath(in bounds: CGRect) -> CGPath {
+        let width = bounds.width * 0.58
+        let height = bounds.height * 0.25
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: bounds.midX, y: bounds.midY + height / 2))
+        path.addLine(to: CGPoint(x: bounds.midX + width / 2, y: bounds.midY))
+        path.addLine(to: CGPoint(x: bounds.midX, y: bounds.midY - height / 2))
+        path.addLine(to: CGPoint(x: bounds.midX - width / 2, y: bounds.midY))
+        path.closeSubpath()
+        return path
+    }
+
+    private func returnArcPath(in bounds: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        let start = CGPoint(x: bounds.midX + 12.5, y: bounds.midY - 5.5)
+        let end = CGPoint(x: bounds.midX - 11.5, y: bounds.midY + 1.5)
+        path.move(to: start)
+        path.addCurve(to: end,
+                      control1: CGPoint(x: bounds.midX + 11, y: bounds.midY + 12),
+                      control2: CGPoint(x: bounds.midX - 5, y: bounds.midY + 14))
+        path.move(to: end)
+        path.addLine(to: CGPoint(x: end.x + 4.2, y: end.y + 3.8))
+        path.move(to: end)
+        path.addLine(to: CGPoint(x: end.x + 4.6, y: end.y - 3.2))
+        return path
+    }
+
+    private func spatialTransform(x: CGFloat = 0, y: CGFloat = 0, z: CGFloat = 0,
+                                  scale: CGFloat = 1,
+                                  scaleX: CGFloat = 1, scaleY: CGFloat = 1,
+                                  rotateX: CGFloat = 0, rotateY: CGFloat = 0,
+                                  rotateZ: CGFloat = 0,
+                                  perspective: CGFloat = 360) -> CATransform3D {
+        var value = CATransform3DIdentity
+        value.m34 = -1 / max(1, perspective)
+        value = CATransform3DTranslate(value, x, y, z)
+        if rotateX != 0 { value = CATransform3DRotate(value, rotateX, 1, 0, 0) }
+        if rotateY != 0 { value = CATransform3DRotate(value, rotateY, 0, 1, 0) }
+        if rotateZ != 0 { value = CATransform3DRotate(value, rotateZ, 0, 0, 1) }
+        value = CATransform3DScale(value, scale * scaleX, scale * scaleY, 1)
+        return value
+    }
+
+    private func makeSnapshotLayer(_ snapshot: LabelSnapshot, frame: CGRect) -> CALayer {
+        let layer = CALayer()
+        layer.frame = frame
+        layer.contents = snapshot.image
+        layer.contentsScale = snapshot.scale
+        layer.contentsGravity = .resize
+        layer.minificationFilter = .linear
+        layer.magnificationFilter = .linear
+        return layer
+    }
+
+    /// At the exact face handoff, a physical object exposes a lit edge. Three sub-pixel traces
+    /// produce a brief spectral bevel without blurring the icon or painting another card gradient.
+    private func installPrismEdgeFlash(in container: NSView,
+                                       axisX: CGFloat, axisY: CGFloat,
+                                       duration: CFTimeInterval,
+                                       begin: CFTimeInterval) {
+        let vertical = axisY > axisX
+        let bounds = container.bounds
+        let length = vertical ? min(bounds.height * 0.68, 30) : min(bounds.width * 0.86, 92)
+        let basePath = CGMutablePath()
+        if vertical {
+            basePath.move(to: CGPoint(x: bounds.midX, y: bounds.midY - length / 2))
+            basePath.addLine(to: CGPoint(x: bounds.midX, y: bounds.midY + length / 2))
+        } else {
+            basePath.move(to: CGPoint(x: bounds.midX - length / 2, y: bounds.midY))
+            basePath.addLine(to: CGPoint(x: bounds.midX + length / 2, y: bounds.midY))
+        }
+
+        let traces: [(NSColor, CGFloat, Float)] = [
+            (.systemCyan, -0.85, 0.26),
+            (.white, 0, 0.88),
+            (.systemPink, 0.85, 0.22),
+        ]
+        for (index, trace) in traces.enumerated() {
+            let line = CAShapeLayer()
+            line.frame = bounds
+            line.path = basePath
+            line.strokeColor = trace.0.withAlphaComponent(CGFloat(trace.2)).cgColor
+            line.fillColor = nil
+            line.lineWidth = index == 1 ? 1.15 : 0.75
+            line.lineCap = .round
+            line.opacity = 0
+            line.shadowColor = trace.0.cgColor
+            line.shadowOpacity = index == 1 ? 0.34 : 0.16
+            line.shadowRadius = index == 1 ? 2.8 : 1.4
+            line.shadowOffset = .zero
+            line.transform = CATransform3DMakeTranslation(
+                vertical ? trace.1 : 0, vertical ? 0 : trace.1, 0
+            )
+            container.layer?.addSublayer(line)
+            addConnectedKeyframes(
+                keyPath: "opacity", values: [0, 0, trace.2, trace.2 * 0.58, 0],
+                keyTimes: [0, 0.38, 0.49, 0.57, 1], duration: duration,
+                beginTime: begin, timing: CAMediaTimingFunction(name: .easeInEaseOut),
+                to: line, key: "prismEdgeOpacity\(index)"
+            )
+            let scaleKey = vertical ? "transform.scale.y" : "transform.scale.x"
+            addConnectedKeyframes(
+                keyPath: scaleKey, values: [0.08, 0.72, 1, 0.28],
+                keyTimes: [0, 0.40, 0.52, 1], duration: duration,
+                beginTime: begin, timing: CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.18, 1),
+                to: line, key: "prismEdgeScale\(index)"
+            )
+        }
+    }
+
+    private func makeSnapshotView(_ snapshot: LabelSnapshot, frame: CGRect) -> NSImageView {
+        let view = NSImageView(frame: frame)
+        view.image = NSImage(cgImage: snapshot.image, size: frame.size)
+        view.imageScaling = .scaleAxesIndependently
+        view.imageAlignment = .alignCenter
+        view.wantsLayer = true
+        return view
+    }
+
+    private func animateIconFold(front: NSImageView, back: NSImageView,
+                                 direction: CGFloat, duration: CFTimeInterval,
+                                 begin: CFTimeInterval, container: NSView) {
+        let sign: CGFloat = direction >= 0 ? 1 : -1
+        let standard = CAMediaTimingFunction(controlPoints: 0.20, 0, 0, 1)
+        let accelerate = CAMediaTimingFunction(controlPoints: 0.30, 0, 1, 1)
+        func fold(_ angle: CGFloat, scale: CGFloat = 1) -> NSValue {
+            var value = CATransform3DIdentity
+            value.m34 = -1 / 420
+            value = CATransform3DRotate(value, angle, 0, 1, 0)
+            value = CATransform3DScale(value, scale, scale, 1)
+            return NSValue(caTransform3D: value)
+        }
+        addConnectedKeyframes(keyPath: "transform",
+                              values: [fold(0), fold(sign * .pi * 0.31, scale: 0.965)],
+                              keyTimes: [0, 1], duration: duration, beginTime: begin,
+                              timing: accelerate, to: front.layer, key: "iconFoldOld")
+        addConnectedKeyframes(keyPath: "opacity", values: [front.alphaValue, 0],
+                              keyTimes: [0, 1], duration: duration * 0.66,
+                              beginTime: begin, timing: accelerate,
+                              to: front.layer, key: "iconFoldOldOpacity")
+        addConnectedKeyframes(keyPath: "transform",
+                              values: [fold(-sign * .pi * 0.31, scale: 0.965), fold(0)],
+                              keyTimes: [0, 1], duration: duration, beginTime: begin,
+                              timing: standard, to: back.layer, key: "iconFoldNew")
+        addConnectedKeyframes(keyPath: "opacity", values: [0, 0.58, 1],
+                              keyTimes: [0, 0.42, 1], duration: duration,
+                              beginTime: begin, timing: standard,
+                              to: back.layer, key: "iconFoldNewOpacity")
+    }
+
+    private func animateLabelPageTurn(front: NSImageView, back: NSImageView,
+                                      direction: CGFloat, duration: CFTimeInterval,
+                                      begin: CFTimeInterval, container: NSView) {
+        let sign: CGFloat = direction >= 0 ? 1 : -1
+        let standard = CAMediaTimingFunction(controlPoints: 0.20, 0, 0, 1)
+        let accelerate = CAMediaTimingFunction(controlPoints: 0.30, 0, 1, 1)
+        func page(_ angle: CGFloat, y: CGFloat, z: CGFloat = 0,
+                  scale: CGFloat = 1) -> NSValue {
+            var value = CATransform3DIdentity
+            value.m34 = -1 / 520
+            value = CATransform3DTranslate(value, 0, y, z)
+            value = CATransform3DRotate(value, angle, 1, 0, 0)
+            value = CATransform3DScale(value, scale, scale, 1)
+            return NSValue(caTransform3D: value)
+        }
+        // Swap the two exact snapshots while both are at the same 56° foreshortening. Keeping the
+        // faces mutually exclusive avoids a double-exposed word, while stopping short of 90°
+        // avoids a visibly empty edge-on frame on a compact, frequently changing surface.
+        addConnectedKeyframes(keyPath: "transform",
+                              values: [page(0, y: 0),
+                                       page(-sign * .pi * 0.31, y: sign * 1.7,
+                                            z: 6.5, scale: 0.98),
+                                       page(-sign * .pi * 0.31, y: sign * 1.7,
+                                            z: 6.5, scale: 0.98)],
+                              keyTimes: [0, 0.50, 1], duration: duration, beginTime: begin,
+                              timing: accelerate, to: front.layer, key: "labelTurnOld")
+        addConnectedKeyframes(keyPath: "opacity",
+                              values: [front.alphaValue, front.alphaValue, 0, 0],
+                              keyTimes: [0, 0.48, 0.50, 1], duration: duration,
+                              beginTime: begin, timing: CAMediaTimingFunction(name: .linear),
+                              to: front.layer, key: "labelTurnOldOpacity")
+        addConnectedKeyframes(keyPath: "transform",
+                              values: [page(sign * .pi * 0.31, y: -sign * 1.7,
+                                            z: 6.5, scale: 0.98),
+                                       page(sign * .pi * 0.31, y: -sign * 1.7,
+                                            z: 6.5, scale: 0.98),
+                                       page(0, y: 0)],
+                              keyTimes: [0, 0.50, 1], duration: duration, beginTime: begin,
+                              timing: standard, to: back.layer, key: "labelTurnNew")
+        addConnectedKeyframes(keyPath: "opacity", values: [0, 0, 1, 1],
+                              keyTimes: [0, 0.48, 0.50, 1], duration: duration,
+                              beginTime: begin, timing: CAMediaTimingFunction(name: .linear),
+                              to: back.layer, key: "labelTurnNewOpacity")
+    }
+
+    private func makeSnapshotFallback(outgoing: NSView, incoming: NSView, in container: NSView,
+                                      outgoingOpacity: Float, duration: CFTimeInterval,
+                                      delay: CFTimeInterval,
+                                      timelineStart: CFTimeInterval) -> NSView {
+        let destination: NSView
+        if let icon = incoming as? NSImageView {
+            destination = copiedIconView(icon)
+        } else if let label = incoming as? NSTextField {
+            destination = copiedLabel(label)
+        } else {
+            destination = NSView(frame: incoming.bounds)
+        }
+        outgoing.frame = container.bounds
+        destination.frame = container.bounds
+        container.addSubview(outgoing)
+        container.addSubview(destination)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        outgoing.layer?.opacity = 0
+        destination.layer?.opacity = 1
+        CATransaction.commit()
+        let begin = timelineStart + delay
+        let timing = CAMediaTimingFunction(name: .easeInEaseOut)
+        addConnectedKeyframes(keyPath: "opacity", values: [outgoingOpacity, 0],
+                              keyTimes: [0, 1], duration: duration, beginTime: begin,
+                              timing: timing, to: outgoing.layer, key: "snapshotFallbackOld")
+        addConnectedKeyframes(keyPath: "opacity", values: [0, 1], keyTimes: [0, 1],
+                              duration: duration, beginTime: begin, timing: timing,
+                              to: destination.layer, key: "snapshotFallbackNew")
         return container
     }
 
@@ -1371,7 +3026,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         return result
     }
 
-    private func makeLabelSnapshot(_ source: NSTextField) -> LabelSnapshot? {
+    private func makeViewSnapshot(_ source: NSView) -> LabelSnapshot? {
         let bounds = source.bounds
         guard bounds.width > 0, bounds.height > 0 else { return nil }
         var result: LabelSnapshot?
@@ -1398,6 +3053,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             result = LabelSnapshot(image: image, scale: scale)
         }
         return result
+    }
+
+    private func makeLabelSnapshot(_ source: NSTextField) -> LabelSnapshot? {
+        makeViewSnapshot(source)
     }
 
     private func resolvedMaterialColor(_ color: NSColor) -> NSColor {
@@ -1548,49 +3207,6 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         )
         surface.contentView.addSubview(container)
         return container
-    }
-
-    /// A restrained specular relay crosses the fixed card once. It visually connects icon, title
-    /// and subtitle without changing card bounds or overpowering the persistent Layer colour.
-    private func installLensSweep(duration: CFTimeInterval, direction: CGFloat,
-                                  timelineStart: CFTimeInterval) {
-        let tint = layerAppearance(currentLayerID).tint
-        let width: CGFloat = 34
-        let lens = CAGradientLayer()
-        lens.frame = CGRect(x: -width, y: 0, width: width, height: surface.cardLayer.bounds.height)
-        lens.startPoint = CGPoint(x: 0, y: 0)
-        lens.endPoint = CGPoint(x: 1, y: 1)
-        lens.locations = [0, 0.30, 0.49, 0.62, 1]
-        lens.colors = [
-            NSColor.clear.cgColor,
-            tint.withAlphaComponent(0.012).cgColor,
-            NSColor.white.withAlphaComponent(0.065).cgColor,
-            tint.withAlphaComponent(0.025).cgColor,
-            NSColor.clear.cgColor,
-        ]
-        // The card already clips its sublayers. Leaving this narrow relay rectangular avoids the
-        // conspicuous pill-shaped "light orb" produced by rounding the travelling strip itself.
-        lens.masksToBounds = false
-        lens.opacity = 0
-        lens.zPosition = 48
-        surface.cardLayer.addSublayer(lens)
-        contentMorphTransientLayers.append(lens)
-
-        let travel = surface.cardLayer.bounds.width + width * 2
-        let sign: CGFloat = direction >= 0 ? 1 : -1
-        let startX = sign > 0 ? -width : surface.cardLayer.bounds.width
-        let endX = startX + sign * travel
-        let begin = timelineStart
-        addConnectedKeyframes(keyPath: "position.x",
-                              values: [startX + width / 2, endX + width / 2],
-                              keyTimes: [0, 1], duration: duration,
-                              beginTime: begin, timing: CAMediaTimingFunction(
-                                controlPoints: 0.22, 0.62, 0.25, 1.0),
-                              to: lens, key: "lensSweepPosition")
-        addConnectedKeyframes(keyPath: "opacity", values: [0, 0.85, 0.55, 0],
-                              keyTimes: [0, 0.22, 0.72, 1], duration: duration,
-                              beginTime: begin, timing: CAMediaTimingFunction(name: .easeInEaseOut),
-                              to: lens, key: "lensSweepOpacity")
     }
 
     private func lensTransform(x: CGFloat, scaleX: CGFloat,
@@ -1797,9 +3413,9 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         // Repeated actions acknowledge on the icon only. The material card and its Layer identity
         // edge are a single fixed-size object and never pulse against one another.
         let iconScale = CAKeyframeAnimation(keyPath: "transform.scale")
-        iconScale.values = [0.92, 1.035, 0.99, 1.0]
-        iconScale.keyTimes = [0.0, 0.50, 0.78, 1.0]
-        iconScale.duration = 0.28
+        iconScale.values = [0.975, 1.018, 0.998, 1.0]
+        iconScale.keyTimes = [0.0, 0.46, 0.76, 1.0]
+        iconScale.duration = 0.18
         iconScale.timingFunctions = [CAMediaTimingFunction(controlPoints: 0.18, 0.86, 0.22, 1.0)]
         surface.iconView.layer?.add(iconScale, forKey: "statusIconSpring")
 
@@ -1849,12 +3465,6 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         holdProgressLevel = 0
         holdProgressDrainStartedAt = nil
         holdProgressDrainFrom = 0
-        renderHoldProgress(at: holdProgressLastTick)
-
-        if surface.iconView.image?.isTemplate == true {
-            surface.iconView.contentTintColor = .labelColor
-        }
-
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         surface.holdProgressContainer.opacity = 1
@@ -1865,6 +3475,11 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         reveal.duration = 0.15
         reveal.timingFunction = CAMediaTimingFunction(controlPoints: 0.20, 0.78, 0.20, 1.0)
         surface.holdProgressContainer.add(reveal, forKey: "compactHoldReveal")
+
+        // The first frame is a real timeline sample, not a cosmetic zero frame. If setup itself was
+        // delayed, this resolves straight to the current release action and commits that face with
+        // the water state in this same main-loop turn.
+        tickHoldProgress()
 
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.tickHoldProgress()
@@ -1917,11 +3532,12 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         holdProgressLastTick = now
         let elapsed = max(0, now - holdProgressStartedAt)
 
-        // Same stage calculation as HoldTiming/large HUD: the number of thresholds crossed. The
-        // final stage remains complete; an intermediate boundary clears the selected treatment
-        // before the next stage continues from its already-running absolute time.
-        var stage = 0
-        for item in holdStages where elapsed >= item.threshold { stage += 1 }
+        // One elapsed sample owns BOTH the visible action and the water. No threshold-specific
+        // DispatchWorkItem exists anymore, so main-queue pressure cannot make the icon chase a
+        // water surface that has already advanced to another stage.
+        let stage = HoldTiming.reachedStageCount(
+            elapsed: elapsed, stageDelays: holdStageDelays
+        )
         if stage != holdProgressStage {
             let previous = holdProgressStage
             holdProgressStage = stage
@@ -1932,6 +3548,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                 holdProgressDrainStartedAt = nil
                 pulseHoldProgressRim()
             }
+            synchronizeHoldFace(stage: stage, previousStage: previous)
         }
 
         if let drainStarted = holdProgressDrainStartedAt {
@@ -1962,6 +3579,32 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         holdProgressLevel += (target - holdProgressLevel) * response
         holdProgressLevel = min(max(holdProgressLevel, 0), 1)
         renderHoldProgress(at: now)
+    }
+
+    /// Resolve the face from the exact stage already used by `tickHoldProgress`. A late display tick
+    /// presents only the current face with no catch-up animation; a normal adjacent boundary gets
+    /// the authored hold transition, beginning in this same compositor transaction as the water.
+    private func synchronizeHoldFace(stage: Int, previousStage: Int) {
+        let item: HoldItem?
+        let subtitle: String
+        if stage == 0 {
+            item = holdBase
+            let nextLabel = holdStages.first.map {
+                ActionVisual.resolve($0.item.action, $0.item.presentation,
+                                     prefersTargetAppIcon: false).label
+            }
+            subtitle = nextLabel.map { L("Hold for %@", $0) } ?? L("Keep holding")
+        } else if holdStages.indices.contains(stage - 1) {
+            item = holdStages[stage - 1].item
+            subtitle = item?.isCancel == true ? L("Release to cancel") : L("Release to choose")
+        } else {
+            item = nil
+            subtitle = L("Keep holding")
+        }
+        guard let item, !isLayerStateAction(item.action), activeHoldKey != item.key else { return }
+        let adjacentBoundary = previousStage >= 0 && stage == previousStage + 1
+        let animate = previousStage == -1 ? stage == 0 : adjacentBoundary
+        presentHold(item, subtitle: subtitle, animated: animate)
     }
 
     private func renderHoldProgress(at now: CFTimeInterval) {
@@ -2142,19 +3785,20 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Keep the native controls attached to the material's own background classification. AppKit
-    /// then supplies vibrant label colours for the actual composited material instead of us
-    /// guessing white or black from the desktop. This is intentionally applied during holds too:
-    /// forcing white text was illegible whenever the HUD material resolved light.
+    /// Keep typography attached to the material's own background classification while preserving
+    /// the icon's semantic system colour. In particular, hold progress must not turn Close/Quit
+    /// from system red into an ordinary black glyph; shape + label + colour jointly carry severity.
     private func applyHoldContentContrast() {
         let style = surface.cardView.interiorBackgroundStyle
         surface.titleLabel.cell?.backgroundStyle = style
         surface.subtitleLabel.cell?.backgroundStyle = style
         surface.titleLabel.textColor = .labelColor
         surface.subtitleLabel.textColor = .secondaryLabelColor
-        if surface.iconView.image?.isTemplate == true {
-            surface.iconView.contentTintColor = isHoldProgressActive
-                ? .labelColor : currentFaceTint
+        if currentSymbolName != nil {
+            // Hierarchical colour is embedded in the symbol configuration.
+            surface.iconView.contentTintColor = nil
+        } else if surface.iconView.image?.isTemplate == true {
+            surface.iconView.contentTintColor = currentFaceTint
         }
         for label in [surface.voiceHeaderLabel, surface.voiceLiveLabel,
                       surface.voicePitchLabel, surface.voiceBrightnessLabel] {

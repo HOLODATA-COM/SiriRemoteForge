@@ -358,6 +358,7 @@ Suffix any button/ring key with:
 | `appWheel`    | —                                     | summon the radial launcher (`settings.appWheel`) |
 | `repeatKey`   | `keys`, `delay?`, `interval?`         | auto-repeat while held (the remote sends no auto-repeat) |
 | `brightness`  | `value` (0…1)                         | set all displays' backlight; `0` = min (used by Power to dim) |
+| `brightnessStep` | `to` (`up` / `down`)              | move brightness by one native hardware-key notch |
 
 ### Layers (layer × app)
 

@@ -33,6 +33,20 @@ final class ExampleConfigTests: XCTestCase {
         let config = try ConfigLoader.load(text)
         XCTAssertEqual(config.settings.layers.map(\.id), ["BASE", "L1", "L2"])
         XCTAssertEqual(config.modes["global"]?.bindings["button.tv"], .layerCycle)
+        XCTAssertEqual(config.modes["L2"]?.bindings["button.volumeUp"],
+                       .brightnessStep(direction: 1))
+        XCTAssertEqual(config.modes["L2"]?.bindings["button.volumeDown"],
+                       .brightnessStep(direction: -1))
+    }
+
+    func testMusicLaunchUsesItsOwnShortHoldDelay() throws {
+        for url in [exampleURL, authorURL] {
+            let config = try ConfigLoader.load(try String(contentsOf: url, encoding: .utf8))
+            XCTAssertEqual(config.modes["global"]?.holdDelay["button.playPause.hold2"], 0.3)
+            // This is deliberately binding-local: Select drag, Back and every other stage-one
+            // action must keep the shared 0.5-second threshold.
+            XCTAssertEqual(config.settings.holdThreshold, 0.5)
+        }
     }
 
     func testEveryReferencedModeExists() throws {

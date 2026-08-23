@@ -92,6 +92,7 @@ enum ConfigStore {
       //     coming); nothing else is affected and the plain tap is never delayed.
       // Actions: keystroke(keys) media(key) mouse(op) launch(app|url)
       //          shell(command) applescript(script) mode(to) layer(to) layerCycle
+      //          brightnessStep(to: up|down)
       //   layer(to): the bound key becomes a layer key — TAP it to toggle that mode sticky
       //     (persists until tapped again), or HOLD it and press other keys for momentary use.
       // A binding OVERRIDES native behavior; unbound buttons stay native.

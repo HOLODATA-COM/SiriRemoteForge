@@ -1,6 +1,6 @@
 # SiriRemoteForge — living handoff
 
-Last updated: 2026-07-23 (Australia/Sydney)
+Last updated: 2026-08-24 (Australia/Sydney)
 
 This document is the concise source of truth for continuing development. Keep it updated whenever
 the architecture, user-facing mappings, build/run workflow, or microphone investigation changes.
@@ -8,6 +8,20 @@ The detailed product and configuration reference remains in `README.md`; microph
 belong in `docs/mic-reverse-engineering.md`.
 
 ## Repository and runtime state
+
+### Non-negotiable local App deployment invariant
+
+- Every compiled and packaged user-test build must be installed as
+  `/Applications/HyperVibe.app`. Do not run the workspace copy at `app/HyperVibe.app` as the live
+  App.
+- Local builds must preserve the existing stable `siriRemote Local Signing` identity. Verify that
+  signature before replacing the installed App; if it is missing or invalid, stop. Never silently
+  fall back to ad-hoc signing, because its changing code identity makes macOS request Accessibility,
+  Input Monitoring, Microphone, and Automation permissions again.
+- Restart only after the installed bundle passes signature verification, then verify there is one UI
+  process and that it runs from `/Applications/HyperVibe.app/Contents/MacOS/HyperVibe`.
+- These rules are also recorded in the repository-root `AGENTS.md` so future coding sessions inherit
+  them before changing or deploying the App.
 
 - Canonical repository: `https://github.com/HOLODATA-COM/SiriRemoteForge`, branch `main`.
   **GPL-3.0-or-later** as of 2026-07-22, going public; the paid-release plan was dropped. Upstream's
@@ -1749,6 +1763,254 @@ feel that evening; if any of these is wrong, this is where to look:
 - `--test-status-widget` exercises Layer → Music icon → Next Track → Layer → Voice Input without
   touching remote IO, rcd, Accessibility, or the normal running app. Core verification after the
   direct-action pipeline addition: 113/113 tests passed.
+
+## Relative brightness and semantic status motion (2026-08-23)
+
+- Layer 3 is config mode `L2`. Its volume-up/down buttons now use the new relative
+  `{ "action": "brightnessStep", "to": "up|down" }` action, so each press changes display
+  brightness without pretending a relative key is an absolute brightness value. The action is
+  represented in `Action`, ConfigLoader/Writer, the GUI binding editor, localization, visual
+  feedback, `MacActionExecutor`, and hold-repeat eligibility. Both maintained example configs map
+  the two Layer-3 buttons to it.
+- The persistent widget now has one deterministic motion grammar rather than a generic/random icon
+  replacement. All compact transitions stay inside 200–280 ms, use transform/opacity/path animation
+  on Core Animation, remain interruptible by the next event, and leave the card frame plus Layer
+  aura fixed. `accessibilityDisplayShouldReduceMotion` still selects the restrained fallback.
+- Layer switching is an in-place 240 ms three-sheet rebuild: the stack separates, its outer sheets
+  exchange order on opposite shallow arcs, and all three rejoin as the destination layer. App
+  recognition uses a 240 ms circular aperture/focus arrival. Direct single/double/triple gestures
+  use one/two/three 200 ms impulse rings. A plain Back-button action has a dedicated 220 ms leftward
+  causal handoff; the later idle return is a quieter 200 ms opposing depth settle.
+- Hold stages use a 240 ms depth relay while the existing whole-card water progress remains the
+  source of timing truth. Voice mode, its real audio waveform, pitch colour and hold/release path
+  were deliberately left unchanged because that treatment is already accepted.
+- Connection is a 260–280 ms internal focus/ripple entrance; disconnect is a separate 220–240 ms
+  inward resolve and panel exit, not a reversed celebration. The card never scales, so the Layer
+  border stays registered. Title/subtitle changes use exact Retina snapshots on the same compositor
+  timeline and exchange at a 56° horizontal-axis turn, avoiding both timer jank and double-exposed
+  text.
+- Permission-free visual-QC states now include `layer-cycle`, `semantic-cycle`,
+  `connection-cycle`, and `return-cycle`. They never start HID discovery or emit system input.
+  Window-only ScreenCaptureKit recordings (244×112 only) were inspected frame-by-frame from `/tmp`;
+  no desktop content or capture helper was added to the repository.
+- Final verification on 2026-08-23: the full macOS executable builds and SiriRemoteCore passes
+  **127/127** tests. The stable `siriRemote Local Signing` identity is usable, but on this macOS
+  `security find-identity -p codesigning` misleadingly reports `0 valid identities` for that
+  self-signed certificate. Do not use that command as the gate: unlock the dedicated keychain,
+  confirm the named certificate exists, let `codesign` prove private-key access, then require
+  `codesign --verify --deep --strict`. Never silently fall back to ad-hoc signing.
+- The verified build was installed and restarted at `/Applications/HyperVibe.app`. Its designated
+  requirement is `identifier "com.hypervibe.app"` plus certificate SHA-1
+  `80f746bd1de5a7ceb835a200ce4e43705f01aee6`; Authority is `siriRemote Local Signing`. Exactly one
+  UI process was running afterward at the required path (PID 11739 at final verification), and `HyperVibe Host` PID 906
+  was left untouched. The preceding installed bundle is recoverable from
+  `/tmp/HyperVibe-installed-before-20260823-0255.app` for this machine session.
+
+## Native SF Symbols and semantic action colour (2026-08-23)
+
+- `app/ActionSymbolStyle.swift` is now the single semantic source for every dynamic action symbol.
+  `ActionVisual` carries SF Symbol provenance, semantic system tint and motion cue together; the
+  persistent status widget, large hold-progress HUD and transient Layer/connection HUD consume that
+  same payload. A custom JSON `icon` may change the drawing but cannot accidentally erase the
+  action's severity or physical behaviour.
+- The action audit covers every `Action` case and the shortcuts used by the live/default configs:
+  volume, mute, playback, next/previous, brightness, four directions, Back/delete, copy/paste/cut,
+  Spotlight, fullscreen/minimise, pointer move/click/context click/scroll, launch/App Wheel, sleep,
+  voice, Layer/mode, close window and AppleScript quit. Repeated keystrokes retain the underlying
+  key's cue; only an otherwise generic command inherits the physical Back key's return cue.
+- Colour is semantic and adaptive, never a hard-coded RGB substitute: character deletion and
+  navigation are system blue; Close Window, Cmd-W/Cmd-Q and quit scripts are system red; mute,
+  minimise and cut are system orange; media is system pink; pointer operations are system teal;
+  confirmation is system green; search/launch/sleep use indigo or purple. Shape, label and motion
+  remain present so colour is never the sole carrier of meaning.
+- All SF Symbols are configured with hierarchical rendering, preserving Apple's authored primary,
+  secondary and tertiary layers. On macOS 15+ symbol-to-symbol changes use Magic Replace with a
+  by-layer Replace fallback; macOS 14 uses by-layer Replace directly; macOS 13 keeps the existing
+  Core Animation fallback. Layer reconstruction uses Draw On by layer on macOS 26 and a cleared
+  by-layer Appear state on older supported Symbols runtimes. Volume uses variable colour; directional,
+  media, brightness, destructive, sleep, search, copy/paste/cut and pointer families each have a
+  deterministic native effect inside the existing 0.2–0.3 s interaction envelope.
+- The web-only `morphicons` library was deliberately not embedded: it morphs supplied SVG/path data,
+  whereas native AppKit receives `NSSymbolImageRep` and Apple does not expose arbitrary SF Symbol SVG
+  geometry at runtime. The native Symbols framework therefore gives better topology, accessibility,
+  OS-version fallback and Apple-authored layer motion without shipping a parallel JS renderer.
+- The large water HUD no longer forces every template glyph to white. Delete stays blue, Close/Quit
+  are red, Cancel is teal, and real app artwork retains its native colour. Stage changes use native
+  topology-aware symbol replacement; non-symbol app artwork keeps a restrained scale fallback.
+- In the transient Layer HUD, the icon was separated from the rolling text container. The card stays
+  fixed, titles roll vertically, and the three stack layers rebuild in place while the configured
+  layer colour interpolates. Connected is green; disconnected is system orange (attention, not
+  destructive red) and replaces the filled remote with its outline form.
+- Window-only ScreenCaptureKit QA (no desktop, other app, cursor or audio capture) was inspected at
+  actual transition frames. Key artifacts in `/tmp` are
+  `hypervibe-symbol-audit-full.mov`, `hypervibe-back-hold-shared-semantics-full.mov`, and
+  `hypervibe-layer-symbol-native-full.mov`. The full action contact sheet confirmed all semantic
+  families; the Layer transition showed the icon's three authored pieces entering in order while
+  text rolled independently. The large Back ladder confirmed red Close/Quit over the complete water
+  fill and neutral Cancel recovery.
+- Verification: full app build passes, `git diff --check` is clean, the AppKit shortcut recorder
+  self-test passes, and SiriRemoteCore passes **127/127** tests. The final candidate was packaged at
+  `/tmp/HyperVibe-candidate-20260823-140448.app`, passed deep/strict code-sign verification and was
+  installed at `/Applications/HyperVibe.app` with identifier `com.hypervibe.app`, Authority
+  `siriRemote Local Signing`, and the unchanged leaf SHA-1
+  `80f746bd1de5a7ceb835a200ce4e43705f01aee6`.
+- Deployment verification found exactly one installed UI process at
+  `/Applications/HyperVibe.app/Contents/MacOS/HyperVibe` (PID 45898) and left `HyperVibe Host` PID 906
+  untouched. Startup logs confirmed existing Input Monitoring access, a live media-key event tap,
+  successful HID manager open and the configured Siri Remote interfaces being seized. The preceding
+  installed bundle remains recoverable at
+  `/tmp/HyperVibe-installed-before-20260823-140448.backup`; its non-`.app` suffix is intentional so
+  LaunchServices cannot prefer the backup over the installed app when both share the same bundle ID.
+- When verifying a restart, filter `ps` before returning its output. A full process table may be
+  truncated before HyperVibe's PID appears; that briefly made the still-running old UI look absent
+  during this deployment. Checking the exact PID/path exposed it, after which only that UI PID was
+  terminated and the installed candidate was genuinely launched.
+
+## Stateful volume/brightness symbols and interruption correction (2026-08-23)
+
+- Volume-up/down are now two inputs into one measured output state, not two differently-sized
+  icons. Both render Apple's variable `speaker.wave.3.fill`; CoreAudio's default output device,
+  mute property and virtual-main/master/channel volume determine the visible waves. Mute resolves
+  to the related `speaker.slash.fill` state. Existing config icons in the `speaker.*` family are
+  canonicalised automatically; a genuinely custom unrelated icon remains an explicit override.
+- Brightness-up/down likewise share one state symbol. `sun.max.fill` must not be used for this: a
+  raster probe confirmed that its 5% and 95% `variableValue` output is pixel-identical. The shipped
+  feedback uses Apple's real variable `sun.max.circle`, whose authored circular state advances with
+  the live value returned by the existing built-in-first DisplayServices brightness reader.
+- `Controller` announces the binding immediately before its executor posts the system key. The
+  widget therefore presents immediately from the current measurement, then samples again after the
+  media/brightness event has landed and changes only the variable-value image in place. Absolute
+  brightness ramps receive two additional samples. The refresh never restarts the card transition,
+  SF Symbol cue, or dwell grammar.
+- A complete volume/brightness burst owns one stable face. Identical ticks only extend dwell; a
+  direction or measured-value change redraws atomically. The input-free `interruption-cycle` test
+  accepts deterministic state overrides, proving low→high→low waves and brightness progress without
+  changing the test machine's controls.
+- Equal-colour palette rendering replaces hierarchical opacity falloff, so the settled primary,
+  secondary and tertiary layers remain equally readable. Magic Replace is now restricted to real
+  topology families (same fill variant, speaker, sun, layer stack and Apple TV Remote). Unrelated
+  symbols keep the app's compositor transition instead of briefly merging into a malformed glyph.
+- Verification before deployment: the full AppKit executable builds; `git diff --check` is clean;
+  SiriRemoteCore passes **127/127** tests; and window-only recording
+  `/tmp/hypervibe-variable-controls-v2.mov` was inspected frame by frame. It confirms both control
+  families change with value while rapid ticks do not replay their entrance animation.
+- The stable-signed candidate `/tmp/HyperVibe-candidate-20260823-1506.app` passed deep/strict
+  verification before and after staging, then replaced the installed UI at
+  `/Applications/HyperVibe.app`. Identifier remains `com.hypervibe.app`, Authority is
+  `siriRemote Local Signing`, and leaf SHA-1 remains
+  `80f746bd1de5a7ceb835a200ce4e43705f01aee6`. Final process audit found exactly one UI process
+  (PID 68546) and preserved Host PID 906. `/tmp/hypervibe.log` confirms Input Monitoring granted,
+  IOHIDManager open success, the media event tap installed, and all five remote interfaces seized.
+  The prior installed bundle is recoverable at
+  `/tmp/HyperVibe-installed-before-20260823-1506.backup`.
+
+## App Wheel relay and stateful Mute replacement (2026-08-23)
+
+- The App Wheel no longer enters through the generic whole-icon action impulse. Both a direct
+  `.appWheel` action and the production TV-hold stage select `IconMotion.appWheelWave`. The
+  destination `circle.grid.3x3.fill` snapshot is divided into its nine real Retina-rendered dots;
+  a unique diagonal relay reveals them one by one, then crossfades to the exact complete SF Symbol
+  during the normal proxy handoff. The card never changes size and the complete track remains
+  inside 280 ms.
+- System-output Mute AppleScript (`set volume output muted ...`) now shares the same CoreAudio state
+  reader as media-key mute. App-specific scripts such as Music's private `set mute` deliberately do
+  not use CoreAudio, because system output state cannot truthfully represent app-local mute.
+- The compact widget names the measured result: muted shows `Mute` plus
+  `speaker.slash.fill`; unmuted shows `Unmute` plus `speaker.wave.3.fill`. Conventional configured
+  Mute/Unmute labels opt into the live wording, while a genuinely custom label remains untouched.
+  Chinese `Unmute` is localised as `未静音`.
+- The post-action sample no longer atomically swaps mute artwork. It applies Apple's native Magic
+  Replace at speed 2.8 with no competing variable-colour cue, so the speaker body remains continuous
+  while the slash draws on/off and the wave layers return. If the initial Layer → Mute transition is
+  still landing, the measured edge waits for its exact proxy handoff rather than playing invisibly
+  underneath it. A generation guard prevents a stale delayed sample from winning over a rapid
+  second press.
+- Permission-free visual states `app-wheel-wave` and `mute-state-cycle` were added. Window-only
+  recordings `/tmp/hypervibe-app-wheel-wave.mov` and
+  `/tmp/hypervibe-mute-magic-replace.mov` were inspected frame by frame: all nine dot relay stages
+  are visible without a final position jump, and native slash entry/removal is visible in distinct
+  frames. The Mute preview uses deterministic overrides and never changes real system audio.
+- Verification: the app builds, `git diff --check` is clean, and SiriRemoteCore passes **127/127**
+  tests. The candidate passed deep/strict signature checks before and after staging and was installed
+  at `/Applications/HyperVibe.app`. Identifier remains `com.hypervibe.app`, Authority remains
+  `siriRemote Local Signing`, and the certificate leaf SHA-1 is unchanged at
+  `80f746bd1de5a7ceb835a200ce4e43705f01aee6`. Final audit found exactly one installed UI process
+  (PID 93278) and preserved `HyperVibe Host` PID 906. Startup logs confirm Input Monitoring granted,
+  IOHIDManager open success, media event tap active, and all five remote interfaces seized. The
+  previous installed UI bundle is recoverable at
+  `/tmp/HyperVibe-installed-before-20260823-1542.backup`.
+
+## Single-clock hold stages and one-edge Mute transactions (2026-08-23)
+
+- Root cause of the reported Back hold lag was two nominally related but mechanically independent
+  timelines. The compact widget's water sampled `CACurrentMediaTime()` every frame, while Close,
+  Quit and Cancel faces were each queued with their own `DispatchQueue.main.asyncAfter`. Main-queue
+  pressure could therefore advance the water and leave one or more face callbacks waiting behind it.
+- All per-threshold face work items have been removed. `HoldTiming.reachedStageCount` is now the pure
+  shared resolver used by input selection, the compact whole-card water surface and the large water
+  HUD. A compact-widget display tick takes one `elapsed` sample, resolves one current stage, starts
+  its water clear/fill and installs that exact stage face in the same main-loop/compositor turn.
+  There is no second timer capable of drifting away.
+- A late frame never replays missed faces. For example, a jump from 0.40 s directly to 1.35 s lands
+  immediately on Quit (stage 2), with no delayed Close animation in front of it. Ordinary adjacent
+  boundaries retain the authored 260 ms hold transition, but its destination begins visibly on the
+  boundary frame rather than remaining hidden for the first 42% of the effect.
+- The first compact visual callback is also a real timeline sample. If setup is late or a configured
+  threshold is earlier than the normal 180 ms visual lead-in, it renders the action that release
+  would select at that instant instead of drawing a cosmetic stage-zero frame first. Threshold arrays
+  are cached at hold start so the 60/120 Hz paths allocate nothing per frame.
+- The separate Mute double-presentation bug was a pre-action/post-action ordering error, not duplicate
+  HID execution. `Controller` reports the binding before its executor toggles CoreAudio, so the old
+  implementation first showed the pre-toggle state and then animated the measured result. A system
+  Mute press now predicts and presents its post-toggle state as one transaction; delayed CoreAudio
+  sampling only confirms it and is normally a no-op. The actual output scalar is preserved while
+  muted, so predicted Unmute artwork retains the correct speaker-wave level. A failed action can
+  still correct itself from the confirmation sample.
+- Verification: the full app builds; SiriRemoteCore passes **129/129** tests, including exact-boundary
+  and skipped-frame regressions; and the window-only recording
+  `/tmp/hypervibe-back-hold-sync.mov` was inspected at 30 fps around both production thresholds.
+  Close and Quit icon motion begins on the same recorded frame as the water enters its stage clear;
+  no desktop content, input device or real action was used by that test.
+- The stable-signed candidate `/tmp/HyperVibe-candidate-hold-sync-20260823.app` passed deep/strict
+  verification before and after staging. The installed app remains identifier `com.hypervibe.app`,
+  Authority `siriRemote Local Signing`, and leaf SHA-1
+  `80f746bd1de5a7ceb835a200ce4e43705f01aee6`. Final audit found exactly one installed UI process
+  (PID 8119), preserved `HyperVibe Host` PID 906, and confirmed Input Monitoring granted, the media
+  event tap active, IOHIDManager open success and all five remote interfaces seized. The preceding
+  installed bundle is recoverable at
+  `/tmp/HyperVibe-installed-before-hold-sync-20260823.backup`.
+
+## Static website rebuild and current-product capture set (2026-08-23)
+
+- This supersedes the earlier pinned/scroll-scrub opening concept. The website is now a conventional
+  vertical product page: no ScrollTrigger dependency, no pinned scene, no scrubbed progress, and no
+  scroll event controlling product state. Scrolling only navigates the document. Pointer, ring,
+  sticky-drag, capability and curve demonstrations run on independent looping timelines and pause
+  off-screen through `IntersectionObserver`.
+- The page was rebuilt as one coherent software story: complete one-hand input, the gap left by
+  voice-only tools, Web-coding and standing-presentation scenarios, touch plus accelerated ring
+  input, the full tap/double/triple/three-stage-hold grammar, App × Layer resolution, native visual
+  feedback, remote voice features, independent acceleration curves, JSONC/GUI parity, Agent-friendly
+  configuration, and operational reliability. Hardware materials are not marketed.
+- All product media was refreshed from the installed 2026-08-23 build rather than reusing the old
+  website mockups. Current stills are `current-layout.png`, `current-tuning.png` and the exact remote
+  crop `current-remote.png`. Current native loops are `current-status-semantic.mp4`,
+  `current-status-controls.mp4`, `current-status-layers.mp4`, `current-status-app-wheel.mp4`,
+  `current-status-mute.mp4`, `current-status-voice.mp4`, `current-back-hud.mp4` and
+  `current-layer-hud.mp4`. They were captured with the App's isolated visual-QA flags: no physical
+  input, desktop capture, system-control mutation or audio capture was used.
+- `website/index.html`, `website/styles.css` and `website/app.js` are now the complete site. The old
+  split `opening.css` was removed. Real App captures carry the product visuals; the web layer adds
+  only explanatory signal traces and acceleration diagrams. All native films are muted, autoplaying,
+  inline loops; reduced-motion pauses them and leaves every chapter visible.
+- Browser QA ran against the exact Tailscale URL at 1440×1000 and 390×844. It exercised pointer,
+  ring and sticky-drag controls and inspected every desktop and phone chapter. The final document has
+  no console errors, failed requests, bad responses, broken images or horizontal overflow; the phone
+  document width is exactly 390 px. All nine video elements reached ready state 4. `app.js` passes
+  `node --check`, `window.ScrollTrigger` is absent, and source inspection finds no scroll listener.
+- Local and Tailnet preview listeners remain available on port 8765. The exact Tailnet address is
+  deliberately kept out of the public repository. This website pass did not modify, rebuild, sign,
+  restart or reconfigure the macOS App; it ships with `v0.2.0-beta.4`.
 
 ## Maintenance rules
 

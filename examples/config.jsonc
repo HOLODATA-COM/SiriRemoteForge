@@ -10,6 +10,7 @@
   //             button.nextTrack button.prevTrack button.mute button.power
   // Actions: keystroke(keys) media(key) mouse(op) launch(app|url)
   //          shell(command) applescript(script) mode(to) layer(to) layerCycle
+  //          brightnessStep(to: up|down)
   // A binding OVERRIDES native behavior; unbound buttons stay native.
   "settings": {
     "defaultMode": "global",
@@ -127,8 +128,8 @@
       // without this line a short press would do nothing at all.
       "button.playPause":       { "action": "media", "key": "playpause",
                                   "label": "Play / Pause", "icon": "playpause.fill" },
-      // Hold Play/Pause past holdThreshold2 (1.0s) and release → open Apple Music.
-      "button.playPause.hold2": { "action": "launch", "app": "Music" },
+      // This binding's own 0.3s delay leaves every shared hold threshold unchanged.
+      "button.playPause.hold2": { "action": "launch", "app": "Music", "after": 0.3 },
       // TV walks settings.layers in array order and wraps at the end.
       "button.tv": { "action": "layerCycle" },
       // Click-ring = a 4-way arrow d-pad. Left/Right are plain ←/→: inside Mission Control they
@@ -206,7 +207,11 @@
       "ring.up":    { "action": "keystroke", "keys": "up" },
       "ring.down":  { "action": "keystroke", "keys": "down" },
       "ring.left":  { "action": "keystroke", "keys": "left" },
-      "ring.right": { "action": "keystroke", "keys": "right" }
+      "ring.right": { "action": "keystroke", "keys": "right" },
+      "button.volumeUp":   { "action": "brightnessStep", "to": "up",
+                              "label": "Brightness +", "icon": "sun.max.fill" },
+      "button.volumeDown": { "action": "brightnessStep", "to": "down",
+                              "label": "Brightness −", "icon": "sun.min.fill" }
     }
   }
 }

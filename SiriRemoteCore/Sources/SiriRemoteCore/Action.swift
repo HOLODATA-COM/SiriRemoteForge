@@ -37,6 +37,9 @@ public enum Action: Equatable {
     // Set all displays' backlight to `value` (0...1). value 0 = minimum (used by button.power to
     // dim without sleeping); any button/touch then restores to max (Brightness.restoreIfDimmed).
     case brightness(Double)
+    /// Move display brightness by one native hardware-key notch. Unlike `brightness(Double)`, this
+    /// is deliberately relative, so repeated presses preserve the user's current level.
+    case brightnessStep(direction: Int) // -1 = down, +1 = up
 }
 
 public extension Action {
@@ -62,6 +65,8 @@ public extension Action {
         case .layerCycle:               return "Next Layer"
         case .repeatKey(let keys, _, _): return ActionLabel.keystroke(keys) + " ⟳"
         case .brightness(let value):    return "Brightness \(Int(value * 100))%"
+        case .brightnessStep(let direction):
+            return direction < 0 ? "Brightness −" : "Brightness +"
         }
     }
 }
@@ -204,6 +209,9 @@ extension Action: Decodable {
                                               delay: try c.decodeIfPresent(Double.self, forKey: .delay) ?? 0.3,
                                               interval: try c.decodeIfPresent(Double.self, forKey: .interval) ?? 0.045)
         case "brightness":  self = .brightness(try c.decodeIfPresent(Double.self, forKey: .value) ?? 0)
+        case "brightnessStep":
+            self = .brightnessStep(direction:
+                (try c.decodeIfPresent(String.self, forKey: .to) ?? "up") == "down" ? -1 : 1)
         case let other:
             throw DecodingError.dataCorruptedError(
                 forKey: K.action, in: c, debugDescription: "unknown action '\(other)'")
@@ -266,6 +274,9 @@ extension Action: Encodable {
         case .brightness(let value):
             try c.encode("brightness", forKey: .action)
             try c.encode(value, forKey: .value)
+        case .brightnessStep(let direction):
+            try c.encode("brightnessStep", forKey: .action)
+            try c.encode(direction < 0 ? "down" : "up", forKey: .to)
         }
     }
 }

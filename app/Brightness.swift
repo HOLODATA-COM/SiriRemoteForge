@@ -68,6 +68,12 @@ enum Brightness {
         return nil
     }
 
+    /// Read-only UI state. Callers use the same proven built-in-first/external-fallback policy as
+    /// restore detection, so the brightness symbol never invents a direction-based value.
+    static func currentValue() -> Float? {
+        mainValue()
+    }
+
     // MARK: - Set via synthesized brightness keys (moves every display, notch by notch)
 
     private static let brightnessUp:   Int32 = 2   // NX_KEYTYPE_BRIGHTNESS_UP
@@ -94,6 +100,18 @@ enum Brightness {
         DispatchQueue.main.async {
             rampGeneration += 1
             rampKey(brightnessUp, remaining: notches, generation: rampGeneration)
+        }
+    }
+
+    /// Move brightness by exactly one macOS hardware-key notch. This shares the same event path as
+    /// the keyboard's brightness keys, so it works for every display that responds to F1/F2 and
+    /// never jumps to an absolute level.
+    static func step(_ direction: Int) {
+        isDimmed = false
+        DispatchQueue.main.async {
+            // A deliberate manual step wins over an in-flight power-button ramp.
+            rampGeneration += 1
+            tapAuxKey(direction < 0 ? brightnessDown : brightnessUp)
         }
     }
 
