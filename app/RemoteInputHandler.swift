@@ -1169,7 +1169,8 @@ class RemoteInputHandler {
     /// `.hold*` binding, nothing else claims the hold, so holding it repeats the tap.
     ///
     /// Restricted to actions where repeating is *meaningful and harmless* — a real keystroke or a
-    /// media key. Repeating the others would be actively wrong: `applescript`/`shell` would re-run
+    /// media key, or relative brightness step. Repeating the others would be actively wrong:
+    /// `applescript`/`shell` would re-run
     /// a side effect dozens of times (a bound Mute toggle would flap on and off), `launch` would
     /// reopen an app, `mode`/`layer` would thrash the active layer, `brightness` would re-set the
     /// same value. A modifier-only chord ("hyperkey") is excluded too: it has no main key, so it is
@@ -1185,16 +1186,16 @@ class RemoteInputHandler {
         case .keystroke(let keys):
             // mainKey == nil ⇒ modifier-only chord; there is no key to repeat.
             guard KeyMap.parse(keys)?.mainKey != nil else { return }
-        case .media:
+        case .media, .brightnessStep:
             break
         default:
             return
         }
 
         // A KEYSTROKE holds down and repeats as a genuine key (the initial tap already typed the
-        // first character with the key up, so the hold begins after `autoRepeatDelay`). A MEDIA key
-        // keeps the old discrete re-tap below, which is CORRECT for it — each press steps volume one
-        // notch, so "repeating" it means stepping, not holding.
+        // first character with the key up, so the hold begins after `autoRepeatDelay`). MEDIA and
+        // BRIGHTNESS STEP keep the discrete re-tap below, which is correct for them — each press
+        // moves one notch, so "repeating" means stepping, not holding.
         if case .keystroke(let keys) = action {
             // A taphold key deferred its tap, so this repeat delivers the FIRST delete of a plain hold —
             // engage it fast (`tapholdHoldOnset`). A quick tap releases before then and is deferred.

@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f4ef">
+  <meta name="description" content="HyperVibe 把 Siri Remote 变成完整的 macOS 输入层：触控板指针、加速圆环滚动、多阶段手势、App × Layer、语音输入与 Agent 可编辑配置。">
+  <meta property="og:title" content="HyperVibe — Siri Remote 的 macOS 输入层">
+  <meta property="og:description" content="从语音到指针、滚动、点击、拖动与上下文操作，一只遥控器完成完整输入链。">
+  <title>HyperVibe — Siri Remote 的 macOS 输入层</title>
+  <link rel="icon" type="image/png" href="media/hypervibe-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="#top" aria-label="HyperVibe 首页">
+        <img src="media/hypervibe-icon.png" alt="" width="256" height="256">
+        <span>HyperVibe</span>
+      </a>
+      <nav aria-label="页面章节">
+        <a href="#control">触控</a>
+        <a href="#gestures">手势</a>
+        <a href="#layers">App × Layer</a>
+        <a href="#feedback">反馈</a>
+        <a href="#voice">语音</a>
+        <a href="#config">配置</a>
+      </nav>
+      <a class="header-download" href="https://github.com/HOLODATA-COM/SiriRemoteForge/releases" target="_blank" rel="noreferrer">下载 Beta <span>↗</span></a>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero section-pad">
+      <div class="shell hero-grid">
+        <div class="hero-copy">
+          <p class="overline"><i></i> macOS CONTROL LAYER</p>
+          <h1>HyperVibe</h1>
+          <p class="hero-title">Siri Remote 的完整 <span class="nowrap">macOS 输入层</span></p>
+          <p class="hero-summary">语音结束以后，不必再回到鼠标和触控板。移动、滚动、点击、拖动、切换 App 与 Layer，都留在同一只遥控器上。</p>
+
+          <ol class="hero-signals" aria-label="核心输入能力">
+            <li class="is-active" data-hero-signal><b>01</b><span>触控板指针</span><em>VELOCITY</em></li>
+            <li data-hero-signal><b>02</b><span>圆环滚动</span><em>ACCELERATED</em></li>
+            <li data-hero-signal><b>03</b><span>App × Layer</span><em>CONTEXTUAL</em></li>
+            <li data-hero-signal><b>04</b><span>实时语音</span><em>LIVE AUDIO</em></li>
+          </ol>
+
+          <div class="hero-actions">
+            <a class="button button-dark" href="#control">查看输入系统</a>
+            <a class="button button-light" href="https://github.com/HOLODATA-COM/SiriRemoteForge" target="_blank" rel="noreferrer">查看源码 ↗</a>
+          </div>
+        </div>
+
+        <div class="hero-product" data-loop-root>
+          <figure class="app-window app-window-layout">
+            <img src="media/current-layout.png" alt="最新版 HyperVibe Layout 页面，显示真实遥控器、App 配置、Layer 选择与按键映射" width="2424" height="1848">
+          </figure>
+          <figure class="hero-widget native-video-card">
+            <video muted loop playsinline autoplay preload="auto" data-native-loop aria-label="最新版 HyperVibe 状态组件动作循环">
+              <source src="media/current-status-semantic.mp4" type="video/mp4">
+            </video>
+          </figure>
+          <div class="hero-live-tag"><i></i><span>LIVE APP BUILD</span><b>23 AUG 2026</b></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="gap section-pad" id="agents">
+      <div class="shell">
+        <header class="section-heading narrow-heading">
+          <p class="overline">THE MISSING HALF</p>
+          <h2>语音能生成。<br>但它不能替你<span class="mobile-break"><br></span>完成操作。</h2>
+          <p>很多 Web coding 工具把遥控器做成一支麦克风。内容生成后，移动光标、滚动页面、选择结果和切换窗口仍然需要回到电脑前。</p>
+        </header>
+
+        <div class="input-comparison">
+          <article class="comparison-side comparison-muted">
+            <div class="comparison-label"><i></i>VOICE-ONLY</div>
+            <h3>说完以后，输入链断了。</h3>
+            <ul>
+              <li><span>语音</span><b>有</b></li>
+              <li><span>指针</span><b>—</b></li>
+              <li><span>滚动</span><b>—</b></li>
+              <li><span>点击 / 拖动</span><b>—</b></li>
+              <li><span>App 上下文</span><b>—</b></li>
+            </ul>
+          </article>
+          <div class="comparison-bridge" aria-hidden="true"><span>＋</span></div>
+          <article class="comparison-side comparison-live">
+            <div class="comparison-label"><i></i>HYPERVIBE</div>
+            <h3>语音只是完整输入的一部分。</h3>
+            <ul>
+              <li><span>语音</span><b>LIVE</b></li>
+              <li><span>指针</span><b>XY</b></li>
+              <li><span>滚动</span><b>2 AXES</b></li>
+              <li><span>点击 / 拖动</span><b>DIRECT</b></li>
+              <li><span>App × Layer</span><b>CONTEXT</b></li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="scenario-pair">
+          <article>
+            <p>WEB CODING</p>
+            <h3>从 Prompt 到验收，不离开遥控器。</h3>
+            <div class="scenario-flow"><span>说需求</span><i>→</i><span>滚动结果</span><i>→</i><span>移动与点击</span><i>→</i><span>继续修改</span></div>
+          </article>
+          <article>
+            <p>PRESENTATION</p>
+            <h3>站起来演示，不再被电脑桌绑住。</h3>
+            <div class="scenario-flow"><span>讲述</span><i>→</i><span>切页 / App</span><i>→</i><span>现场操作</span><i>→</i><span>继续演讲</span></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="control section-pad" id="control">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">TOUCH + RING</p><h2>一个表面，<br>两套运动语言。</h2></div>
+          <p>内圈控制指针；外圈根据旋转速度滚动。两条加速度曲线彼此独立，也可以锁定曲线形状。</p>
+        </header>
+
+        <div class="control-lab" data-loop-root data-control-mode="pointer">
+          <div class="remote-column">
+            <div class="remote-visual">
+              <img src="media/current-remote.png" alt="HyperVibe 最新 Layout 页面中的真实 Siri Remote 视图" width="390" height="1000">
+              <span class="remote-ring" aria-hidden="true"><i></i></span>
+              <span class="remote-touch" aria-hidden="true"></span>
+              <span class="remote-press" aria-hidden="true"></span>
+            </div>
+            <div class="mode-controls" role="tablist" aria-label="选择触控演示">
+              <button class="is-active" type="button" data-control-button="pointer">指针</button>
+              <button type="button" data-control-button="ring">圆环</button>
+              <button type="button" data-control-button="drag">拖动</button>
+            </div>
+          </div>
+
+          <div class="signal-monitor" aria-label="输入信号动画示意">
+            <div class="monitor-head"><span><i></i>INPUT TRACE</span><b data-control-label>POINTER · XY</b></div>
+            <div class="monitor-canvas">
+              <div class="monitor-grid" aria-hidden="true"></div>
+              <div class="pointer-trace" aria-hidden="true"><i></i><b></b><span></span></div>
+              <div class="scroll-trace" aria-hidden="true">
+                <span>01&nbsp;&nbsp;Build completed</span><span>02&nbsp;&nbsp;Review changes</span><span>03&nbsp;&nbsp;Open preview</span><span>04&nbsp;&nbsp;Inspect result</span><span>05&nbsp;&nbsp;Continue prompt</span><span>06&nbsp;&nbsp;Ship iteration</span>
+              </div>
+              <div class="drag-trace" aria-hidden="true"><span>SELECT</span><i></i><b>DRAG</b></div>
+            </div>
+            <footer><span data-monitor-primary>FINGER VELOCITY</span><i></i><span data-monitor-secondary>POINTER GAIN</span></footer>
+          </div>
+        </div>
+
+        <div class="control-facts">
+          <article><span>01</span><h3>触控板移动</h3><p>速度、稳态死区和指针加速度独立调节。慢动精确，快速划动覆盖更远距离。</p></article>
+          <article><span>02</span><h3>外圈滚动</h3><p>像 iPod 一样沿外圈旋转。Layer 1 可切换为横向滚动，并与纵向滚动共享同一套速度模型。</p></article>
+          <article><span>03</span><h3>按住拖动</h3><p>中心按键保持 0.5 秒进入粘性拖动；0.18 秒开始显示进度，松开后立即裁决。</p></article>
+          <article><span>04</span><h3>稳定点击</h3><p>接触上升、移动取消阈值与去抖状态机共同防止指针漂移和重复点击。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="gestures section-pad dark-section" id="gestures">
+      <div class="shell">
+        <header class="section-heading split-heading dark-heading">
+          <div><p class="overline">GESTURE GRAMMAR</p><h2>一个按键，<br>不止一个动作。</h2></div>
+          <p>Tap、Double、Triple 与最多三段 Hold 都由同一套配置解析。只在该按键真正配置了多击时才等待，不给其他常用动作增加延迟。</p>
+        </header>
+
+        <div class="gesture-layout">
+          <figure class="semantic-film native-video-card">
+            <video muted loop playsinline autoplay preload="auto" data-native-loop aria-label="App 识别、单击、双击、三击和长按的最新状态组件动画">
+              <source src="media/current-status-semantic.mp4" type="video/mp4">
+            </video>
+            <figcaption><b>真实生产组件</b><span>App → Tap → Double → Triple → Hold</span></figcaption>
+          </figure>
+          <div class="gesture-map">
+            <div class="gesture-head"><span>PHYSICAL INPUT</span><b>RESOLVED ACTION</b></div>
+            <div><span><i>1×</i> 单击</span><b>立即执行基础动作</b></div>
+            <div><span><i>2×</i> 双击</span><b>第二次按下即确认</b></div>
+            <div><span><i>3×</i> 三击</span><b>只执行最深计数</b></div>
+            <div><span><i>H1</i> 第一段长按</span><b>松开选择当前阶段</b></div>
+            <div><span><i>H2</i> 第二段长按</span><b>继续保持进入下一动作</b></div>
+            <div><span><i>H3</i> 第三段长按</span><b>越过最深阶段可取消</b></div>
+          </div>
+        </div>
+
+        <div class="gesture-example">
+          <p>当前返回键 · TAP THEN HOLD</p>
+          <ol><li><b>0.00 s</b><span>Delete</span></li><li><b>0.18 s</b><span>进度可见</span></li><li><b>0.50 s</b><span>Close Window</span></li><li><b>1.20 s</b><span>Quit App</span></li><li><b>＋1.00 s</b><span>Cancel</span></li></ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="layers section-pad" id="layers">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">APP × LAYER</p><h2>当前 App 和当前 Layer —<br>一起决定动作。</h2></div>
+          <p>浏览器、终端和 Music 可以拥有不同映射；每个 App 内又可叠加最多十个 Layer。写几个就循环几个。</p>
+        </header>
+
+        <div class="layers-showcase">
+          <figure class="app-window layout-full">
+            <img src="media/current-layout.png" alt="当前 HyperVibe Layout 页面，展示 App Hub、Layer 选择与完整输入映射" width="2424" height="1848">
+          </figure>
+          <aside class="layer-side">
+            <figure class="native-video-card layer-status-film">
+              <video muted loop playsinline autoplay preload="auto" data-native-loop aria-label="Layer 1、Layer 2、Layer 3 最新切换动画">
+                <source src="media/current-status-layers.mp4" type="video/mp4">
+              </video>
+            </figure>
+            <div class="layer-cycle-list"><span><i class="green"></i>Layer 1</span><b>↓</b><span><i class="blue"></i>Layer 2</span><b>↓</b><span><i class="purple"></i>Layer 3</span><b>↺</b></div>
+            <ul>
+              <li>每层可自定义名称和颜色</li>
+              <li>Layer × App 组合解析</li>
+              <li>未绑定动作自动继承</li>
+              <li>JSONC 保存后实时生效</li>
+            </ul>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section class="feedback section-pad soft-section" id="feedback">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">VISIBLE STATE</p><h2>每次操作，都有准确的视觉回声。</h2></div>
+          <p>下面全部来自当前安装版 App，不是网页复刻。它们各自循环播放，完整保留原生节奏与状态变化。</p>
+        </header>
+
+        <div class="feedback-grid">
+          <article class="feedback-card feedback-wide">
+            <div><p>SYSTEM CONTROL</p><h3>状态跟随真实音量与亮度</h3><span>同一组符号连续更新，不为每一格数值重新播放进场。</span></div>
+            <figure class="native-video-card"><video muted loop playsinline autoplay preload="auto" data-native-loop><source src="media/current-status-controls.mp4" type="video/mp4"></video></figure>
+          </article>
+          <article class="feedback-card">
+            <div><p>MUTE STATE</p><h3>Mute 与 Unmute 是两个真实状态</h3><span>划线进入与退出沿用原生符号语义。</span></div>
+            <figure class="native-video-card"><video muted loop playsinline autoplay preload="auto" data-native-loop><source src="media/current-status-mute.mp4" type="video/mp4"></video></figure>
+          </article>
+          <article class="feedback-card">
+            <div><p>APP WHEEL</p><h3>长按进度直接变成目标动作</h3><span>0.18 秒开始反馈，0.5 秒选中 App Wheel。</span></div>
+            <figure class="native-video-card"><video muted loop playsinline autoplay preload="auto" data-native-loop><source src="media/current-status-app-wheel.mp4" type="video/mp4"></video></figure>
+          </article>
+          <article class="feedback-card square-feedback">
+            <div><p>HOLD HUD</p><h3>大型长按 HUD</h3><span>水面、阶段图标和最终执行共享同一时钟。</span></div>
+            <figure class="native-video-card square-film"><video muted loop playsinline autoplay preload="auto" data-native-loop><source src="media/current-back-hud.mp4" type="video/mp4"></video></figure>
+          </article>
+          <article class="feedback-card square-feedback">
+            <div><p>LAYER HUD</p><h3>多屏同步的 Layer 提示</h3><span>每块屏幕都有独立窗口，断开屏幕后自动回迁。</span></div>
+            <figure class="native-video-card square-film"><video muted loop playsinline autoplay preload="auto" data-native-loop><source src="media/current-layer-hud.mp4" type="video/mp4"></video></figure>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="voice section-pad dark-section" id="voice">
+      <div class="shell voice-grid">
+        <div class="voice-copy">
+          <p class="overline">REMOTE MICROPHONE</p>
+          <h2>长按侧键，声音本身成为界面。</h2>
+          <p>25 条实时波形记录音量历史；颜色同时编码相对音高、置信度与频谱亮度。松手后立即回到当前 Layer，不播放装饰性假波形。</p>
+          <div class="voice-source-flow">
+            <span><i>01</i>Siri Remote voice</span><b>优先</b><span><i>02</i>Mac 内置麦克风</span><b>回退</b><span><i>03</i>任意输入 App</span>
+          </div>
+          <p class="voice-note">远程麦克风属于 Full Setup：通过虚拟 CoreAudio 设备在遥控器语音与 Mac 内置麦克风之间交叉切换。</p>
+        </div>
+        <figure class="voice-film native-video-card">
+          <video muted loop playsinline autoplay preload="auto" data-native-loop aria-label="最新版真实语音音量、音高和频谱亮度动画">
+            <source src="media/current-status-voice.mp4" type="video/mp4">
+          </video>
+          <figcaption><span><i></i>LIVE PCM FEATURES</span><b>PITCH · LEVEL · BRIGHTNESS</b></figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="curves section-pad" id="curves">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">TUNING</p><h2>两条曲线，<br>各自决定手感。</h2></div>
+          <p>GUI 里直接拖动三个控制点；指针和圆环可以独立调节，也可以锁定曲线形状。所有变化自动保存到同一份 JSONC。</p>
+        </header>
+
+        <div class="curve-showcase">
+          <figure class="app-window tuning-window"><img src="media/current-tuning.png" alt="当前 HyperVibe Tuning 页面，显示独立的指针与圆环加速度曲线" width="2304" height="1848"></figure>
+          <div class="curve-specs" data-loop-root>
+            <article class="curve-spec curve-blue">
+              <header><span>POINTER</span><b>curve 1.00</b></header>
+              <svg viewBox="0 0 360 150" role="img" aria-label="指针加速度曲线">
+                <path class="curve-grid" d="M10 125H350M10 85H350M10 45H350M70 15V135M180 15V135M290 15V135"></path>
+                <path class="curve-line" d="M18 124 C84 124 112 78 180 54 C214 42 244 42 342 42"></path>
+                <circle class="curve-dot" cx="18" cy="124" r="6"></circle><circle class="curve-dot" cx="180" cy="54" r="6"></circle><circle class="curve-dot" cx="342" cy="42" r="6"></circle>
+                <circle class="curve-runner" cx="18" cy="124" r="5"></circle>
+              </svg>
+              <footer><span>0.14× @ 0.007</span><b>→</b><span>6.00× @ 0.060</span></footer>
+            </article>
+            <article class="curve-spec curve-orange">
+              <header><span>RING SCROLL</span><b>curve 0.81</b></header>
+              <svg viewBox="0 0 360 150" role="img" aria-label="圆环滚动加速度曲线">
+                <path class="curve-grid" d="M10 125H350M10 85H350M10 45H350M70 15V135M180 15V135M290 15V135"></path>
+                <path class="curve-line" d="M18 122 C76 122 108 82 178 60 C222 46 250 46 342 46"></path>
+                <circle class="curve-dot" cx="18" cy="122" r="6"></circle><circle class="curve-dot" cx="178" cy="60" r="6"></circle><circle class="curve-dot" cx="342" cy="46" r="6"></circle>
+                <circle class="curve-runner" cx="18" cy="122" r="5"></circle>
+              </svg>
+              <footer><span>1.12× @ 0.010</span><b>→</b><span>5.00× @ 0.070</span></footer>
+            </article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="config section-pad soft-section" id="config">
+      <div class="shell config-grid">
+        <div class="config-copy">
+          <p class="overline">ONE SOURCE OF TRUTH</p>
+          <h2>GUI 可保存。<br>Agent 也可以<br>直接改。</h2>
+          <p>图形界面与 <code>~/.config/siriremote/config.jsonc</code> 写入同一份配置。GUI 自动保存；文件保存后热更新，不需要重启或重新连接。</p>
+          <ul>
+            <li><i></i>App profiles 与继承链</li>
+            <li><i></i>1–10 个自定义 Layer</li>
+            <li><i></i>Tap / Double / Triple / Hold 1–3</li>
+            <li><i></i>所有 HUD 与窗口显隐开关</li>
+            <li><i></i>指针与滚动完整曲线参数</li>
+            <li><i></i>Agent、脚本和人共享同一接口</li>
+          </ul>
+        </div>
+        <div class="code-panel">
+          <header><span><i></i><i></i><i></i></span><b>config.jsonc</b><em>HOT RELOAD</em></header>
+          <pre><code><span class="comment">// App × Layer × Gesture</span>
+<span class="key">"layers"</span>: [
+  { <span class="key">"id"</span>: <span class="string">"BASE"</span>, <span class="key">"name"</span>: <span class="string">"Layer 1"</span>, <span class="key">"color"</span>: <span class="string">"green"</span> },
+  { <span class="key">"id"</span>: <span class="string">"L1"</span>,   <span class="key">"name"</span>: <span class="string">"Layer 2"</span>, <span class="key">"color"</span>: <span class="string">"blue"</span> },
+  { <span class="key">"id"</span>: <span class="string">"L2"</span>,   <span class="key">"name"</span>: <span class="string">"Layer 3"</span>, <span class="key">"color"</span>: <span class="string">"purple"</span> }
+],
+
+<span class="key">"button.menu"</span>: {
+  <span class="key">"action"</span>: <span class="string">"keystroke"</span>, <span class="key">"keys"</span>: <span class="string">"delete"</span>
+},
+<span class="key">"button.menu.taphold"</span>: {
+  <span class="key">"action"</span>: <span class="string">"closeWindow"</span>, <span class="key">"after"</span>: <span class="number">0.5</span>
+},
+<span class="key">"button.menu.taphold2"</span>: {
+  <span class="key">"action"</span>: <span class="string">"applescript"</span>, <span class="key">"after"</span>: <span class="number">1.2</span>
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="engineering section-pad">
+      <div class="shell">
+        <header class="section-heading narrow-heading"><p class="overline">SYSTEM BEHAVIOUR</p><h2>不是 Demo，而是一套长期运行的输入系统。</h2></header>
+        <div class="engineering-grid">
+          <article><span>01</span><h3>多屏 HUD</h3><p>每块屏幕独立显示；组件保存屏幕与归一化位置，显示器断开后自动回迁。</p></article>
+          <article><span>02</span><h3>同一时钟</h3><p>长按进度、阶段图标和松手执行共享单调时间，画面不会领先或落后于动作。</p></article>
+          <article><span>03</span><h3>输入去重</h3><p>同一物理按键在多个 HID 接口上的重复回调被合并成一次状态转换。</p></article>
+          <article><span>04</span><h3>焦点跟随</h3><p>只对覆盖屏幕 90% 以上的窗口安全聚焦，不在鼠标穿越重叠窗口时打乱层级。</p></article>
+          <article><span>05</span><h3>快捷键录制</h3><p>Layout 里直接按键录入，支持左右修饰键、Fn、F1–F20 与纯修饰键组合。</p></article>
+          <article><span>06</span><h3>开机运行</h3><p>菜单栏、Login Item、权限引导和界面开关都由 App 与配置统一管理。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="download-section section-pad">
+      <div class="shell download-panel">
+        <div><p class="overline">OPEN SOURCE · macOS 13+</p><h2>HyperVibe Beta</h2><p>下载 App-only 版本，或使用 Full Setup 安装遥控器麦克风组件。</p></div>
+        <div class="download-actions"><a class="button button-white" href="https://github.com/HOLODATA-COM/SiriRemoteForge/releases" target="_blank" rel="noreferrer">下载 Beta ↗</a><a class="button button-outline" href="https://github.com/HOLODATA-COM/SiriRemoteForge" target="_blank" rel="noreferrer">GitHub ↗</a></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell">
+      <a class="brand" href="#top"><img src="media/hypervibe-icon.png" alt="" width="256" height="256"><span>HyperVibe</span></a>
+      <p>SiriRemoteForge · GPL-3.0</p>
+      <div><a href="https://github.com/HOLODATA-COM/SiriRemoteForge" target="_blank" rel="noreferrer">Source ↗</a><a href="https://github.com/HOLODATA-COM/SiriRemoteForge/releases" target="_blank" rel="noreferrer">Releases ↗</a></div>
+    </div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

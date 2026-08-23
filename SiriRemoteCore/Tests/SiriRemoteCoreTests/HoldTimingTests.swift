@@ -47,4 +47,21 @@ final class HoldTimingTests: XCTestCase {
                                             cancelAt: nil),
                        .stage(index: 1))
     }
+
+    func testLateVisualTickJumpsStraightToCurrentStage() {
+        // A busy main queue can skip every display callback between these two samples. The visual
+        // state must resolve directly from elapsed time instead of replaying Close before Quit.
+        XCTAssertEqual(HoldTiming.reachedStageCount(elapsed: 0.40,
+                                                    stageDelays: [0.5, 1.2, 2.2]), 0)
+        XCTAssertEqual(HoldTiming.reachedStageCount(elapsed: 1.35,
+                                                    stageDelays: [0.5, 1.2, 2.2]), 2)
+    }
+
+    func testReachedStageCountUsesExactSameBoundaryAsReleaseSelection() {
+        let delays: [TimeInterval] = [0.5, 1.2, 2.2]
+        XCTAssertEqual(HoldTiming.reachedStageCount(elapsed: 0.499, stageDelays: delays), 0)
+        XCTAssertEqual(HoldTiming.reachedStageCount(elapsed: 0.5, stageDelays: delays), 1)
+        XCTAssertEqual(HoldTiming.reachedStageCount(elapsed: 1.2, stageDelays: delays), 2)
+        XCTAssertEqual(HoldTiming.reachedStageCount(elapsed: 2.2, stageDelays: delays), 3)
+    }
 }

@@ -7,7 +7,7 @@
   //             button.volumeUp button.volumeDown button.back
   //             button.nextTrack button.prevTrack button.mute button.power
   // Actions: keystroke(keys) media(key) mouse(op) launch(app|url)
-  //          shell(command) applescript(script) mode(to)
+  //          shell(command) applescript(script) mode(to) brightnessStep(to: up|down)
   // A binding OVERRIDES native behavior; unbound buttons stay native.
   "settings": {
     "defaultMode": "global",
@@ -127,8 +127,9 @@
       // attribute through the Accessibility API instead, which is what actually moves it.
       "button.playPause.double": { "action": "fullscreen",
                                  "label": "Full Screen", "icon": "arrow.up.left.and.arrow.down.right" },
-      // Hold past holdThreshold2 (1.0s) and release → open Apple Music.
-      "button.playPause.hold2": { "action": "launch", "app": "Music" },
+      // This binding owns its timing: hold 0.3s and release → open Apple Music. Keeping the delay
+      // here avoids changing Select drag, Back, or any other action that shares a global threshold.
+      "button.playPause.hold2": { "action": "launch", "app": "Music", "after": 0.3 },
       // Mute. Bound explicitly for the same reason as Play/Pause above: binding .double below makes
       // the app own this button and suppress the native mute key, so without this a short press
       // would stop muting. AppleScript rather than media(mute) so it does not depend on the
@@ -269,7 +270,11 @@
       "ring.up":    { "action": "keystroke", "keys": "up" },
       "ring.down":  { "action": "keystroke", "keys": "down" },
       "ring.left":  { "action": "keystroke", "keys": "left" },
-      "ring.right": { "action": "keystroke", "keys": "right" }
+      "ring.right": { "action": "keystroke", "keys": "right" },
+      "button.volumeUp":   { "action": "brightnessStep", "to": "up",
+                              "label": "Brightness +", "icon": "sun.max.fill" },
+      "button.volumeDown": { "action": "brightnessStep", "to": "down",
+                              "label": "Brightness −", "icon": "sun.min.fill" }
     }
   }
 }

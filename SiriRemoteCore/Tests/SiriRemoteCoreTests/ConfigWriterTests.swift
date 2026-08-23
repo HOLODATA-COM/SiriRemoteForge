@@ -34,6 +34,8 @@ final class ConfigWriterTests: XCTestCase {
             .repeatKey(keys: "down", delay: 0.5, interval: 0.02),
             .brightness(0),
             .brightness(0.5),
+            .brightnessStep(direction: -1),
+            .brightnessStep(direction: 1),
         ]
         for action in cases {
             XCTAssertEqual(try roundTrip(action), action, "round trip failed for \(action)")
@@ -69,6 +71,11 @@ final class ConfigWriterTests: XCTestCase {
         o = try encodeToObject(.layerCycle)
         XCTAssertEqual(o["action"] as? String, "layerCycle")
         XCTAssertNil(o["to"])
+
+        o = try encodeToObject(.brightnessStep(direction: -1))
+        XCTAssertEqual(o["action"] as? String, "brightnessStep")
+        XCTAssertEqual(o["to"] as? String, "down")
+        XCTAssertEqual(try encodeToObject(.brightnessStep(direction: 1))["to"] as? String, "up")
 
         // launch omits an absent optional (encodeIfPresent).
         o = try encodeToObject(.launch(app: "Safari", url: nil))

@@ -125,15 +125,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Headless visual QC: `--test-layer-hud` walks the complete three-layer cycle while the card
         // stays visible, exercising tint morphing and in-place transitions without seizing remote IO.
-        if CommandLine.arguments.contains("--test-layer-hud") {
+        if CommandLine.arguments.contains("--test-layer-hud")
+            || CommandLine.arguments.contains("--test-layer-hud-long") {
             NSApp.setActivationPolicy(.accessory)
-            let hud = LayerHUD(layers: ConfigStore.loadConfig().settings.layers)
+            let interval: TimeInterval = CommandLine.arguments.contains("--test-layer-hud-long")
+                ? 8.0 : 0.65
+            let hud = LayerHUD(layers: ConfigStore.loadConfig().settings.layers,
+                               holdDuration: interval + 0.55)
             layerHUD = hud
             hud.showOff("L2")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { hud.showOn("L1") }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.30) { hud.showOn("L2") }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.95) { hud.showOff("L2") }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { exit(0) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + interval) { hud.showOn("L1") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + interval * 2) { hud.showOn("L2") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + interval * 3) { hud.showOff("L2") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + interval * 4 + 0.9) { exit(0) }
             return
         }
 
@@ -352,6 +356,260 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 case "layer2":
                     widget.setLayer("L1")
+                case "layer-cycle":
+                    // Repeated, input-free cycle for recording the complete BASE → L1 → L2 →
+                    // BASE carousel. It never starts HID discovery or emits a system event.
+                    let layerIDs: [String?] = ["L1", "L2", nil]
+                    let interval: TimeInterval = slowVisualQC ? 1.25 : 0.85
+                    let transitions = max(1, Int((dwell - 0.6) / interval))
+                    for index in 0..<transitions {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6
+                                                      + Double(index) * interval) {
+                            widget.setLayer(layerIDs[index % layerIDs.count])
+                        }
+                    }
+                case "semantic-cycle":
+                    // Every icon grammar in a stable, repeated order: App recognition, then
+                    // single/double/triple direct feedback, then a two-stage hold reveal.
+                    let cycleLength: TimeInterval = 6.2
+                    let cycles = max(1, Int(dwell / cycleLength))
+                    for cycle in 0..<cycles {
+                        let start = 0.6 + Double(cycle) * cycleLength
+                        DispatchQueue.main.asyncAfter(deadline: .now() + start) {
+                            widget.showApplication(bundleID: "com.apple.Music", duration: 0.72)
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + start + 1.05) {
+                            widget.showAction(.init(key: "button.playPause",
+                                                    action: .media(key: "playpause"),
+                                                    presentation: nil))
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + start + 2.10) {
+                            widget.showAction(.init(key: "button.nextTrack.double",
+                                                    action: .media(key: "next"),
+                                                    presentation: .init(label: "Next Track",
+                                                                        icon: nil)))
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + start + 3.15) {
+                            widget.showAction(.init(key: "button.menu.triple",
+                                                    action: .keystroke(keys: "delete"),
+                                                    presentation: .init(label: "Delete",
+                                                                        icon: "delete.left.fill")))
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + start + 4.20) {
+                            let began = CACurrentMediaTime()
+                            widget.beginHold(
+                                startedAt: began,
+                                base: (key: "button.playPause",
+                                       action: .media(key: "playpause"), presentation: nil),
+                                stages: [
+                                    (threshold: 0.5, key: "button.playPause.hold",
+                                     action: .media(key: "next"),
+                                     presentation: .init(label: "Next Track", icon: nil),
+                                     isCancel: false),
+                                    (threshold: 0.95, key: "button.playPause.hold2",
+                                     action: .launch(app: "Music", url: nil),
+                                     presentation: nil, isCancel: false),
+                                ]
+                            )
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.12) {
+                                widget.endHold(firedIndex: 2)
+                            }
+                        }
+                    }
+                case "symbol-effects":
+                    // Input-free full action-symbol audit. The list intentionally covers every
+                    // semantic family used by the shipped/default config rather than treating
+                    // volume and brightness as special demos. Nothing here emits a system action.
+                    let events: [(key: String, action: Action)] = [
+                        ("button.volumeUp", .media(key: "volup")),
+                        ("button.volumeDown", .media(key: "voldown")),
+                        ("button.mute", .media(key: "mute")),
+                        ("button.brightnessUp", .brightnessStep(direction: 1)),
+                        ("button.brightnessDown", .brightnessStep(direction: -1)),
+                        ("button.nextTrack", .media(key: "next")),
+                        ("button.previousTrack", .media(key: "previous")),
+                        ("button.playPause", .media(key: "playpause")),
+                        ("button.menu", .keystroke(keys: "delete")),
+                        ("ring.left", .keystroke(keys: "left")),
+                        ("ring.right", .keystroke(keys: "right")),
+                        ("ring.up", .keystroke(keys: "up")),
+                        ("ring.down", .keystroke(keys: "down")),
+                        ("copy", .keystroke(keys: "cmd+c")),
+                        ("paste", .keystroke(keys: "cmd+v")),
+                        ("cut", .keystroke(keys: "cmd+x")),
+                        ("spotlight", .keystroke(keys: "cmd+space")),
+                        ("fullscreen", .fullscreen),
+                        ("minimise", .minimize),
+                        ("pointer", .mouse(op: "move")),
+                        ("click", .mouse(op: "click")),
+                        ("scroll", .mouse(op: "scroll")),
+                        ("sleep", .shell(command: "pmset sleepnow")),
+                        ("appWheel", .appWheel),
+                        ("close", .closeWindow),
+                    ]
+                    let interval: TimeInterval = slowVisualQC ? 1.10 : 0.44
+                    let transitions = max(1, Int((dwell - 0.6) / interval))
+                    for index in 0..<transitions {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6
+                                                      + Double(index) * interval) {
+                            if index > 0, index % (events.count + 1) == events.count {
+                                let layerBeat = index / (events.count + 1)
+                                widget.setLayer(layerBeat.isMultiple(of: 2) ? "L1" : nil)
+                            } else {
+                                let event = events[index % events.count]
+                                widget.showAction(.init(key: event.key,
+                                                        action: event.action,
+                                                        presentation: nil),
+                                                  durationOverride: slowVisualQC ? 1.0 : 0.56)
+                            }
+                        }
+                    }
+                case "app-wheel-wave":
+                    // Production-faithful TV hold: progress starts at 180 ms, while App Wheel
+                    // becomes the selected release action at the real 500 ms threshold. This
+                    // exercises `presentHold`, not a synthetic direct icon replacement.
+                    let interval: TimeInterval = slowVisualQC ? 1.8 : 1.35
+                    let cycles = max(1, Int((dwell - 0.5) / interval))
+                    for cycle in 0..<cycles {
+                        let start = 0.45 + Double(cycle) * interval
+                        DispatchQueue.main.asyncAfter(deadline: .now() + start) {
+                            let began = CACurrentMediaTime()
+                            widget.beginHold(
+                                startedAt: began,
+                                base: (key: "button.tv", action: .layerCycle,
+                                       presentation: nil),
+                                stages: [
+                                    (threshold: 0.5, key: "button.tv.hold",
+                                     action: .appWheel,
+                                     presentation: .init(label: "App Wheel",
+                                                         icon: "circle.grid.3x3.fill"),
+                                     isCancel: false),
+                                ]
+                            )
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.92) {
+                                widget.endHold(firedIndex: 1)
+                            }
+                        }
+                    }
+                case "mute-state-cycle":
+                    // Deterministic speaker ↔ speaker.slash audit. Overrides prevent this visual
+                    // test from reading or changing the machine's actual output state.
+                    let cycleLength: TimeInterval = 2.25
+                    let cycles = max(1, Int((dwell - 0.4) / cycleLength))
+                    for cycle in 0..<cycles {
+                        let start = 0.45 + Double(cycle) * cycleLength
+                        let showMuteState: (TimeInterval, Bool) -> Void = { offset, muted in
+                            DispatchQueue.main.asyncAfter(deadline: .now() + start + offset) {
+                                widget.showAction(
+                                    .init(key: "button.mute", action: .media(key: "mute"),
+                                          presentation: .init(label: "Mute",
+                                                              icon: "speaker.slash.fill")),
+                                    durationOverride: 1.10,
+                                    controlStateOverride: .init(kind: .volume,
+                                                                value: muted ? 0 : 0.58,
+                                                                isMuted: muted)
+                                )
+                            }
+                        }
+                        showMuteState(0, false)
+                        showMuteState(0.58, true)
+                        showMuteState(1.25, false)
+                    }
+                case "interruption-cycle":
+                    // Input-free stress loop for animation continuity. Deterministic overrides
+                    // exercise the exact production variable-value path without changing the
+                    // machine's real volume/brightness. Each burst must visibly track state while
+                    // remaining one stable presentation, then unrelated actions test interruption.
+                    let cycleLength: TimeInterval = 6.2
+                    let cycles = max(1, Int(dwell / cycleLength))
+                    for cycle in 0..<cycles {
+                        let start = 0.55 + Double(cycle) * cycleLength
+                        for tick in 0..<10 {
+                            DispatchQueue.main.asyncAfter(
+                                deadline: .now() + start + Double(tick) * 0.11
+                            ) {
+                                widget.showAction(.init(key: "button.volumeUp",
+                                                        action: .media(key: "volup"),
+                                                        presentation: nil),
+                                                  durationOverride: 0.62,
+                                                  controlStateOverride: .init(
+                                                    kind: .volume,
+                                                    value: 0.12 + Double(tick) * 0.075
+                                                  ))
+                            }
+                        }
+                        for tick in 0..<6 {
+                            DispatchQueue.main.asyncAfter(
+                                deadline: .now() + start + 1.10 + Double(tick) * 0.11
+                            ) {
+                                widget.showAction(.init(key: "button.volumeDown",
+                                                        action: .media(key: "voldown"),
+                                                        presentation: nil),
+                                                  durationOverride: 0.62,
+                                                  controlStateOverride: .init(
+                                                    kind: .volume,
+                                                    value: 0.80 - Double(tick) * 0.12
+                                                  ))
+                            }
+                        }
+                        for tick in 0..<7 {
+                            DispatchQueue.main.asyncAfter(
+                                deadline: .now() + start + 2.05 + Double(tick) * 0.11
+                            ) {
+                                widget.showAction(.init(key: "button.brightnessUp",
+                                                        action: .brightnessStep(direction: 1),
+                                                        presentation: nil),
+                                                  durationOverride: 0.62,
+                                                  controlStateOverride: .init(
+                                                    kind: .brightness,
+                                                    value: 0.14 + Double(tick) * 0.13
+                                                  ))
+                            }
+                        }
+                        let mixed: [(TimeInterval, String, Action)] = [
+                            (3.25, "button.playPause", .media(key: "playpause")),
+                            (3.41, "button.menu", .keystroke(keys: "delete")),
+                            (3.57, "button.nextTrack", .media(key: "next")),
+                        ]
+                        for event in mixed {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + start + event.0) {
+                                widget.showAction(.init(key: event.1, action: event.2,
+                                                        presentation: nil),
+                                                  durationOverride: 0.64)
+                            }
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + start + 4.65) {
+                            widget.setLayer(cycle.isMultiple(of: 2) ? "L1" : nil)
+                        }
+                    }
+                case "connection-cycle":
+                    let interval: TimeInterval = 2.2
+                    let cycles = max(1, Int(dwell / interval))
+                    for cycle in 0..<cycles {
+                        let start = 0.7 + Double(cycle) * interval
+                        DispatchQueue.main.asyncAfter(deadline: .now() + start) {
+                            widget.setConnected(false)
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + start + 0.72) {
+                            widget.setConnected(true)
+                        }
+                    }
+                case "return-cycle":
+                    // Isolated Back-button causality check. This preview does not emit the
+                    // keystroke; it only exercises the status surface and its idle return.
+                    let interval: TimeInterval = 1.55
+                    let cycles = max(1, Int(dwell / interval))
+                    for cycle in 0..<cycles {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65
+                                                      + Double(cycle) * interval) {
+                            widget.showAction(.init(
+                                key: "button.menu",
+                                action: .keystroke(keys: "delete"),
+                                presentation: .init(label: "Backspace",
+                                                    icon: "delete.left.fill")
+                            ), durationOverride: 0.62)
+                        }
+                    }
                 default:
                     break
                 }
@@ -385,13 +643,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Headless visual QC: `--test-connect-hud` shows the connect/disconnect HUDs so they can be
         // screenshotted, then exits — without seizing the remote or wiring up the rest of the app.
-        if CommandLine.arguments.contains("--test-connect-hud") {
+        if CommandLine.arguments.contains("--test-connect-hud")
+            || CommandLine.arguments.contains("--test-connect-hud-long") {
             NSApp.setActivationPolicy(.accessory)
-            let hud = LayerHUD()
+            let interval: TimeInterval = CommandLine.arguments.contains("--test-connect-hud-long")
+                ? 8.0 : 2.2
+            let hud = LayerHUD(holdDuration: interval + 0.55)
             layerHUD = hud
             hud.showRemoteConnected()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { hud.showRemoteDisconnected() }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { exit(0) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + interval) {
+                hud.showRemoteDisconnected()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + interval * 2 + 0.5) { exit(0) }
             return
         }
 
@@ -406,7 +669,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             func face(_ action: Action, _ presentation: Config.Presentation) -> HoldProgressHUD.Face {
                 let visual = ActionVisual.resolve(action, presentation)
                 return .init(label: visual.label, image: visual.image,
-                             iconOnly: visual.iconOnly)
+                             symbolName: visual.symbolName, iconOnly: visual.iconOnly,
+                             tint: visual.tint, symbolCue: visual.symbolCue)
             }
             let click = face(.mouse(op: "click"),
                              .init(label: "Click", icon: "cursorarrow.click"))
@@ -415,6 +679,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             hud.begin(base: click, stages: [.init(threshold: 0.5, face: drag)])
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.62) { hud.end(firedIndex: 1) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { exit(0) }
+            return
+        }
+
+        // Headless visual QC for the exact production Back ladder in the large water HUD. Stages
+        // are stretched only for capture: Delete must be blue, Close/Quit system red, and Cancel
+        // neutral, with native symbol layers replacing one another in place.
+        if CommandLine.arguments.contains("--test-back-hold-hud")
+            || CommandLine.arguments.contains("--test-back-hold-hud-long") {
+            NSApp.setActivationPolicy(.accessory)
+            let longCapture = CommandLine.arguments.contains("--test-back-hold-hud-long")
+            let segment: TimeInterval = longCapture ? 8.0 : 1.6
+            let hud = HoldProgressHUD()
+            holdHUD = hud
+            hud.prewarm()
+            func face(_ action: Action, _ presentation: Config.Presentation?) -> HoldProgressHUD.Face {
+                let visual = ActionVisual.resolve(action, presentation)
+                return .init(label: visual.label, image: visual.image,
+                             symbolName: visual.symbolName, iconOnly: visual.iconOnly,
+                             tint: visual.tint, symbolCue: visual.symbolCue)
+            }
+            let base = face(.keystroke(keys: "delete"),
+                            .init(label: "Delete", icon: "delete.left.fill"))
+            let close = face(.closeWindow,
+                             .init(label: "Close Window", icon: "xmark.circle.fill"))
+            let quit = face(
+                .applescript(script: "tell application \"System Events\" to set n to name of first application process whose frontmost is true\nif n is not \"HyperVibe\" then tell application n to quit"),
+                .init(label: "Quit App", icon: "power")
+            )
+            var cancel = face(.mouse(op: "click"),
+                              .init(label: "Cancel", icon: "arrow.uturn.backward.circle.fill"))
+            cancel.isCancel = true
+            hud.begin(base: base, stages: [
+                .init(threshold: segment, face: close),
+                .init(threshold: segment * 2, face: quit),
+                .init(threshold: segment * 3, face: cancel),
+            ])
+            DispatchQueue.main.asyncAfter(deadline: .now() + segment * 3 + 0.7) {
+                hud.end(firedIndex: 3)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + segment * 3 + 1.9) { exit(0) }
             return
         }
 
@@ -438,7 +742,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             ]
             func face(_ a: Action, _ p: Config.Presentation?) -> HoldProgressHUD.Face {
                 let v = ActionVisual.resolve(a, p)
-                return .init(label: v.label, image: v.image, iconOnly: v.iconOnly)
+                return .init(label: v.label, image: v.image, symbolName: v.symbolName,
+                             iconOnly: v.iconOnly, tint: v.tint, symbolCue: v.symbolCue)
             }
             // Unlabelled AppleScript aimed at an app — should show Music's real icon, WITH a label.
             var demoStages = demo.map { HoldProgressHUD.Stage(threshold: $0.0, face: face($0.1, $0.2)) }
@@ -666,7 +971,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard self?.holdHUDEnabled == true else { return }
             func face(_ action: Action, _ p: Config.Presentation?) -> HoldProgressHUD.Face {
                 let v = ActionVisual.resolve(action, p)
-                return .init(label: v.label, image: v.image, iconOnly: v.iconOnly)
+                return .init(label: v.label, image: v.image, symbolName: v.symbolName,
+                             iconOnly: v.iconOnly, tint: v.tint, symbolCue: v.symbolCue)
             }
             progress.begin(startedAt: startedAt,
                            base: base.map { face($0.action, $0.presentation) },

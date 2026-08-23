@@ -52,6 +52,12 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(try decodeAction("{\"action\":\"brightness\"}"),
                        .brightness(0))
     }
+    func testDecodesRelativeBrightnessSteps() throws {
+        XCTAssertEqual(try decodeAction("{\"action\":\"brightnessStep\",\"to\":\"up\"}"),
+                       .brightnessStep(direction: 1))
+        XCTAssertEqual(try decodeAction("{\"action\":\"brightnessStep\",\"to\":\"down\"}"),
+                       .brightnessStep(direction: -1))
+    }
 
     // MARK: - Config decoding (Task 4)
 

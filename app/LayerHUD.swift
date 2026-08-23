@@ -48,7 +48,7 @@ final class LayerHUD {
     }
     private var surfaces: [CGDirectDisplayID: Surface] = [:]
 
-    private let holdDuration: TimeInterval = 0.9
+    private let holdDuration: TimeInterval
     private var hideTimer: Timer?
     private var fadeToken = 0
     private var isShowing = false
@@ -60,9 +60,11 @@ final class LayerHUD {
     /// Distinguishes a real in-place state change from a repeated notification. Content transitions
     /// only run when the face actually changes; repeated connection callbacks do not wobble the HUD.
     private var currentPresentationKey: String?
+    private var currentSymbolName: String?
 
-    init(layers: [Config.LayerDefinition] = []) {
+    init(layers: [Config.LayerDefinition] = [], holdDuration: TimeInterval = 0.9) {
         (configuredLayers, configuredOrdinals) = Self.normalized(layers)
+        self.holdDuration = holdDuration
     }
 
     /// Hot-reload hook. The next layer card uses the new label/colour without rebuilding the app.
@@ -85,7 +87,8 @@ final class LayerHUD {
         let appearance = appearance(forLayer: layerName)
         show(symbol: "square.stack.3d.up.fill", title: appearance.label,
              subtitle: L("Layer active"),
-             tint: appearance.tint, presentationKey: "layer:\(layerName.uppercased())")
+             tint: appearance.tint, cue: .layer,
+             presentationKey: "layer:\(layerName.uppercased())")
     }
 
     /// Switched back to the base layer. Same subject, outline + dimmed rather than a slash: a slash
@@ -94,20 +97,20 @@ final class LayerHUD {
         let appearance = appearance(forLayer: "BASE")
         show(symbol: "square.stack.3d.up", title: appearance.label,
              subtitle: L("Layer active"),
-             tint: appearance.tint, presentationKey: "layer:BASE")
+             tint: appearance.tint, cue: .layer, presentationKey: "layer:BASE")
     }
 
     /// The remote connected: filled remote, green — matching the green dot in Settings.
     func showRemoteConnected() {
         show(symbol: "appletvremote.gen4.fill", title: "Siri Remote", subtitle: L("Connected"),
-             tint: .systemGreen, presentationKey: "remote:connected")
+             tint: .systemGreen, cue: .connected, presentationKey: "remote:connected")
     }
 
-    /// The remote dropped: same subject, outline + dimmed, so the state reads at a glance without
-    /// changing what the icon depicts. (There is no `appletvremote.gen4.slash` symbol to use.)
+    /// The remote dropped: same subject in outline form. System orange communicates an interruption
+    /// that needs attention without mislabelling it as destructive red.
     func showRemoteDisconnected() {
         show(symbol: "appletvremote.gen4", title: "Siri Remote", subtitle: L("Disconnected"),
-             tint: .secondaryLabelColor, presentationKey: "remote:disconnected")
+             tint: .systemOrange, cue: .disconnected, presentationKey: "remote:disconnected")
     }
 
     /// Immediately remove every mirrored HUD surface when its JSON visibility setting is disabled.
@@ -120,6 +123,7 @@ final class LayerHUD {
             self.fadeToken += 1
             self.isShowing = false
             self.currentPresentationKey = nil
+            self.currentSymbolName = nil
             for surface in self.surfaces.values {
                 surface.window.alphaValue = 0
                 surface.window.orderOut(nil)
@@ -130,6 +134,7 @@ final class LayerHUD {
     // MARK: - Show / hide
 
     private func show(symbol: String, title: String, subtitle: String, tint: NSColor,
+                      cue: ActionSymbolCue,
                       presentationKey: String) {
         onMain { [weak self] in
             guard let self = self else { return }
@@ -145,7 +150,8 @@ final class LayerHUD {
                     self.prepareContentTransition(on: surface, layerRoll: isLayerRoll)
                 }
                 self.applyAppearanceColors(to: surface, tint: tint, animated: contentIsChanging)
-                self.configure(surface, symbol: symbol, title: title, subtitle: subtitle, tint: tint)
+                self.configure(surface, symbol: symbol, title: title, subtitle: subtitle, tint: tint,
+                               cue: cue, animateSymbol: contentIsChanging || !wasShowing)
                 if isLayerRoll {
                     self.animateLayerRoll(on: surface)
                 } else if contentIsChanging {
@@ -155,6 +161,7 @@ final class LayerHUD {
                 }
             }
             self.currentPresentationKey = presentationKey
+            self.currentSymbolName = symbol
             self.fadeToken += 1
             self.isShowing = true
 
@@ -205,11 +212,25 @@ final class LayerHUD {
     // MARK: - Content
 
     private func configure(_ surface: Surface, symbol: String, title: String,
-                           subtitle: String, tint: NSColor) {
-        let cfg = NSImage.SymbolConfiguration(pointSize: 62, weight: .medium)
-            .applying(.init(paletteColors: [tint]))
-        surface.iconView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
-            .withSymbolConfiguration(cfg)
+                           subtitle: String, tint: NSColor,
+                           cue: ActionSymbolCue, animateSymbol: Bool) {
+        let base = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
+            .withSymbolConfiguration(.init(pointSize: 62, weight: .medium))
+        let image = ActionSymbolStyle.hierarchicalImage(base, symbolName: symbol, tint: tint)
+        surface.iconView.contentTintColor = nil
+        if animateSymbol,
+           ActionSymbolStyle.supportsTopologyAwareReplacement(
+               from: currentSymbolName, to: symbol
+           ),
+           #available(macOS 14.0, *), let image,
+           !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            ActionSymbolStyle.replaceSymbol(in: surface.iconView, with: image, cue: cue)
+        } else {
+            surface.iconView.image = image
+            if animateSymbol, #available(macOS 14.0, *) {
+                ActionSymbolStyle.apply(cue, to: surface.iconView)
+            }
+        }
         surface.titleLabel.stringValue = title.isEmpty ? subtitle : title
         surface.subtitleLabel.stringValue = title.isEmpty ? "" : subtitle
     }
@@ -382,18 +403,23 @@ final class LayerHUD {
         return CATransform3DRotate(transform, angle, 1, 0, 0)
     }
 
-    /// Non-layer state changes (remote connect/disconnect) keep their restrained settle response.
+    /// Non-layer state changes use depth on the icon only. The card remains a stable reference and
+    /// the authored symbol layers carry the actual connect/disconnect punctuation.
     private func animateStateChange(on surface: Surface) {
-        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
-        scale.values = [1.0, 0.965, 1.012, 1.0]
-        scale.keyTimes = [0.0, 0.28, 0.72, 1.0]
-        scale.duration = 0.34
-        scale.timingFunctions = [
-            CAMediaTimingFunction(name: .easeIn),
-            CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.20, 1.0),
-            CAMediaTimingFunction(name: .easeOut),
-        ]
-        surface.cardLayer.add(scale, forKey: "layerChangeScale")
+        var away = CATransform3DIdentity
+        away.m34 = -1 / 460
+        away = CATransform3DRotate(away, -0.13, 0, 1, 0)
+        away = CATransform3DTranslate(away, 0, 0, -6)
+        var settle = CATransform3DIdentity
+        settle.m34 = -1 / 460
+        settle = CATransform3DRotate(settle, 0.025, 0, 1, 0)
+        let turn = CAKeyframeAnimation(keyPath: "transform")
+        turn.values = [NSValue(caTransform3D: away), NSValue(caTransform3D: settle),
+                       NSValue(caTransform3D: CATransform3DIdentity)]
+        turn.keyTimes = [0.0, 0.74, 1.0]
+        turn.duration = 0.26
+        turn.timingFunction = CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.20, 1.0)
+        surface.iconView.layer?.add(turn, forKey: "connectionIconDepth")
     }
 
     /// First presentation is distinct from an in-place switch: rise softly from below and settle,
@@ -487,8 +513,8 @@ final class LayerHUD {
         cardView.layer?.cornerCurve = .continuous
         cardView.layer?.masksToBounds = true
 
-        // Keep all face content in one clipping/animation container so its icon and typography
-        // move as a single wheel segment instead of three independently sliding fragments.
+        // Typography rolls as one wheel segment. The symbol deliberately lives outside this view:
+        // its three authored layers rebuild in place instead of the whole icon sliding like text.
         let content = NSView(frame: cardView.bounds)
         content.wantsLayer = true
 
@@ -496,7 +522,7 @@ final class LayerHUD {
         icon.wantsLayer = true
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.imageAlignment = .alignCenter
-        content.addSubview(icon)
+        cardView.addSubview(icon)
 
         let label = NSTextField(labelWithString: "")
         label.wantsLayer = true

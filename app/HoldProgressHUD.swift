@@ -38,12 +38,15 @@ import CoreVideo
 
 final class HoldProgressHUD: NSObject {
 
-    /// How one choice presents itself. Only `image` and `isCancel` are drawn now (no text); `label`
-    /// and `iconOnly` are kept so the producers that build faces (ActionVisual) need no change.
+    /// How one choice presents itself. Symbol provenance, semantic tint and motion travel together:
+    /// the water HUD must never turn Close/Quit into an ordinary white or black glyph.
     struct Face {
         let label: String
         let image: NSImage?          // real app icon where one exists, else an SF Symbol
+        let symbolName: String?
         let iconOnly: Bool
+        let tint: NSColor
+        let symbolCue: ActionSymbolCue
         var isCancel: Bool = false   // the escape hatch: grey water + overflow instead of emptying
     }
 
@@ -187,11 +190,13 @@ final class HoldProgressHUD: NSObject {
     private var cvLink: CVDisplayLink?
 
     private var stages: [Stage] = []
+    private var stageDelays: [TimeInterval] = []
     private var base: Face?
     private var startTime: CFTimeInterval = 0
     private var appearWork: DispatchWorkItem?
     private var isShowing = false
     private var shownStage = -1
+    private var displayedFace: Face?
 
     private var displayLevel: CGFloat = 0    // 0…1 fill fraction; eases toward its target
     private var draining = false             // between-stage clear: a fast accelerating drop (flush)
@@ -232,11 +237,13 @@ final class HoldProgressHUD: NSObject {
             self.cancelPendingAppear()
             self.base = base
             self.stages = sorted
+            self.stageDelays = sorted.map(\.threshold)
             // The input state machine supplies its monotonic press anchor. Sharing it is what makes
             // the face shown here and the action selected on release cross thresholds together.
             self.startTime = startedAt
             self.lastTick = self.startTime
             self.shownStage = -1
+            self.displayedFace = nil
             self.displayLevel = 0
             self.draining = false
             self.confirming = false
@@ -264,10 +271,9 @@ final class HoldProgressHUD: NSObject {
             if firedIndex >= 1, firedIndex <= self.stages.count {
                 let face = self.stages[firedIndex - 1].face
                 self.confirming = true
-                for surface in self.surfaces.values { surface.iconView.image = face.image }
+                self.present(face: face, animated: true)
                 self.setWaterColor(cancel: face.isCancel)
                 self.envelope = max(self.envelope, 2.2)      // a swell as the choice locks in
-                self.popIcon(from: 0.86)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                     self?.stopTicking(); self?.beginHide()
                 }
@@ -440,23 +446,25 @@ final class HoldProgressHUD: NSObject {
             return
         }
 
-        // Which stage would fire if released right now? = thresholds crossed.
-        var stage = 0
-        for (i, s) in stages.enumerated() where elapsed >= s.threshold { stage = i + 1 }
+        // Which stage would fire if released right now? The input handler and both HUDs use this
+        // exact pure resolver, so a delayed frame jumps directly to the current stage instead of
+        // replaying old icon transitions after the water has already advanced.
+        let stage = HoldTiming.reachedStageCount(
+            elapsed: elapsed, stageDelays: stageDelays
+        )
 
         if stage != shownStage || force {
             let crossedForward = stage > shownStage && shownStage >= 0
             shownStage = stage
             let face: Face? = stage == 0 ? base : stages[stage - 1].face
-            for surface in surfaces.values { surface.iconView.image = face?.image }
+            present(face: face, animated: crossedForward)
             setWaterColor(cancel: face?.isCancel ?? false)
             if crossedForward {
-                popIcon(from: 0.82)
                 if stage < stages.count {
                     draining = true; drainStart = now; drainFrom = displayLevel
                     envelope = max(envelope, 2.6)          // the flush swells the surface as it drops
                 } else {
-                    envelope = max(envelope, 3.4); popIcon(from: 0.64)   // overflow: brimful, big swell
+                    envelope = max(envelope, 3.4)   // overflow: brimful, big swell
                 }
             }
         }
@@ -565,6 +573,52 @@ final class HoldProgressHUD: NSObject {
         guard let c = color.usingColorSpace(.sRGB) else { return SIMD4<Float>(0.5, 0.5, 0.5, 1) }
         return SIMD4<Float>(Float(c.redComponent), Float(c.greenComponent),
                             Float(c.blueComponent), Float(c.alphaComponent))
+    }
+
+    /// Apply a face consistently on every physical display. SF Symbols use their authored layer
+    /// hierarchy, semantic system colour and Apple's topology-aware replacement. Real app artwork
+    /// keeps its original colour and receives a restrained fallback settle.
+    private func present(face: Face?, animated: Bool) {
+        let previous = displayedFace
+        displayedFace = face
+        guard let face else {
+            for surface in surfaces.values {
+                surface.iconView.image = nil
+                surface.iconView.contentTintColor = nil
+            }
+            return
+        }
+
+        let configured = ActionSymbolStyle.hierarchicalImage(
+            face.image, symbolName: face.symbolName, tint: face.tint
+        )
+        let canUseNativeReplacement = animated
+            && previous?.symbolName != nil && face.symbolName != nil && configured != nil
+            && ActionSymbolStyle.supportsTopologyAwareReplacement(
+                from: previous?.symbolName, to: face.symbolName
+            )
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+
+        for surface in surfaces.values {
+            let icon = surface.iconView
+            if face.symbolName != nil {
+                icon.contentTintColor = nil      // colour is embedded in hierarchical configuration
+            } else {
+                icon.contentTintColor = face.image?.isTemplate == true ? face.tint : nil
+            }
+            if canUseNativeReplacement, #available(macOS 14.0, *), let configured {
+                ActionSymbolStyle.replaceSymbol(in: icon, with: configured, cue: face.symbolCue)
+            } else {
+                icon.image = configured
+                if animated, face.symbolName != nil, #available(macOS 14.0, *) {
+                    ActionSymbolStyle.apply(face.symbolCue, to: icon)
+                }
+            }
+        }
+
+        if animated && !canUseNativeReplacement {
+            popIcon(from: previous?.symbolName == nil && face.symbolName == nil ? 0.90 : 0.84)
+        }
     }
 
     private func popIcon(from: CGFloat) {
@@ -712,7 +766,9 @@ final class HoldProgressHUD: NSObject {
         let icon = NSImageView(frame: NSRect(x: (side - iconSide) / 2, y: (side - iconSide) / 2,
                                              width: iconSide, height: iconSide))
         icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.contentTintColor = .white
+        // Per-face hierarchical colour is configured by `present(face:animated:)`. Starting with
+        // no forced tint prevents a freshly created screen mirror from flashing white first.
+        icon.contentTintColor = nil
         icon.wantsLayer = true
         icon.layer?.shadowColor = NSColor.black.cgColor
         icon.layer?.shadowOpacity = 0.28

@@ -91,6 +91,10 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
 	<string>Copyright © 2026 HyperVibe Contributors</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<!-- Login Items and a manual reopen must converge on the same running process. Without this,
+	     LaunchServices may create a second LSUIElement instance, duplicating HID/media handling. -->
+	<key>LSMultipleInstancesProhibited</key>
+	<true/>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSPrincipalClass</key>
@@ -118,27 +122,50 @@ fi
 # Make executable
 chmod +x "${APP_BUNDLE}/Contents/MacOS/$APP_NAME"
 
-# Ad-hoc sign WITHOUT hardened runtime. The app loads the private MultitouchSupport framework and
+# Sign WITHOUT hardened runtime. The app loads the private MultitouchSupport framework and
 # takes its touch callback; under the hardened runtime that callback trips code-signing enforcement
 # and the process is SIGKILLed with "Code Signature Invalid" the instant you touch the trackpad.
-# (The raw dev binary works precisely because it has no hardened runtime.) Ad-hoc `--sign -` still
-# gives a stable identity for TCC (Accessibility / Input Monitoring). Entitlements are embedded but
-# only matter under hardened runtime, so they're harmless here.
+# (The raw dev binary works precisely because it has no hardened runtime.) Entitlements are embedded
+# but only matter under hardened runtime, so they're harmless here.
 if [ -f "HyperVibe.entitlements" ]; then
-    # Prefer a STABLE self-signed identity ("siriRemote Local Signing") so the app's TCC grants
-    # (Accessibility / Input Monitoring) survive rebuilds — ad-hoc's cdhash changes every build and
-    # macOS treats each build as a new app, forcing re-approval. Fall back to ad-hoc if absent.
+    # Development builds MUST use the stable self-signed identity so TCC grants (Accessibility /
+    # Input Monitoring) survive rebuilds. The keychain must be unlocked before find-identity can see
+    # its certificate; checking first silently fell back to ad-hoc and invalidated existing grants.
+    # Ad-hoc signing remains available only as an explicit release-build choice.
     SIGN_ID="siriRemote Local Signing"
     SIGN_KC="$HOME/Library/Keychains/siriremote-signing.keychain-db"
-    if [ "$SIGN_MODE" = "stable" ] && [ -f "$SIGN_KC" ] \
-        && security find-identity -p codesigning "$SIGN_KC" 2>/dev/null | grep -q "$SIGN_ID"; then
+    if [ "$SIGN_MODE" = "stable" ]; then
+        if [ ! -f "$SIGN_KC" ]; then
+            echo "Error: stable signing keychain not found: $SIGN_KC"
+            echo "Refusing to ad-hoc sign a development build because that would reset macOS permissions."
+            exit 1
+        fi
+        if ! security unlock-keychain -p siriremote-local "$SIGN_KC"; then
+            echo "Error: could not unlock the stable signing keychain."
+            echo "Refusing to ad-hoc sign a development build because that would reset macOS permissions."
+            exit 1
+        fi
+        # `security find-identity -p codesigning` reports this intentionally self-signed local
+        # certificate as "0 valid identities" on some macOS releases even though its private key
+        # is present and `codesign` can use it. Check the named certificate here; the codesign call
+        # and strict verification below are the authoritative private-key/validity tests.
+        if ! security find-certificate -c "$SIGN_ID" "$SIGN_KC" >/dev/null 2>&1; then
+            echo "Error: stable signing certificate '$SIGN_ID' is unavailable."
+            echo "Refusing to ad-hoc sign a development build because that would reset macOS permissions."
+            exit 1
+        fi
         echo "Signing with stable local identity ($SIGN_ID)..."
-        security unlock-keychain -p siriremote-local "$SIGN_KC" 2>/dev/null || true
-        codesign --force --entitlements "HyperVibe.entitlements" \
-            --sign "$SIGN_ID" --keychain "$SIGN_KC" "${APP_BUNDLE}"
-    else
-        echo "Ad-hoc signing (public build or no stable identity found)..."
+        if ! codesign --force --entitlements "HyperVibe.entitlements" \
+            --sign "$SIGN_ID" --keychain "$SIGN_KC" "${APP_BUNDLE}"; then
+            echo "Error: stable signing failed. The existing installed App was not touched."
+            exit 1
+        fi
+    elif [ "$SIGN_MODE" = "adhoc" ]; then
+        echo "Ad-hoc signing (explicit public/release build)..."
         codesign --force --entitlements "HyperVibe.entitlements" --sign - "${APP_BUNDLE}"
+    else
+        echo "Error: HYPERVIBE_SIGN_MODE must be 'stable' or 'adhoc', got: $SIGN_MODE"
+        exit 1
     fi
     codesign -dvv "${APP_BUNDLE}" 2>&1 | grep -E "(Authority|flags|Identifier)" || true
 fi

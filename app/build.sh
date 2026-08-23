@@ -32,6 +32,8 @@ SWIFT_FILES=(
     "StatusWidget.swift"
     "HoldAnimationGallery.swift"
     "HoldProgressHUD.swift"
+    "ActionSymbolStyle.swift"
+    "SystemControlState.swift"
     "ActionVisual.swift"
     # --- Settings UI (SwiftUI) ---
     "TuneSettings.swift"
