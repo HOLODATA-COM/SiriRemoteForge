@@ -1,6 +1,11 @@
 # Release packaging
 
-The release builder creates two Apple-silicon macOS downloads from a clean checkout:
+The release builder creates three Apple-silicon macOS downloads from a clean checkout:
+
+- **`HyperVibe-Full-Setup-VERSION-arm64.pkg`** — the primary native macOS Installer. It installs
+  the app, virtual microphone, router, on-demand capture service, and uninstaller with one
+  administrator approval. HyperVibe then opens its live System Check for the privacy permissions
+  macOS deliberately keeps under the user's control.
 
 - **`HyperVibe-VERSION-macOS-arm64.zip`** — the menu-bar app only. Unzip, move
   `HyperVibe.app` to Applications, then right-click it and choose **Open** the first time.
@@ -8,7 +13,8 @@ The release builder creates two Apple-silicon macOS downloads from a clean check
   router, capture daemon, and an uninstaller. This is the advanced option because it installs
   system audio and Bluetooth-capture components with an administrator password.
 
-`SHA256SUMS.txt` covers both archives. GitHub supplies source archives separately.
+`SHA256SUMS.txt` covers the native Installer and both archives. GitHub supplies source archives
+separately.
 
 ## Build public Release assets
 
@@ -28,11 +34,12 @@ offline tests, and writes:
 dist/build/0.1.0-beta.1/
 ├── HyperVibe-0.1.0-beta.1-macOS-arm64.zip
 ├── HyperVibe-Full-Setup-0.1.0-beta.1-arm64.zip
+├── HyperVibe-Full-Setup-0.1.0-beta.1-arm64.pkg
 └── SHA256SUMS.txt
 ```
 
 Generated output remains ignored by Git because personal packages may contain private material.
-Upload only the three audited files above, never the whole `dist/build/` directory.
+Upload only the four audited files above, never the whole `dist/build/` directory.
 `build-release.sh` finishes by running `audit-release.sh`, which independently extracts both
 archives and fails on invalid signatures/checksums, wrong versions or architectures, Homebrew
 runtime links, missing license notices, private paths, author config, PacketLogger, or video files.
@@ -83,6 +90,9 @@ Personal output prints a warning and must never be uploaded to GitHub.
 
 ## Signing and Gatekeeper
 
-These beta archives are ad-hoc signed, not Apple-notarized. The hardened runtime is intentionally
+These beta app bundles are ad-hoc signed, not Apple-notarized. The hardened runtime is intentionally
 disabled because it terminates the private MultitouchSupport callback used by the remote trackpad.
-On first launch, use **right-click → Open**. Do not tell users to globally disable Gatekeeper.
+The native package is unsigned unless `HYPERVIBE_INSTALLER_SIGN_IDENTITY` names a real Developer ID
+Installer identity; App signing and Installer signing are separate Apple certificate types. Until
+both Developer ID signing and notarization are configured, use **right-click → Open** for the first
+launch. Do not tell users to globally disable Gatekeeper.

@@ -34,18 +34,6 @@ on run
 		return
 	end try
 
-	-- PacketLogger check AFTER install: personal packages may bundle and install it. Public Release
-	-- assets never do, so point to Apple's own download when it is still missing.
-	if not fileExists("/Applications/PacketLogger.app") then
-		set r to display dialog ("未检测到 PacketLogger.app。" & return & return & ¬
-			"遥控器麦克风语音功能需要它 —— 这是 Apple 的免费工具,需登录 Apple ID 从开发者网站的 “Additional Tools for Xcode” 里下载,下完把 PacketLogger.app 拖到 应用程序 文件夹。" & return & return & ¬
-			"其它功能不受影响。现在打开下载页吗?") ¬
-			buttons {"跳过", "打开下载页"} default button "打开下载页" with title "HyperVibe Setup"
-		if button returned of r is "打开下载页" then
-			open location "https://developer.apple.com/download/all/?q=Additional+Tools+for+Xcode"
-		end if
-	end if
-
 	-- Default config for THIS user, without clobbering an existing one.
 	set cfgDir to (POSIX path of (path to home folder)) & ".config/siriremote"
 	if not fileExists(cfgDir & "/config.jsonc") then
@@ -53,24 +41,14 @@ on run
 			" && /bin/cp " & quoted form of (payload & "/config.jsonc") & " " & quoted form of (cfgDir & "/config.jsonc"))
 	end if
 
-	-- The three permissions macOS will not let an app grant itself: open each pane, guide the toggle.
-	display dialog ("系统组件已安装 ✅" & return & return & ¬
-		"接下来需要你手动开启 3 个权限(macOS 不允许 App 自己开)。" & return & ¬
-		"我会依次打开对应设置页,请把 HyperVibe 的开关打开。") ¬
-		buttons {"继续"} default button "继续" with title "HyperVibe Setup"
-
-	open location "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-	display dialog "① 辅助功能(Accessibility)" & return & "打开列表里 HyperVibe 的开关(移动光标 / 发按键需要)。" buttons {"下一个"} default button "下一个" with title "权限 1/3"
-	open location "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
-	display dialog "② 输入监控(Input Monitoring)" & return & "打开 HyperVibe 的开关(读遥控器按键需要)。" buttons {"下一个"} default button "下一个" with title "权限 2/3"
-	open location "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-	display dialog "③ 麦克风(Microphone)" & return & "打开 HyperVibe 的开关(内置麦回退 / 采集需要;首次运行也会自动弹窗)。" buttons {"完成"} default button "完成" with title "权限 3/3"
-
-	do shell script "/usr/bin/open -a /Applications/HyperVibe.app"
+	-- Open one live readiness surface instead of blindly jumping through three System Settings
+	-- panes. HyperVibe explains each capability, requests only the row the user clicks, and updates
+	-- every status in place when the user returns from Settings.
+	do shell script "/usr/bin/open -a /Applications/HyperVibe.app --args --system-check"
 	display dialog ("安装完成 🎉" & return & return & ¬
-		"HyperVibe 已启动(看菜单栏图标)。" & return & ¬
+		"HyperVibe 已启动,并打开实时“系统检查”。" & return & ¬
+		"请按页面提示完成需要的权限;App 会自动确认状态,无需逐次重启。" & return & ¬
 		"卸载器位于“应用程序”文件夹。" & return & ¬
-		"在 蓝牙 设置里配对你的 Siri Remote 即可使用。" & return & return & ¬
-		"若遥控器麦克风没声音:确认已装 PacketLogger,然后重新打开正在使用麦克风的 App。") ¬
+		"遥控器语音所需的 PacketLogger 等可选项目也会在同一页面检查。") ¬
 		buttons {"好"} default button "好" with title "HyperVibe Setup"
 end run

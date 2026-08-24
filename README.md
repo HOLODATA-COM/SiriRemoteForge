@@ -137,12 +137,16 @@ action.
 ## Install a beta build
 
 Published beta builds on the
-[Releases page](https://github.com/HOLODATA-COM/SiriRemoteForge/releases) provide two Apple-silicon
+[Releases page](https://github.com/HOLODATA-COM/SiriRemoteForge/releases) provide three Apple-silicon
 downloads:
 
+- **Native Full Installer (recommended)** — open `HyperVibe-Full-Setup-…-arm64.pkg`. The standard
+  macOS Installer places the app, Siri Remote Mic system components, background service and
+  uninstaller with one administrator approval. HyperVibe then opens a live System Check for the
+  privacy choices macOS does not let an installer make on the user's behalf.
 - **App only** — unzip `HyperVibe-…-macOS-arm64.zip`, move `HyperVibe.app` to Applications, then
   right-click → **Open** once.
-- **Full Setup (advanced)** — adds the Siri Remote Mic system components and
+- **Legacy Full Setup** — adds the Siri Remote Mic system components and
   `HyperVibe Uninstall.app`. It asks for an administrator password, briefly restarts system audio,
   and runs a 25-second `coreaudiod` safety check with automatic plug-in rollback.
 
@@ -162,7 +166,8 @@ open HyperVibe.app
 ```
 
 `build.sh` produces a bare `./HyperVibe` you can also run directly (`./HyperVibe --settings` opens
-the settings window on launch). `create_app_bundle.sh` packages a double-clickable `HyperVibe.app`.
+the settings window on launch; `--system-check` opens the live readiness screen).
+`create_app_bundle.sh` packages a double-clickable `HyperVibe.app`.
 
 **It's a menu-bar app** (no Dock icon): after launching, click the walkie-talkie icon in the menu bar
 for **Settings… / Quit**. If the menu-bar icon is hidden (e.g. behind the notch), just **double-click
@@ -170,12 +175,19 @@ for **Settings… / Quit**. If the menu-bar icon is hidden (e.g. behind the notc
 
 ### Permissions
 
-macOS gates the low-level access this app needs. On first run, grant it in
-**System Settings → Privacy & Security**:
+macOS gates the low-level access this app needs. On first run HyperVibe opens **System Check**, which
+shows the live state of every required and feature-specific capability. Permission requests happen
+only after the user clicks the matching row; normal startup never sprays unexplained TCC prompts.
+The two core permissions are:
 
 - **Accessibility** — to move the cursor and post keystrokes.
 - **Input Monitoring** — to receive the remote's buttons over HID. If the buttons don't respond,
   this is almost always why (the log shows `IOHIDManagerOpen failed 0xE00002E2`).
+
+When either permission is granted, HyperVibe automatically reattaches the affected HID/event-tap
+subsystem; the user does not have to quit or restart the app. The same System Check also reports
+Microphone, Automation, Siri Remote Mic components and PacketLogger, and remains available from the
+menu bar and Settings.
 
 The bundle is signed **without** the hardened runtime on purpose — under the hardened runtime the
 private MultitouchSupport touch callback trips code-signing enforcement and the app is killed the

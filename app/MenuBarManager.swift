@@ -29,7 +29,9 @@ final class MenuBarManager {
     private let statusItem: NSStatusItem
     private let menu: NSMenu
     private let statusMenuItem: NSMenuItem
+    private let permissionMenuItem: NSMenuItem
     private var isConnected = false
+    private var permissionsReady = false
     private var localeObserver: NSObjectProtocol?
 
     /// Two-finger scroll scale (see `ScrollSpeed`).
@@ -44,6 +46,9 @@ final class MenuBarManager {
         self.statusItem = statusItem
         self.menu = NSMenu()
         self.statusMenuItem = NSMenuItem(title: L("Status: Disconnected"), action: nil, keyEquivalent: "")
+        self.permissionMenuItem = NSMenuItem(
+            title: L("Permissions: Checking…"), action: nil, keyEquivalent: ""
+        )
         setupMenuBar()
         localeObserver = NotificationCenter.default.addObserver(
             forName: Loc.didChange, object: nil, queue: .main
@@ -58,6 +63,7 @@ final class MenuBarManager {
     private func relocalize() {
         rebuildMenu()
         statusMenuItem.title = isConnected ? L("Status: Connected ✓") : L("Status: Disconnected")
+        updatePermissionStatus(ready: permissionsReady)
     }
 
     // MARK: - Icon
@@ -118,8 +124,17 @@ final class MenuBarManager {
         statusMenuItem.isEnabled = false
         menu.addItem(statusMenuItem)
 
+        permissionMenuItem.title = permissionsReady
+            ? L("Permissions: Ready ✓") : L("Permissions: Action needed")
+        permissionMenuItem.action = permissionsReady ? nil : #selector(openSetup)
+        permissionMenuItem.target = permissionsReady ? nil : self
+        permissionMenuItem.isEnabled = !permissionsReady
+        menu.addItem(permissionMenuItem)
+
         menu.addItem(.separator())
-        let setupItem = NSMenuItem(title: L("Setup Guide"), action: #selector(openSetup), keyEquivalent: "")
+        let setupItem = NSMenuItem(
+            title: L("Open System Check…"), action: #selector(openSetup), keyEquivalent: ""
+        )
         setupItem.target = self
         menu.addItem(setupItem)
 
@@ -143,6 +158,18 @@ final class MenuBarManager {
             self.isConnected = connected
             self.statusMenuItem.title = connected ? L("Status: Connected ✓") : L("Status: Disconnected")
             self.statusItem.button?.appearsDisabled = !connected
+        }
+    }
+
+    func updatePermissionStatus(ready: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.permissionsReady = ready
+            self.permissionMenuItem.title = ready
+                ? L("Permissions: Ready ✓") : L("Permissions: Action needed")
+            self.permissionMenuItem.action = ready ? nil : #selector(openSetup)
+            self.permissionMenuItem.target = ready ? nil : self
+            self.permissionMenuItem.isEnabled = !ready
         }
     }
 

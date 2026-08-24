@@ -108,8 +108,16 @@ SETUP_APP="$OUT/HyperVibe Setup.app"
 UNINSTALL_APP="$OUT/HyperVibe Uninstall.app"
 APP_ZIP="$OUT/HyperVibe-$VERSION-macOS-$ASSET_ARCH.zip"
 FULL_ZIP="$OUT/HyperVibe-Full-Setup-$VERSION-$ASSET_ARCH.zip"
+NATIVE_PKG="$OUT/HyperVibe-Full-Setup-$VERSION-$ASSET_ARCH.pkg"
+PKG_WORK="$BUILD_ROOT/staging/pkg/$VERSION"
+PKG_ROOT="$PKG_WORK/root"
+PKG_SCRIPTS="$PKG_WORK/scripts"
+PKG_RESOURCES="$PKG_WORK/resources"
+PKG_COMPONENT="$PKG_WORK/HyperVibePayload.pkg"
+PKG_DISTRIBUTION="$PKG_WORK/Distribution.xml"
+PKG_UNSIGNED="$PKG_WORK/HyperVibe-unsigned.pkg"
 
-/bin/rm -rf "$OUT"
+/bin/rm -rf "$OUT" "$PKG_WORK"
 /bin/mkdir -p "$PAYLOAD/Legal"
 
 echo "→ assembling $MODE payload ($VERSION, $ASSET_ARCH)"
@@ -216,17 +224,59 @@ echo "→ building setup app"
         "$SETUP_APP/Contents/Info.plist"
 /usr/bin/codesign --force --sign - "$SETUP_APP"
 
+echo "→ building native macOS Installer package"
+/bin/mkdir -p "$PKG_ROOT/Library/Application Support/HyperVibe Installer" \
+    "$PKG_SCRIPTS" "$PKG_RESOURCES"
+/bin/cp -R "$PAYLOAD" "$PKG_ROOT/Library/Application Support/HyperVibe Installer/payload"
+/bin/cp "$DIST/pkg/postinstall" "$PKG_SCRIPTS/postinstall"
+/bin/chmod 755 "$PKG_SCRIPTS/postinstall"
+/bin/cp "$DIST/pkg/resources/welcome.html" "$PKG_RESOURCES/welcome.html"
+/bin/cp "$DIST/pkg/resources/readme.html" "$PKG_RESOURCES/readme.html"
+/bin/cp "$DIST/pkg/resources/conclusion.html" "$PKG_RESOURCES/conclusion.html"
+/bin/cp "$ROOT/LICENSE" "$PKG_RESOURCES/license.txt"
+/usr/bin/sed "s/@@VERSION@@/$APP_VERSION/g" \
+    "$DIST/pkg/Distribution.xml" > "$PKG_DISTRIBUTION"
+
+/usr/bin/pkgbuild \
+    --root "$PKG_ROOT" \
+    --scripts "$PKG_SCRIPTS" \
+    --component-plist "$DIST/pkg/components.plist" \
+    --identifier com.hypervibe.full \
+    --version "$APP_VERSION" \
+    --install-location / \
+    --ownership recommended \
+    "$PKG_COMPONENT"
+/usr/bin/productbuild \
+    --distribution "$PKG_DISTRIBUTION" \
+    --resources "$PKG_RESOURCES" \
+    --package-path "$PKG_WORK" \
+    "$PKG_UNSIGNED"
+
+if [ -n "${HYPERVIBE_INSTALLER_SIGN_IDENTITY:-}" ]; then
+    SIGN_ARGS=(--sign "$HYPERVIBE_INSTALLER_SIGN_IDENTITY")
+    if [ -n "${HYPERVIBE_INSTALLER_KEYCHAIN:-}" ]; then
+        SIGN_ARGS+=(--keychain "$HYPERVIBE_INSTALLER_KEYCHAIN")
+    fi
+    /usr/bin/productsign "${SIGN_ARGS[@]}" "$PKG_UNSIGNED" "$NATIVE_PKG"
+    /bin/rm -f "$PKG_UNSIGNED"
+else
+    /bin/mv "$PKG_UNSIGNED" "$NATIVE_PKG"
+    echo "⚠ native package is unsigned: set HYPERVIBE_INSTALLER_SIGN_IDENTITY to a Developer ID Installer identity for public trust"
+fi
+
 echo "→ creating Release archives"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_SOURCE" "$APP_ZIP"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$SETUP_APP" "$FULL_ZIP"
 (
     cd "$OUT"
-    /usr/bin/shasum -a 256 "$(basename "$APP_ZIP")" "$(basename "$FULL_ZIP")"
+    /usr/bin/shasum -a 256 "$(basename "$APP_ZIP")" "$(basename "$FULL_ZIP")" \
+        "$(basename "$NATIVE_PKG")"
 ) > "$OUT/SHA256SUMS.txt"
 
 echo
 echo "✓ $APP_ZIP"
 echo "✓ $FULL_ZIP"
+echo "✓ $NATIVE_PKG"
 echo "✓ $OUT/SHA256SUMS.txt"
 if [ "$MODE" = "personal" ]; then
     echo "⚠ personal build: never upload these assets publicly"

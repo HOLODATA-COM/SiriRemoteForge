@@ -666,6 +666,19 @@ struct SettingsView: View {
             Toggle(isOn: $model.tune.showSetupWizardOnFirstLaunch) {
                 rowLabel(L("Show setup guide on first launch"), "checklist")
             }
+            Button {
+                NotificationCenter.default.post(name: .hyperVibeOpenSystemCheck, object: nil)
+            } label: {
+                HStack {
+                    rowLabel(L("Open System Check…"), "checkmark.shield")
+                    Spacer()
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         } header: {
             Text(L("Startup"))
         } footer: {

@@ -20,9 +20,10 @@ BUILD_NUMBER="${HYPERVIBE_BUILD_NUMBER:-1}"
 OUT="$ROOT/dist/build/$VERSION"
 APP_ZIP="$OUT/HyperVibe-$VERSION-macOS-arm64.zip"
 FULL_ZIP="$OUT/HyperVibe-Full-Setup-$VERSION-arm64.zip"
+NATIVE_PKG="$OUT/HyperVibe-Full-Setup-$VERSION-arm64.pkg"
 CHECKSUMS="$OUT/SHA256SUMS.txt"
 
-for required in "$APP_ZIP" "$FULL_ZIP" "$CHECKSUMS"; do
+for required in "$APP_ZIP" "$FULL_ZIP" "$NATIVE_PKG" "$CHECKSUMS"; do
     [ -f "$required" ] || { echo "missing Release asset: $required" >&2; exit 1; }
 done
 
@@ -38,13 +39,19 @@ echo "→ auditing archive checksums"
 /bin/mkdir -p "$AUDIT_DIR/app-only" "$AUDIT_DIR/full"
 /usr/bin/ditto -x -k "$APP_ZIP" "$AUDIT_DIR/app-only"
 /usr/bin/ditto -x -k "$FULL_ZIP" "$AUDIT_DIR/full"
+/usr/sbin/pkgutil --expand-full "$NATIVE_PKG" "$AUDIT_DIR/native-pkg"
 
 APP="$AUDIT_DIR/app-only/HyperVibe.app"
 SETUP="$AUDIT_DIR/full/HyperVibe Setup.app"
 PAYLOAD="$SETUP/Contents/Resources/payload"
 UNINSTALL="$PAYLOAD/HyperVibe Uninstall.app"
+PKG_COMPONENT="$AUDIT_DIR/native-pkg/HyperVibePayload.pkg"
+PKG_PAYLOAD="$PKG_COMPONENT/Payload/Library/Application Support/HyperVibe Installer/payload"
+PKG_POSTINSTALL="$PKG_COMPONENT/Scripts/postinstall"
 
-for required in "$APP" "$SETUP" "$UNINSTALL" "$PAYLOAD/PAYLOAD-SHA256SUMS.txt"; do
+for required in "$APP" "$SETUP" "$UNINSTALL" "$PAYLOAD/PAYLOAD-SHA256SUMS.txt" \
+    "$AUDIT_DIR/native-pkg/Distribution" "$PKG_COMPONENT/PackageInfo" \
+    "$PKG_PAYLOAD/PAYLOAD-SHA256SUMS.txt" "$PKG_POSTINSTALL"; do
     [ -e "$required" ] || { echo "missing archive member: $required" >&2; exit 1; }
 done
 
@@ -53,6 +60,39 @@ echo "→ auditing signatures and payload seal"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$SETUP"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$UNINSTALL"
 (cd "$PAYLOAD" && /usr/bin/shasum -a 256 -c PAYLOAD-SHA256SUMS.txt >/dev/null)
+(cd "$PKG_PAYLOAD" && /usr/bin/shasum -a 256 -c PAYLOAD-SHA256SUMS.txt >/dev/null)
+/usr/bin/codesign --verify --deep --strict --verbose=2 "$PKG_PAYLOAD/HyperVibe.app"
+/usr/bin/codesign --verify --deep --strict --verbose=2 \
+    "$PKG_PAYLOAD/HyperVibe Uninstall.app"
+
+echo "→ auditing native Installer structure"
+/bin/bash -n "$PKG_POSTINSTALL"
+/usr/bin/xmllint --noout "$AUDIT_DIR/native-pkg/Distribution" "$PKG_COMPONENT/PackageInfo"
+/usr/bin/grep -Fq 'hostArchitectures="arm64"' "$AUDIT_DIR/native-pkg/Distribution"
+/usr/bin/grep -Fq 'identifier="com.hypervibe.full"' "$PKG_COMPONENT/PackageInfo"
+/usr/bin/grep -Fq '<must-close>' "$AUDIT_DIR/native-pkg/Distribution"
+/usr/bin/grep -Fq -- '--args --system-check' "$PKG_POSTINSTALL"
+/usr/bin/diff -qr "$PAYLOAD" "$PKG_PAYLOAD" >/dev/null
+set +e
+PKG_SIGNATURE="$(/usr/sbin/pkgutil --check-signature "$NATIVE_PKG" 2>&1)"
+PKG_SIGNATURE_STATUS="$?"
+set -e
+if /usr/bin/grep -Fq 'Status: no signature' <<<"$PKG_SIGNATURE"; then
+    echo "  native Installer is unsigned (beta); Developer ID Installer is required for public trust"
+else
+    [ "$PKG_SIGNATURE_STATUS" -eq 0 ] || {
+        echo "$PKG_SIGNATURE" >&2
+        echo "invalid native Installer signature" >&2
+        exit 1
+    }
+    /usr/bin/grep -Fq 'Status: signed by a certificate trusted by Mac OS X' \
+        <<<"$PKG_SIGNATURE" || {
+        echo "$PKG_SIGNATURE" >&2
+        echo "native Installer signature is not trusted by macOS" >&2
+        exit 1
+    }
+    echo "$PKG_SIGNATURE"
+fi
 
 echo "→ auditing versions, architecture, and runtime links"
 [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")" \
@@ -120,5 +160,9 @@ fi
 [ -x "$PAYLOAD/do_uninstall.sh" ]
 [ -x "$PAYLOAD/srm_router" ]
 [ -x "$PAYLOAD/srm_captured" ]
+[ -x "$PKG_POSTINSTALL" ]
+
+[ "$(/usr/bin/wc -l < "$CHECKSUMS" | /usr/bin/tr -d ' ')" = "3" ]
+/usr/bin/grep -Fq " $(basename "$NATIVE_PKG")" "$CHECKSUMS"
 
 echo "✓ Release audit passed"
