@@ -27,6 +27,8 @@ done
 
 echo "→ verifying installer payload"
 (cd "$PAYLOAD" && /usr/bin/shasum -a 256 -c PAYLOAD-SHA256SUMS.txt >/dev/null)
+/usr/bin/codesign --verify --deep --strict "$PAYLOAD/HyperVibe.app"
+/usr/bin/codesign --verify --deep --strict "$PAYLOAD/HyperVibe Uninstall.app"
 
 # Downloaded bundles are quarantined as data inside Setup.app. The user has already approved the
 # outer installer via Gatekeeper; clear the nested payload so coreaudiod can load the HAL plug-in.
@@ -34,7 +36,17 @@ echo "→ verifying installer payload"
 
 BACKUP_DIR="$(/usr/bin/mktemp -d /private/tmp/hypervibe-install.XXXXXX)"
 DRIVER_BACKUP="$BACKUP_DIR/$DRIVER"
+APP_BACKUP="$BACKUP_DIR/HyperVibe.app.previous"
+UNINSTALL_BACKUP="$BACKUP_DIR/HyperVibe Uninstall.app.previous"
+SUPPORT_BACKUP="$BACKUP_DIR/SiriRemoteMic.support.previous"
+PLIST_BACKUP="$BACKUP_DIR/$PLIST_NAME.previous"
 HAD_DRIVER=0
+HAD_APP=0
+HAD_UNINSTALL=0
+HAD_SUPPORT=0
+HAD_PLIST=0
+APPS_REPLACED=0
+SERVICES_TOUCHED=0
 ROLLBACK_ARMED=0
 
 cleanup() {
@@ -63,10 +75,46 @@ rollback_driver() {
     ROLLBACK_ARMED=0
 }
 
+rollback_apps() {
+    [ "$APPS_REPLACED" -eq 1 ] || return
+    set +e
+    echo "→ restoring previous HyperVibe application"
+    /bin/rm -rf "/Applications/HyperVibe.app" "/Applications/HyperVibe Uninstall.app"
+    if [ "$HAD_APP" -eq 1 ] && [ -d "$APP_BACKUP" ]; then
+        /bin/cp -R "$APP_BACKUP" "/Applications/HyperVibe.app"
+    fi
+    if [ "$HAD_UNINSTALL" -eq 1 ] && [ -d "$UNINSTALL_BACKUP" ]; then
+        /bin/cp -R "$UNINSTALL_BACKUP" "/Applications/HyperVibe Uninstall.app"
+    fi
+    APPS_REPLACED=0
+}
+
+rollback_services() {
+    [ "$SERVICES_TOUCHED" -eq 1 ] || return
+    set +e
+    echo "→ restoring previous microphone services"
+    /bin/launchctl bootout system "$PLIST_DST" 2>/dev/null || true
+    /bin/rm -f "$PLIST_DST"
+    /bin/rm -rf "$SUPPORT"
+    if [ "$HAD_SUPPORT" -eq 1 ] && [ -d "$SUPPORT_BACKUP" ]; then
+        /bin/cp -R "$SUPPORT_BACKUP" "$SUPPORT"
+        /usr/sbin/chown -R root:wheel "$SUPPORT"
+    fi
+    if [ "$HAD_PLIST" -eq 1 ] && [ -f "$PLIST_BACKUP" ]; then
+        /bin/cp "$PLIST_BACKUP" "$PLIST_DST"
+        /usr/sbin/chown root:wheel "$PLIST_DST"
+        /bin/chmod 644 "$PLIST_DST"
+        /bin/launchctl bootstrap system "$PLIST_DST" 2>/dev/null || true
+    fi
+    SERVICES_TOUCHED=0
+}
+
 fail() {
     code="$?"
     trap - ERR INT TERM HUP
+    rollback_services
     if [ "$ROLLBACK_ARMED" -eq 1 ]; then rollback_driver; fi
+    rollback_apps
     cleanup
     exit "$code"
 }
@@ -74,9 +122,29 @@ trap fail ERR INT TERM HUP
 trap cleanup EXIT
 
 echo "→ installing HyperVibe"
+# Do not leave an old executable running after its bundle is replaced. The exact process name keeps
+# the separate "HyperVibe Host" helper untouched.
+/usr/bin/killall HyperVibe 2>/dev/null || true
+for _ in 1 2 3 4 5; do
+    /usr/bin/pgrep -x HyperVibe >/dev/null 2>&1 || break
+    /usr/bin/perl -e 'select(undef, undef, undef, 0.2)'
+done
+
+if [ -d "/Applications/HyperVibe.app" ]; then
+    HAD_APP=1
+    /bin/cp -R "/Applications/HyperVibe.app" "$APP_BACKUP"
+fi
+if [ -d "/Applications/HyperVibe Uninstall.app" ]; then
+    HAD_UNINSTALL=1
+    /bin/cp -R "/Applications/HyperVibe Uninstall.app" "$UNINSTALL_BACKUP"
+fi
+
+APPS_REPLACED=1
 /bin/rm -rf "/Applications/HyperVibe.app" "/Applications/HyperVibe Uninstall.app"
 /bin/cp -R "$PAYLOAD/HyperVibe.app" "/Applications/HyperVibe.app"
 /bin/cp -R "$PAYLOAD/HyperVibe Uninstall.app" "/Applications/HyperVibe Uninstall.app"
+/usr/bin/codesign --verify --deep --strict "/Applications/HyperVibe.app"
+/usr/bin/codesign --verify --deep --strict "/Applications/HyperVibe Uninstall.app"
 
 # PacketLogger is never present in public Release assets. Personal transfer packages may include it
 # explicitly; install that copy only when the payload actually contains it.
@@ -86,6 +154,15 @@ if [ -d "$PAYLOAD/PacketLogger.app" ] && [ ! -d "/Applications/PacketLogger.app"
 fi
 
 echo "→ staging microphone services"
+if [ -d "$SUPPORT" ]; then
+    HAD_SUPPORT=1
+    /bin/cp -R "$SUPPORT" "$SUPPORT_BACKUP"
+fi
+if [ -f "$PLIST_DST" ]; then
+    HAD_PLIST=1
+    /bin/cp "$PLIST_DST" "$PLIST_BACKUP"
+fi
+SERVICES_TOUCHED=1
 /bin/mkdir -p "$SUPPORT" "$HAL"
 
 # Preserve the exact HCITraces value that existed before HyperVibe first managed it. The daemon
@@ -110,10 +187,10 @@ if [ -d "$HAL/$DRIVER" ]; then
 fi
 
 echo "→ installing microphone HAL plug-in"
+ROLLBACK_ARMED=1
 /bin/rm -rf "$HAL/$DRIVER"
 /bin/cp -R "$PAYLOAD/$DRIVER" "$HAL/$DRIVER"
 /usr/sbin/chown -R root:wheel "$HAL/$DRIVER"
-ROLLBACK_ARMED=1
 restart_coreaudio
 
 echo "→ safety check: monitoring coreaudiod for ${WATCH_SECONDS}s"
@@ -130,12 +207,13 @@ for ((second = 1; second <= WATCH_SECONDS; second++)); do
     fi
     if [ "$high" -ge "$WATCH_STREAK" ]; then
         echo "coreaudiod exceeded ${WATCH_THRESHOLD}% for ${WATCH_STREAK}s (peak ${peak}%)" >&2
+        rollback_services
         rollback_driver
+        rollback_apps
         echo "microphone plug-in was automatically rolled back" >&2
         exit 2
     fi
 done
-ROLLBACK_ARMED=0
 echo "  coreaudiod stable (peak ${peak}%)"
 
 echo "→ installing capture LaunchDaemon"
@@ -144,5 +222,7 @@ echo "→ installing capture LaunchDaemon"
 /bin/chmod 644 "$PLIST_DST"
 /bin/launchctl bootout system "$PLIST_DST" 2>/dev/null || true
 /bin/launchctl bootstrap system "$PLIST_DST"
+ROLLBACK_ARMED=0
+SERVICES_TOUCHED=0
 
 echo "OK"

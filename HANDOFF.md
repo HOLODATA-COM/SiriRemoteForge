@@ -2014,6 +2014,47 @@ feel that evening; if any of these is wrong, this is where to look:
   deliberately kept out of the public repository. This website pass did not modify, rebuild, sign,
   restart or reconfigure the macOS App; it ships with `v0.2.0-beta.4`.
 
+## Native Installer and live System Check (2026-08-24)
+
+- Release packaging now emits a third binary asset,
+  `HyperVibe-Full-Setup-VERSION-arm64.pkg`, alongside the app-only and legacy Full Setup ZIPs.
+  The package uses Apple's Installer UI with bilingual welcome/readme/conclusion/license pages,
+  stages a checksum-sealed payload, and runs the same privileged `do_install.sh` path as Setup.app.
+  It installs HyperVibe, the HAL virtual microphone, router, on-demand capture daemon and the
+  uninstaller with one administrator approval. Existing config is preserved; a public default is
+  seeded only when the active user has no config. The root postinstall refuses config-directory or
+  config-file symlinks and creates only the one default file as the console user; it never
+  recursively changes ownership inside the user's home.
+- The privileged install path verifies the nested app and uninstaller signatures before replacing
+  anything, backs up both installed apps, the HAL driver, microphone support directory and
+  LaunchDaemon, and restores the complete previous set on failure.
+  It kills only the exact `HyperVibe` UI process, never `HyperVibe Host`, retains the 25-second
+  coreaudiod watchdog, and logs native installs to `/var/log/hypervibe-install.log`.
+- First-run permission handling is now one live **System Check**, not a chain of unexplained TCC
+  prompts or dialogs that assume a settings page was completed. Accessibility and Input Monitoring
+  are clearly required; Microphone, Automation, Siri Remote Mic components and Apple's separately
+  distributed PacketLogger are feature-specific. Permission requests occur only from explicit
+  buttons. Status refreshes live on app activation and a short timer, and a newly granted core
+  permission reattaches its HID manager or media event tap without requiring an App restart.
+- The same check is available from the menu bar, Settings and `--system-check`. The menu bar exposes
+  persistent `Permissions: Ready` / `Action needed` health. Both the native package postinstall and
+  legacy Setup.app explicitly launch this screen, so all installation entry points share the same
+  recovery flow. The window remains closable, but users cannot mark setup complete while either
+  core permission is absent.
+- A full dirty-worktree preview with bundle build 5 passed 129/129 core tests, app compilation,
+  payload checksums, deep/strict nested signature verification, Installer XML/script validation,
+  app/package binary hash equality, arm64/macOS 13 checks, public-config isolation and license
+  checks. The locally installed test App was built separately with the unchanged
+  `siriRemote Local Signing` leaf SHA-1
+  `80F746BD1DE5A7CEB835A200CE4E43705F01AEE6`; exactly one UI process runs from
+  `/Applications/HyperVibe.app/Contents/MacOS/HyperVibe` and existing TCC grants were preserved.
+- There is currently no `Developer ID Installer` identity in the keychain. App code-signing and
+  Installer signing are distinct certificate classes; never misuse the local App signer or claim an
+  unsigned package is notarized. `dist/package.sh` signs with
+  `HYPERVIBE_INSTALLER_SIGN_IDENTITY` when a real Installer identity is supplied, otherwise emits
+  an explicitly audited unsigned beta package. Do not install that public/ad-hoc payload over the
+  stable-signed local test App.
+
 ## Maintenance rules
 
 - Preserve user changes and the active config; do not reset or replace mappings without explicit

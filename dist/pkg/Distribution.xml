@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>HyperVibe</title>
+    <organization>com.hypervibe</organization>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <options customize="never" require-scripts="true" hostArchitectures="arm64"/>
+    <welcome file="welcome.html"/>
+    <readme file="readme.html"/>
+    <license file="license.txt"/>
+    <conclusion file="conclusion.html"/>
+
+    <choices-outline>
+        <line choice="default">
+            <line choice="hypervibe-full"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="hypervibe-full" visible="false">
+        <pkg-ref id="com.hypervibe.full"/>
+    </choice>
+
+    <pkg-ref id="com.hypervibe.full" version="@@VERSION@@">HyperVibePayload.pkg</pkg-ref>
+    <pkg-ref id="com.hypervibe.full">
+        <must-close>
+            <app id="com.hypervibe.app"/>
+        </must-close>
+    </pkg-ref>
+</installer-gui-script>

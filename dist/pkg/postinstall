@@ -1,0 +1,65 @@
+#!/bin/bash
+# Native Installer postinstall. The package payload is deliberately staged, verified and then
+# installed by the same watchdog-protected routine used by HyperVibe Setup.app.
+set -Eeuo pipefail
+
+TARGET_VOLUME="${3:-/}"
+if [ "$TARGET_VOLUME" != "/" ]; then
+    echo "HyperVibe can only be installed on the active macOS system volume." >&2
+    exit 1
+fi
+
+STAGING="/Library/Application Support/HyperVibe Installer/payload"
+LOG="/var/log/hypervibe-install.log"
+
+/usr/bin/touch "$LOG"
+/usr/sbin/chown root:wheel "$LOG"
+/bin/chmod 644 "$LOG"
+exec >>"$LOG" 2>&1
+
+echo
+echo "=== HyperVibe native install: $(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
+[ -x "$STAGING/do_install.sh" ] || {
+    echo "Installer payload is incomplete: $STAGING/do_install.sh" >&2
+    exit 1
+}
+
+/bin/bash "$STAGING/do_install.sh" "$STAGING"
+
+# Seed the public default config only for the active desktop user, and never overwrite an existing
+# configuration. If installation happens at the login window, HyperVibe bootstraps it on first run.
+CONSOLE_USER="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
+if [[ "$CONSOLE_USER" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ ]] && [ "$CONSOLE_USER" != "root" ] && [ "$CONSOLE_USER" != "loginwindow" ]; then
+    USER_RECORD="/Users"
+    USER_RECORD="$USER_RECORD/$CONSOLE_USER"
+    USER_HOME="$(/usr/bin/dscl . -read "$USER_RECORD" NFSHomeDirectory 2>/dev/null | /usr/bin/awk '{$1=""; sub(/^ /, ""); print}' || true)"
+    if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
+        CONFIG_DIR="$USER_HOME/.config/siriremote"
+        CONFIG_PATH="$CONFIG_DIR/config.jsonc"
+        CONSOLE_GROUP="$(/usr/bin/id -gn "$CONSOLE_USER")"
+        if [ -L "$CONFIG_DIR" ] || [ -L "$CONFIG_PATH" ]; then
+            echo "→ refused to follow a symbolic link at $CONFIG_PATH" >&2
+        elif [ ! -e "$CONFIG_PATH" ]; then
+            if [ ! -d "$CONFIG_DIR" ]; then
+                /usr/bin/install -d -m 755 -o "$CONSOLE_USER" -g "$CONSOLE_GROUP" "$CONFIG_DIR"
+            fi
+            /usr/bin/install -m 600 -o "$CONSOLE_USER" -g "$CONSOLE_GROUP" \
+                "$STAGING/config.jsonc" "$CONFIG_PATH"
+            echo "→ installed default config for $CONSOLE_USER"
+        else
+            echo "→ preserved existing config for $CONSOLE_USER"
+        fi
+    fi
+fi
+
+/bin/rm -rf "/Library/Application Support/HyperVibe Installer"
+
+# First launch opens the live System Check. Run in the logged-in GUI session so Installer itself
+# never owns Accessibility/Input Monitoring prompts.
+if [[ "$CONSOLE_USER" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ ]] && [ "$CONSOLE_USER" != "root" ] && [ "$CONSOLE_USER" != "loginwindow" ]; then
+    CONSOLE_UID="$(/usr/bin/id -u "$CONSOLE_USER")"
+    /bin/launchctl asuser "$CONSOLE_UID" /usr/bin/sudo -u "$CONSOLE_USER" \
+        /usr/bin/open "/Applications/HyperVibe.app" --args --system-check >/dev/null 2>&1 || true
+fi
+
+echo "=== HyperVibe install complete ==="

@@ -43,6 +43,7 @@ SWIFT_FILES=(
     "AccelCurveView.swift"
     "SettingsView.swift"
     "SettingsWindow.swift"
+    "SystemReadiness.swift"
     "SetupWizard.swift"
     "RemoteView.swift"
     "ShortcutRecorder.swift"

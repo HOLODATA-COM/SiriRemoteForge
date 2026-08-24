@@ -90,15 +90,16 @@ class RemoteDetector {
         IOHIDManagerRegisterDeviceMatchingCallback(manager, deviceAddedCallback, Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterDeviceRemovalCallback(manager, deviceRemovedCallback, Unmanaged.passUnretained(self).toOpaque())
 
-        // Explicitly request Input Monitoring access. IOHIDManagerOpen alone can fail with
-        // kIOReturnNotPermitted (0xE00002E2) WITHOUT surfacing a prompt — especially when launched
-        // as a signed .app — so ask first: this triggers the macOS prompt when the state is
-        // undetermined, and tells us clearly when it's denied.
+        // Startup is passive: never surprise the user with a TCC prompt before the setup screen has
+        // explained why access is needed. The explicit request lives in SystemReadiness. Once the
+        // user grants it, AppDelegate recreates this manager immediately — no relaunch required.
         if #available(macOS 10.15, *) {
-            let granted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+            let granted = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+                == kIOHIDAccessTypeGranted
             rmDebug("🔐 Input Monitoring access: " + (granted
                 ? "granted"
-                : "NOT granted — enable HyperVibe in System Settings → Privacy & Security → Input Monitoring, then relaunch"))
+                : "NOT granted — use HyperVibe → System Check to enable it"))
+            guard granted else { return }
         }
 
         let openResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))

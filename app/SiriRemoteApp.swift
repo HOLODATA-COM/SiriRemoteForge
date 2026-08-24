@@ -53,6 +53,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsModel: SettingsModel?
     private var settingsWindow: SettingsWindowController?
     private var setupWizard: SetupWizardController?
+    /// Passive permission health monitoring. It updates the menu and reattaches only the subsystem
+    /// whose permission changed; it never triggers a TCC prompt by itself.
+    private var permissionHealthTimer: Timer?
+    private var permissionActivationObserver: NSObjectProtocol?
+    private var openSystemCheckObserver: NSObjectProtocol?
+    private var previousAccessibilityGranted: Bool?
+    private var previousInputMonitoringGranted: Bool?
     /// Debounces persisting Tuning-tab slider changes back into config.jsonc.
     private var tunePersistWork: DispatchWorkItem?
     
@@ -66,6 +73,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onLaunchAtLoginChanged: { [weak self] enabled in
                 self?.settingsModel?.tune.launchAtLoginEnabled = enabled
+            },
+            onPermissionStateChanged: { [weak self] in
+                self?.refreshPermissionHealth()
             }
         )
         setupWizard = wizard
@@ -831,9 +841,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Initialize menu bar manager
         menuBarManager = MenuBarManager(statusItem: statusItem)
-        
-        // Check accessibility permissions
-        checkAccessibilityPermissions()
+        startPermissionHealthMonitoring()
         
         // Initialize controllers
         let cursorController = CursorController()
@@ -871,11 +879,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--settings") {
             DispatchQueue.main.async { settingsWin.show() }
         }
+        if CommandLine.arguments.contains("--system-check") {
+            DispatchQueue.main.async { [weak self] in self?.showSetupWizard() }
+        }
 
-        // First launch: run the full setup guide (language → permissions → pairing → startup). It
-        // shows once (persisted) and can be reopened any time from the menu bar.
+        // First launch — or a later permission revocation: open the live system check. A config can
+        // disable automatic presentation, but the warning remains visible in the menu bar and the
+        // same surface can always be reopened manually.
+        let launchReadiness = SystemReadiness.snapshot()
         if model.tune.showSetupWizardOnFirstLaunch,
-           !UserDefaults.standard.bool(forKey: SetupWizardController.completedKey) {
+           (!UserDefaults.standard.bool(forKey: SetupWizardController.completedKey)
+            || !launchReadiness.corePermissionsGranted) {
             DispatchQueue.main.async { [weak self] in self?.showSetupWizard() }
         }
 
@@ -1104,13 +1118,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         
-        // Request Input Monitoring so media key tap works in both CLI and .app
-        if #available(macOS 10.15, *) {
-            if !CGPreflightListenEventAccess() {
-                CGRequestListenEventAccess()
-            }
-        }
-        
         // Virtual-mic fallback (Phase 2b): keep the "Siri Remote Mic" device fed with the
         // Mac's BUILT-IN microphone whenever the virtual device needs fallback audio. The same
         // pinned AUHAL briefly supplies a real level meter while Voice is physically held; no
@@ -1292,6 +1299,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Drop producerActive in the shm ring so a consumer never waits on a dead producer
         // (stop() is idempotent — cleanup runs on both termination paths).
         builtinMicFeeder?.stop()
+        permissionHealthTimer?.invalidate()
+        permissionHealthTimer = nil
+        if let observer = permissionActivationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            permissionActivationObserver = nil
+        }
+        if let observer = openSystemCheckObserver {
+            NotificationCenter.default.removeObserver(observer)
+            openSystemCheckObserver = nil
+        }
         RCDControl.restore()
     }
     
@@ -1342,12 +1359,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     // MARK: - Permissions
-    
-    private func checkAccessibilityPermissions() {
-        // macOS will show its own prompt when needed
-        // No need for redundant custom alert
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
+
+    private func startPermissionHealthMonitoring() {
+        let initial = SystemReadiness.snapshot()
+        previousAccessibilityGranted = initial.accessibilityGranted
+        previousInputMonitoringGranted = initial.inputMonitoringGranted
+        menuBarManager?.updatePermissionStatus(ready: initial.corePermissionsGranted)
+
+        permissionHealthTimer = Timer.scheduledTimer(
+            withTimeInterval: 1.0,
+            repeats: true
+        ) { [weak self] _ in
+            self?.refreshPermissionHealth()
+        }
+        if let timer = permissionHealthTimer { RunLoop.main.add(timer, forMode: .common) }
+
+        permissionActivationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in self?.refreshPermissionHealth() }
+
+        openSystemCheckObserver = NotificationCenter.default.addObserver(
+            forName: .hyperVibeOpenSystemCheck,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in self?.showSetupWizard() }
+    }
+
+    private func refreshPermissionHealth() {
+        let current = SystemReadiness.snapshot()
+        menuBarManager?.updatePermissionStatus(ready: current.corePermissionsGranted)
+
+        if previousInputMonitoringGranted == false, current.inputMonitoringGranted {
+            // A manager opened while Input Monitoring was denied stays unusable. Recreate it as
+            // soon as the user returns from System Settings — no app restart required.
+            remoteDetector?.stopDetection()
+            remoteDetector?.startDetection()
+            rmDebug("🔐 Input Monitoring granted — HID detection reattached")
+        }
+        if previousAccessibilityGranted == false, current.accessibilityGranted {
+            // CGEvent taps created before Accessibility was granted are nil. Rebuild only this tap.
+            mediaKeyInterceptor?.stop()
+            mediaKeyInterceptor?.start()
+            rmDebug("🔐 Accessibility granted — media event tap reattached")
+        }
+
+        previousAccessibilityGranted = current.accessibilityGranted
+        previousInputMonitoringGranted = current.inputMonitoringGranted
     }
 }
 
