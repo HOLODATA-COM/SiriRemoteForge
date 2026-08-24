@@ -1,8 +1,9 @@
 # SiriRemoteForge v0.2.0-beta.5
 
-This beta makes first installation and permission recovery substantially clearer. HyperVibe now
-ships a native macOS Installer and one live System Check that explains, requests and verifies each
-capability without spraying permission prompts across startup.
+This beta is a complete redesign of HyperVibe's installation, first-run and recovery experience.
+It adds a native macOS Installer, rebuilds the old narrow setup walkthrough into a polished live
+System Check, and makes permission health visible throughout the App without spraying prompts
+across startup.
 
 ## Choose one download
 
@@ -37,6 +38,25 @@ Remote.
 - Writes installation diagnostics to `/var/log/hypervibe-install.log` and leaves a native
   uninstaller in Applications.
 
+## Redesigned setup and recovery UI
+
+- Replaces the old compact sequence of modal instructions with a spacious native macOS window:
+  760 × 680 points by default, responsively resizable from 700 × 620 to 1100 × 900, with only the
+  feature list scrolling instead of allowing the entire window to grow beyond the display.
+- Organises setup into five purposeful chapters — language, core control access, voice and advanced
+  actions, live remote connection, and final readiness — with segmented progress and restrained
+  220 ms directional transitions between pages.
+- Introduces a consistent visual system of hierarchical SF Symbols, semantic green/orange/red
+  status badges, rounded capability cards, clear explanatory copy and dedicated action/settings
+  controls. Required and optional capabilities can now be distinguished at a glance.
+- Adds a real summary dashboard for install location, core permissions, Siri Remote connection and
+  remote voice readiness, plus launch-at-login control and any registration error in the same view.
+- Makes the window safely closable and deferable while preventing an incomplete required setup from
+  being marked Done. Language choice and completed state are remembered, so returning users resume
+  at the relevant health checks instead of repeating onboarding.
+- Adds complete English and Simplified Chinese copy for every new state, explanation and recovery
+  action. The native Installer's welcome, contents and completion pages are bilingual as well.
+
 ## One live System Check
 
 - Separates the two core permissions — Accessibility and Input Monitoring — from optional,
@@ -48,8 +68,12 @@ Remote.
 - Refreshes status automatically after returning from System Settings. Granting Accessibility or
   Input Monitoring reattaches the affected event tap or HID manager immediately; no App restart is
   needed.
-- Remains available from the menu bar, Settings and `HyperVibe --system-check`. The menu bar also
-  exposes a persistent Ready / Action needed health line.
+- Remains available from a new **Open System Check…** item in both the menu bar and Settings, or via
+  `HyperVibe --system-check` for diagnostics and support workflows.
+- Adds a persistent **Permissions: Ready** / **Permissions: Action needed** line to the menu bar.
+  When action is needed, the status itself is clickable and opens the exact recovery surface.
+- Detects a later permission revocation on launch instead of silently leaving pointer or button
+  control broken. Normal health polling remains passive and never causes a TCC dialog by itself.
 
 ## Microphone note
 
