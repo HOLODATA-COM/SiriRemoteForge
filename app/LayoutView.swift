@@ -32,6 +32,7 @@ struct LayoutView: View {
     @State private var addName = ""
     @State private var addLayerTitle = ""
     @State private var addLayerColor = ""
+    @State private var addProfileMode = ""
     @State private var addTargetMode = "global"
 
     // The mode currently being viewed (falls back to the default if the selection is gone
@@ -164,8 +165,11 @@ struct LayoutView: View {
     private var hub: some View {
         let apps = config.appsByMode
         let def = config.defaultModeName
-        let layers = Set(layerNames)   // layer modes are edited via the layer selector, not as apps
-        let modes = config.modes.keys.filter { !layers.contains($0) }.sorted { a, b in
+        let layers = Set(layerNames)   // pure layer modes are edited via the layer selector
+        // A legacy/manual config may deliberately use the same mode as both a layer and an app
+        // profile. Keep that app visible in the hub; filtering every layer id made such profiles
+        // impossible to select or repair in the GUI.
+        let modes = config.modes.keys.filter { !layers.contains($0) || apps[$0] != nil }.sorted { a, b in
             if a == def { return true }
             if b == def { return false }
             return chipTitle(a, apps: apps, isDefault: false) < chipTitle(b, apps: apps, isDefault: false)
@@ -217,6 +221,7 @@ struct LayoutView: View {
     private var addChip: some View {
         Button {
             addName = ""; addLayerTitle = ""; addLayerColor = ""
+            addProfileMode = ""
             addIsLayer = false; addTargetMode = config.defaultModeName; showAdd = true
         } label: {
             HStack(spacing: 8) {
@@ -257,12 +262,21 @@ struct LayoutView: View {
                     Button { chooseApp() } label: { Image(systemName: "folder") }
                         .help(L("Choose an app — its bundle id is filled in automatically"))
                 }
+                TextField(L("Profile id (e.g. preview)"), text: $addProfileMode)
+                    .textFieldStyle(.roundedBorder)
+                if addProfileConflictsWithLayer {
+                    Text(L("A profile id cannot also be a layer id."))
+                        .font(.system(size: 11, weight: .medium)).foregroundStyle(Color.red)
+                }
                 HStack(spacing: 6) {
-                    Text(L("uses mode")).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(L("inherits from")).font(.system(size: 11)).foregroundStyle(.secondary)
                     Picker("", selection: $addTargetMode) {
-                        ForEach(sortedModeNames, id: \.self) { Text($0).tag($0) }
+                        ForEach(profileParentModeNames, id: \.self) { Text($0).tag($0) }
                     }.labelsHidden().frame(width: 130)
                 }
+                Text(L("A new profile id gets its own mappings. Enter an existing id to share that profile."))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Spacer()
@@ -283,8 +297,43 @@ struct LayoutView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.prompt = L("Choose")
-        if panel.runModal() == .OK, let url = panel.url, let id = Bundle(url: url)?.bundleIdentifier {
+        if panel.runModal() == .OK, let url = panel.url, let bundle = Bundle(url: url),
+           let id = bundle.bundleIdentifier {
             addName = id
+            if let existing = config.appProfiles[id] {
+                addProfileMode = existing
+            } else {
+                let displayName = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                    ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
+                    ?? url.deletingPathExtension().lastPathComponent
+                addProfileMode = availableProfileID(from: displayName)
+            }
+        }
+    }
+
+    /// Produce a readable, collision-free mode id for an app selected in the file picker. Layer
+    /// ids share the `modes` namespace, so a collision (for example a layer already called
+    /// `preview`) gets `preview-app` instead of silently turning one mode into two concepts.
+    private func availableProfileID(from appName: String) -> String {
+        let folded = appName.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        let pieces = folded.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        let base = pieces.joined(separator: "-").lowercased().isEmpty
+            ? "app" : pieces.joined(separator: "-").lowercased()
+        let taken = Set(config.modes.keys.map { $0.lowercased() })
+            .union(config.settings.layers.map { $0.id.lowercased() })
+        if !taken.contains(base) { return base }
+        if !taken.contains(base + "-app") { return base + "-app" }
+        var suffix = 2
+        while taken.contains("\(base)-app-\(suffix)") { suffix += 1 }
+        return "\(base)-app-\(suffix)"
+    }
+
+    private var addProfileConflictsWithLayer: Bool {
+        let candidate = addProfileMode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty else { return false }
+        return config.settings.layers.contains {
+            $0.id != "BASE" && $0.id.caseInsensitiveCompare(candidate) == .orderedSame
         }
     }
 
@@ -301,8 +350,10 @@ struct LayoutView: View {
             selectedMode = config.defaultModeName
             editLayer = name
         } else {
-            onSave(config.setAppProfile(bundleID: name, mode: addTargetMode))
-            selectedMode = addTargetMode
+            let profile = addProfileMode.trimmingCharacters(in: .whitespacesAndNewlines)
+            onSave(config.addAppProfile(bundleID: name, mode: profile, inherits: addTargetMode))
+            selectedMode = profile
+            editLayer = nil
         }
         showAdd = false
     }
@@ -310,7 +361,10 @@ struct LayoutView: View {
     private var canCreateAdd: Bool {
         let name = addName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return false }
-        if !addIsLayer { return true }
+        if !addIsLayer {
+            return !addProfileMode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !addProfileConflictsWithLayer
+        }
         guard name != "BASE", config.settings.layers.count < 10 else { return false }
         return !config.settings.layers.contains {
             $0.id.caseInsensitiveCompare(name) == .orderedSame
@@ -578,6 +632,13 @@ struct LayoutView: View {
     }
 
     private var sortedModeNames: [String] { config.modes.keys.sorted() }
+
+    /// A new app profile should inherit from another app/base mode, never from a layer mode. Layer
+    /// modes share Config's storage namespace but have different fallback semantics in Controller.
+    private var profileParentModeNames: [String] {
+        let layers = Set(layerNames)
+        return config.modes.keys.filter { !layers.contains($0) }.sorted()
+    }
 
     private struct Slot { let slotKey: String; let label: String }
     private func slots(for base: String) -> [Slot] {

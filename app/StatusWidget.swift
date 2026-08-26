@@ -245,6 +245,9 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     /// that app for a moment so the confirmed activation updates the subtitle instead of producing
     /// a second, visually noisy bounce of the same icon.
     private var pendingActivation: (name: String, time: CFTimeInterval)?
+    /// The frontmost app is part of the resting context, not only a short-lived activation event.
+    /// Keeping it here makes the app-profile half of the app × layer mapping continuously visible.
+    private var currentApplication: (bundleID: String, name: String)?
     private var lastEvent: (key: String, time: CFTimeInterval)?
     /// Rate-driven controls own one stable presentation for the complete burst. Their input can
     /// arrive faster than a 220 ms animation, so subsequent ticks extend the dwell (or atomically
@@ -382,9 +385,13 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
 
     func showApplication(bundleID: String, duration: TimeInterval = 0.90) {
         onMain { [weak self] in
-            guard let self = self, self.enabled, self.isConnected, !self.isHolding else { return }
-            self.activeContinuousFamily = nil
+            guard let self = self else { return }
             let info = self.applicationInfo(bundleID: bundleID)
+            self.currentApplication = (bundleID, info.name)
+            // Record app context even while the remote/widget is unavailable. The next connection
+            // must rest on the actual frontmost app instead of waiting for another activation edge.
+            guard self.enabled, self.isConnected, !self.isHolding else { return }
+            self.activeContinuousFamily = nil
             let now = CACurrentMediaTime()
             let confirmsPendingLaunch: Bool
             if let pending = self.pendingActivation,
@@ -1075,8 +1082,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
 
     private func idleFace() -> Face {
         let appearance = layerAppearance(currentLayerID)
+        let subtitle = currentApplication.map { L("%@ · Active App", $0.name) }
+            ?? L("Current Layer")
         return Face(key: "layer:\(currentLayerID)", title: appearance.label,
-                    subtitle: L("Current Layer"),
+                    subtitle: subtitle,
                     image: symbol("square.stack.3d.up.fill", size: 26),
                     symbolName: "square.stack.3d.up.fill",
                     symbolCue: .layer,

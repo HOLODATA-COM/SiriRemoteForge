@@ -232,6 +232,28 @@ public extension Config {
         }
         return copy
     }
+
+    /// Create an app mode when needed and map a bundle id to it in one valid edit. This is the
+    /// operation the Layout editor needs when adding the first app-specific profile: mapping an app
+    /// to a mode that does not exist yet would fail ConfigLoader validation, while only creating the
+    /// mode would leave the app on the default profile until a second save.
+    func addAppProfile(bundleID: String, mode: String, inherits: String?) -> Config {
+        let bundleID = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mode = mode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bundleID.isEmpty, !mode.isEmpty else { return self }
+
+        var copy = self
+        if copy.modes[mode] == nil {
+            // Keep the mutator's output loadable even if a non-UI caller supplies a stale parent
+            // or tries to make the new mode inherit itself.
+            let validParent = inherits.flatMap {
+                $0 != mode && copy.modes[$0] != nil ? $0 : nil
+            }
+            copy.modes[mode] = Mode(inherits: validParent, bindings: [:])
+        }
+        copy.appProfiles[bundleID] = mode
+        return copy
+    }
 }
 
 public extension Config {

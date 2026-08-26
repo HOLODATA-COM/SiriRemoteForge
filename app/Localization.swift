@@ -103,6 +103,7 @@ extension Loc {
 
         // MARK: Status widget & HUD
         "Active App": "当前应用",
+        "%@ · Active App": "%@ · 当前应用",
         "Current Layer": "当前层",
         "Keep holding": "继续按住",
         "Hold for %@": "按住 · %@",
@@ -259,6 +260,10 @@ extension Loc {
         "App bundle id (e.g. com.apple.Notes)": "应用 bundle id(例如 com.apple.Notes)",
         "App name (e.g. Safari)": "应用名称(例如 Safari)",
         "App profile": "应用配置",
+        "Profile id (e.g. preview)": "配置 id（例如 preview）",
+        "inherits from": "继承自",
+        "A new profile id gets its own mappings. Enter an existing id to share that profile.": "新的配置 id 会拥有独立按键映射；输入已有 id 可共用该配置。",
+        "A profile id cannot also be a layer id.": "应用配置 id 不能同时作为层 id。",
         "AppleScript source": "AppleScript 源码",
         "Apps & web": "应用与网页",
         "Back": "返回",

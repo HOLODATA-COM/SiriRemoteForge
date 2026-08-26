@@ -411,7 +411,8 @@ The status widget is on by default. Turn it off under **Settings → Tuning → 
 set `"statusWidgetEnabled": false`. The compact glass card rests on the current layer, then briefly
 settles on the operation that actually ran. App activation uses the app's real icon; media,
 navigation, mouse, voice, and window actions use an action-specific symbol (or the binding's custom
-`label` / `icon`). It then returns to the current layer automatically.
+`label` / `icon`). It then returns to the current layer automatically, while retaining the
+frontmost app's name in the resting subtitle so both halves of the app × layer context stay visible.
 
 The display time follows the physical gesture: a short tap holds for about 0.7 seconds;
 double/triple taps stay a little longer. For a release-to-select hold, the compact card starts its

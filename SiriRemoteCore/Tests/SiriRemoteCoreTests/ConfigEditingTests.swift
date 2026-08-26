@@ -106,4 +106,34 @@ final class ConfigEditingTests: XCTestCase {
         XCTAssertNil(c.appProfiles["com.google.Chrome"])
         assertReloads(c)
     }
+
+    func testAddAppProfileCreatesModeAndMappingAtomically() throws {
+        let c = try base().addAppProfile(bundleID: "com.apple.Preview",
+                                         mode: "preview", inherits: "global")
+        XCTAssertEqual(c.appProfiles["com.apple.Preview"], "preview")
+        XCTAssertEqual(c.modes["preview"]?.inherits, "global")
+        XCTAssertEqual(c.modes["preview"]?.bindings, [:])
+        assertReloads(c)
+    }
+
+    func testAddAppProfileReusesExistingModeWithoutChangingIt() throws {
+        let c = try base().addAppProfile(bundleID: "com.google.Chrome",
+                                         mode: "music", inherits: "child")
+        XCTAssertEqual(c.appProfiles["com.google.Chrome"], "music")
+        XCTAssertEqual(c.modes["music"]?.inherits, "global",
+                       "sharing an existing profile must not rewrite its inheritance")
+        assertReloads(c)
+    }
+
+    func testAddAppProfileDropsUnknownOrSelfParentSoResultStaysValid() throws {
+        let unknown = try base().addAppProfile(bundleID: "com.apple.Preview",
+                                               mode: "preview", inherits: "missing")
+        XCTAssertNil(unknown.modes["preview"]?.inherits)
+        assertReloads(unknown)
+
+        let itself = try base().addAppProfile(bundleID: "com.apple.Notes",
+                                              mode: "notes", inherits: "notes")
+        XCTAssertNil(itself.modes["notes"]?.inherits)
+        assertReloads(itself)
+    }
 }
