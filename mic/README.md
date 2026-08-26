@@ -109,15 +109,29 @@ Definitive GO. Concretely, from one live capture:
   user: "很清楚" (crystal clear).
 
 **Exact voice-frame format — the reference for the live parser (verified against 804 real frames):**
-- Voice = an **ATT Handle-Value-Notification (opcode `0x1B`) on attribute handle `0x0035`**, arriving
-  on the remote's ACL connection handle (dynamic; was `0x0406` this session). Filter signature in the
-  raw bytes: `04 00 1B 35 00` (L2CAP CID 0x0004 = ATT, opcode 0x1B, handle 0x0035).
+- Voice = an **ATT Handle-Value-Notification (opcode `0x1B`) on a firmware-dependent attribute
+  handle**, arriving on the remote's ACL connection handle (dynamic; was `0x0406` this session).
+  Firmware `0x0021` uses attribute handle `0x0035`, giving the raw-byte signature `04 00 1B 35 00`
+  (L2CAP CID 0x0004 = ATT, opcode 0x1B, little-endian handle 0x0035).
 - ATT value layout: `[4-byte sequence/header][1-byte Opus length L][Opus frame of L bytes]`, the Opus
   frame beginning with **TOC `0xB8`** (CELT-only wideband, 20 ms).
 - Decode each frame at 48 kHz mono → 960 samples. ~50 fps.
 - **No enable-write needed:** with the remote paired to macOS normally (HyperVibe just running), holding
   Siri makes the stream flow on its own; we only sniff. `packetlogger audio` does NOT extract these
   (it doesn't recognize this GATT voice), so our own parse + OpusVoiceDecoder is the path.
+
+### Additional firmware validation (2026-08-26)
+
+A Siri Remote with product ID `0x0315` and firmware `0x0033`, tested on macOS 26.6.2 (25G83), sends
+the same validated Opus voice format on attribute handle `0x0036` instead of `0x0035`:
+
+- The original parser, which required `04 00 1B 35 00`, extracted 0 voice frames.
+- Accepting `0x0036` extracted 619 voice frames; all 619 decoded, with 0 decoder errors and non-silent
+  PCM output (RMS 3774.7, peak 32767).
+- The parser therefore accepts the two observed voice handles (`0x0035` and `0x0036`) while retaining
+  its sequence, length, and Opus TOC checks to reject unrelated ATT notifications.
+
+The raw capture is intentionally not included because it contains private voice and device identifiers.
 
 Reproduce offline from a capture: `tmp/decode_voice.py` (ctypes → libopus) parses `mic_raw.txt` and
 writes a WAV. That script + `OpusVoiceDecoder.swift` together are stages ②–④, now validated on real data.
