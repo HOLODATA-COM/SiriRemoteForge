@@ -11,6 +11,159 @@
         <!-- hypervibe:stable:end -->
 
         <!-- hypervibe:beta:start -->
+    <item>
+        <title>HyperVibe 0.2.0-beta.6</title>
+        <link>https://github.com/HOLODATA-COM/SiriRemoteForge/releases/tag/v0.2.0-beta.6</link>
+        <pubDate>Sat, 29 Aug 2026 13:55:50 +1000</pubDate>
+        <sparkle:version>2002006</sparkle:version>
+        <sparkle:shortVersionString>0.2.0-beta.6</sparkle:shortVersionString>
+            <sparkle:channel>beta</sparkle:channel>
+        <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+        <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+        <description sparkle:format="markdown"><![CDATA[
+# SiriRemoteForge v0.2.0-beta.6
+
+> **One-time manual upgrade:** beta.5 and earlier do not contain the updater, so they cannot discover
+> beta.6 automatically. Install beta.6 once from this Release. From beta.6 onward, HyperVibe can
+> discover and download authenticated app-only updates automatically.
+
+This beta turns HyperVibe into a much more complete input and presentation system. It introduces
+native low-latency voice-to-text, a global External / Final / Live voice switch, a dedicated Voice
+capsule, richer state-aware motion, the floating presentation remote, GUI shortcut capture, and the
+first authenticated automatic-update channel.
+
+## Choose one download
+
+- **Native Full Installer (recommended for a first installation):**
+  `HyperVibe-Full-Setup-0.2.0-beta.6-arm64.pkg`
+  Installs HyperVibe, Siri Remote Mic, the on-demand voice-capture service and the uninstaller with
+  one administrator approval.
+- **App only (recommended for an existing installation):**
+  `HyperVibe-0.2.0-beta.6-macOS-arm64.zip`
+  Replaces only `HyperVibe.app`; it does not modify the optional microphone stack.
+- **Legacy Full Setup:** `HyperVibe-Full-Setup-0.2.0-beta.6-arm64.zip`
+  Retained for systems where the native package cannot be used.
+
+These beta artifacts are not Apple-notarized. The App bundles are ad-hoc signed and the native
+package is unsigned because the project does not yet have Developer ID distribution certificates.
+Control-click the download and choose **Open** once; never disable Gatekeeper globally. HyperVibe
+requires macOS 13 or newer on Apple silicon.
+
+## Native Voice: fast Final and true Live output
+
+- Adds App-native speech-to-text driven by the remote side button. Capture starts on the physical
+  press edge, cloud connections are pre-warmed, credentials are cached outside the button hot path,
+  and sub-one-second accidental recordings are discarded locally.
+- Adds one global Voice mode on every Layer. Hold **Mute** and tap **Side** to cycle External,
+  Final and Live without changing Layer. The switch is intentionally silent and both the persistent
+  widget and temporary Voice capsule animate to the new state.
+- **Live** streams real transcript deltas directly to the captured caret and skips the polishing
+  round trip. **Final** transcribes the completed utterance, applies the personal dictionary,
+  optionally performs a constrained cleanup with OpenAI or DeepSeek, and inserts once.
+- Strengthens cleanup prompts and validates the response so a model cannot answer the dictated
+  message instead of editing it. Unsafe or failed rewrites fall back to the dictionary-corrected
+  transcript.
+- Captures the original editor before opening any HUD, refuses secure fields, attempts direct
+  Accessibility insertion, falls back to compatibility paste, and finally copies when a target
+  cannot accept text. Double-click Side can recover the previous dictation.
+- Adds a friendly dictionary editor plus JSONC parity for canonical terms and recognition aliases.
+  Model selection, language hints, delivery behaviour, recording limits, feedback and presentation
+  remain configurable.
+- Adds matched short Sci-fi start/stop cues. The stop cue begins only after capture closes, so it
+  cannot leak into the transcript. Both the cue and its volume can be disabled or adjusted.
+
+## Voice UI with truthful acoustic detail
+
+- Adds a separate, draggable Typeless-style Voice capsule at the lower centre of the display that
+  contains the pointer. It follows display changes, can be moved during a turn, and is independent
+  of the always-on Layer widget.
+- Uses the real acoustic waveform rather than decorative bars. Level, pitch confidence and spectral
+  brightness contribute different visual dimensions while adaptive per-hold normalisation keeps
+  different microphone sources consistent.
+- Gives Final one continuous Listening → Transcribing → Polishing → Delivering → result hand-off.
+  Live returns directly to the current Layer after successful release instead of displaying stages
+  it did not run. External never opens the Voice capsule.
+- Makes rapid transitions interruption-safe: a new hold cannot resurrect stale text, flash the
+  Layer face between Voice stages, resize the card or leave a one-pixel typography jump.
+
+## More expressive, state-aware feedback
+
+- Rebuilds Layer, action, hold, App-recognition and system-control transitions around semantic SF
+  Symbol layers. App Wheel's nine dots now relay into place instead of appearing as one flat image.
+- Presents real volume, mute and brightness state with stable geometry. Repeated adjustment ticks
+  update the existing face without replaying an entrance animation, and stale system samples cannot
+  override a newer rapid press.
+- Synchronises long-press artwork, compact progress and the large HUD to one monotonic clock. A busy
+  UI thread can no longer let Close / Quit artwork lag behind the water-progress stage.
+- Keeps the accepted 0.18-second visual lead while preserving the configured action threshold. The
+  compact status frame and Layer-colour aura stay fixed in size throughout transitions.
+
+## Configuration and presentation controls
+
+- Supports up to ten named, coloured Layers in a looping order, with interface icons configurable
+  from JSONC and safe SF Symbol fallbacks. Dynamic volume, brightness, mute and App icons continue
+  to follow measured state automatically.
+- Adds direct keyboard shortcut capture in Layout, including physical left/right modifiers,
+  modifier-only chords, function keys and the `fn` modifier, while retaining manual entry.
+- Adds a floating, transparent presentation remote with live button and touchpad feedback. It can be
+  dragged, corner-resized, switched among three size presets or closed from a right-click menu; its
+  enabled state is shared by Settings, the menu bar and JSONC.
+- Improves Browser Back's staged hold behaviour, per-binding hold delays, Layer 3 system controls,
+  circular scrolling, horizontal scrolling and independent pointer/ring acceleration tuning.
+
+## Automatic updates begin here
+
+- Embeds Sparkle with a pinned dependency checksum, an Ed25519 public key and a signed beta channel.
+  The App checks daily by default, can download quietly, and exposes **Check for Updates…** in both
+  Settings and the menu bar.
+- Automatic updates carry only the app-only ZIP. They do not restart system audio or request an
+  administrator password; Full Setup remains an explicit manual choice for the optional microphone
+  components.
+- Update checks and background downloads are independently controlled by
+  `settings.automaticUpdateChecksEnabled` and
+  `settings.automaticallyDownloadUpdatesEnabled` in `config.jsonc`.
+
+## API credential storage in this public beta
+
+Keys can be entered, replaced, tested and removed only from HyperVibe Settings. Certificate-bound
+local builds continue to use the macOS login Keychain. Because this public beta is ad-hoc signed, it
+stores keys as plaintext in a dedicated current-user-only
+`~/Library/Application Support/HyperVibe/Credentials/credentials.json` file. The directory is mode
+`0700`, the file is mode `0600`, and keys never enter the shareable config, App bundle, logs, release
+archives or Git. This prevents accidental disclosure, but it does not defend against malware already
+running as the signed-in macOS user.
+
+## Verification
+
+- SiriRemoteCore passes all 134 tests.
+- The complete packaged App passes all 73 native Voice self-checks, including dictionary safety,
+  streaming deltas, audio conversion, packetisation, prompt constraints, delivery fallback, cue
+  resources and local credential-file lifecycle and permissions.
+- The complete arm64 App, microphone router, HAL plug-in and capture daemon build for macOS 13 or
+  newer. Release audit expands every archive and package, verifies signatures, payload seals,
+  architecture, minimum OS, updater keys, Sparkle and UI-SFX licenses, exact Voice cue resources,
+  public configuration and absence of personal paths, device identifiers and PacketLogger.
+
+Use the attached `SHA256SUMS.txt` to verify all downloads:
+
+```sh
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+This remains prerelease software. It relies on private macOS frameworks and an undocumented
+Bluetooth voice path; please include the macOS version, remote firmware and relevant logs when
+reporting a reproducible issue.
+
+        ]]></description>
+        <enclosure url="https://github.com/HOLODATA-COM/SiriRemoteForge/releases/download/v0.2.0-beta.6/HyperVibe-0.2.0-beta.6-macOS-arm64.zip"
+                   length="4105276"
+                   type="application/octet-stream"
+                   sparkle:edSignature="BhNKJ2Mj7B6HFeA/5BwwCqSuvluEgwgVFXct9JRboYh/y4wR97IzGoG8cfeY8zT/txig8paEzbIkqAZS2AhlBA==" />
+    </item>
         <!-- hypervibe:beta:end -->
     </channel>
 </rss>
+<!-- sparkle-signatures:
+edSignature: uAyxiU0ytlpdp6jWdlMyFGOGnV+CZcHgeCVqWzlUl4qu3RKPiaigPaAd/F/Kn3s5l1jHJmElDQ73GjByvAroBg==
+length: 9903
+-->
