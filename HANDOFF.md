@@ -2764,6 +2764,27 @@ feel that evening; if any of these is wrong, this is where to look:
   the media event tap installed. The preceding App is recoverable from
   `/private/tmp/hypervibe-local20-install.D9aI8E/HyperVibe.app`.
 
+## beta.6 publication and authenticated feed (2026-08-29)
+
+- Public prerelease `v0.2.0-beta.6` is live at
+  `https://github.com/HOLODATA-COM/SiriRemoteForge/releases/tag/v0.2.0-beta.6`. Its tag points to
+  source commit `c749175f0a51b2dba29099faae481657513bf7b6`; the release contains the app-only arm64 ZIP,
+  native Full Setup PKG, legacy Full Setup ZIP and `SHA256SUMS.txt`.
+- A clean isolated checkout produced all three artifacts. Their local SHA-256 verification passed,
+  the packaged public App passed **73/73** native Voice checks, and the release audit passed before
+  upload. GitHub reports the same digests, and the app-only enclosure resolves publicly with HTTP
+  200 and the expected 4,105,276-byte length.
+- Commit `ff22296` publishes the byte-identical generated `appcast.xml` only after the release assets
+  became available. The beta item uses build `2002006`, channel `beta`, macOS 13 / arm64
+  requirements and an Ed25519 enclosure signature. Online `main/appcast.xml` was downloaded and
+  compared byte-for-byte with the local signed feed.
+- beta.5 and earlier still require one manual beta.6 installation because those binaries do not
+  contain Sparkle. Starting with beta.6, authenticated app-only updates can be discovered and
+  downloaded automatically; this boundary must remain explicit in future support answers.
+- Publication did not install or launch the public ad-hoc bundle locally. The live test App remains
+  the deep/strict-valid `/Applications/HyperVibe.app`, Authority `siriRemote Local Signing`, with
+  exactly one UI process at the required executable path.
+
 ## Maintenance rules
 
 - Preserve user changes and the active config; do not reset or replace mappings without explicit
