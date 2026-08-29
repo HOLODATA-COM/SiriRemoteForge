@@ -1,0 +1,60 @@
+name: Star History
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  watch:
+    types: [started]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-history
+  cancel-in-progress: true
+
+jobs:
+  render:
+    name: Render chart
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare chart branch
+        shell: bash
+        run: |
+          if git ls-remote --exit-code --heads origin star-history >/dev/null 2>&1; then
+            git fetch origin star-history:refs/remotes/origin/star-history
+            git worktree add "${RUNNER_TEMP}/star-history" origin/star-history
+          else
+            git worktree add --detach "${RUNNER_TEMP}/star-history" HEAD
+            git -C "${RUNNER_TEMP}/star-history" switch --orphan star-history
+          fi
+
+      - name: Render current star history
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/render_star_history.py \
+            --repo "${{ github.repository }}" \
+            --output-light "${RUNNER_TEMP}/star-history/assets/star-history.svg" \
+            --output-dark "${RUNNER_TEMP}/star-history/assets/star-history-dark.svg"
+
+      - name: Publish chart
+        working-directory: ${{ runner.temp }}/star-history
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/star-history.svg assets/star-history-dark.svg
+          if git diff --cached --quiet; then
+            echo "Star history is already current."
+            exit 0
+          fi
+          git commit -m "chore: update star history [skip ci]"
+          git push origin HEAD:star-history

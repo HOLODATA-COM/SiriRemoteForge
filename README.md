@@ -873,3 +873,14 @@ to the portions of this software that originate upstream.
 
 Automatic updates use [Sparkle 2](https://sparkle-project.org/). Its complete license and
 third-party notices ship inside every app bundle as `Sparkle-LICENSE.txt`.
+
+## Star history
+
+<p align="center">
+  <a href="https://github.com/HOLODATA-COM/SiriRemoteForge/stargazers">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/HOLODATA-COM/SiriRemoteForge/star-history/assets/star-history-dark.svg">
+      <img src="https://raw.githubusercontent.com/HOLODATA-COM/SiriRemoteForge/star-history/assets/star-history.svg" width="800" alt="SiriRemoteForge GitHub star history">
+    </picture>
+  </a>
+</p>
