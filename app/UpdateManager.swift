@@ -10,7 +10,7 @@ import AppKit
 import Sparkle
 
 @MainActor
-final class UpdateManager: NSObject, SPUUpdaterDelegate, @MainActor SPUStandardUserDriverDelegate {
+final class UpdateManager: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
     private lazy var controller = SPUStandardUpdaterController(
         startingUpdater: false,
         updaterDelegate: self,
@@ -58,9 +58,9 @@ final class UpdateManager: NSObject, SPUUpdaterDelegate, @MainActor SPUStandardU
 
     // MARK: - Gentle scheduled reminders
 
-    var supportsGentleScheduledUpdateReminders: Bool { true }
+    nonisolated var supportsGentleScheduledUpdateReminders: Bool { true }
 
-    func standardUserDriverShouldHandleShowingScheduledUpdate(
+    nonisolated func standardUserDriverShouldHandleShowingScheduledUpdate(
         _ update: SUAppcastItem,
         andInImmediateFocus immediateFocus: Bool
     ) -> Bool {
@@ -69,21 +69,21 @@ final class UpdateManager: NSObject, SPUUpdaterDelegate, @MainActor SPUStandardU
         immediateFocus
     }
 
-    func standardUserDriverWillHandleShowingUpdate(
+    nonisolated func standardUserDriverWillHandleShowingUpdate(
         _ handleShowingUpdate: Bool,
         forUpdate update: SUAppcastItem,
         state: SPUUserUpdateState
     ) {
-        if !state.userInitiated && !handleShowingUpdate {
-            onUpdateAvailable?(update.displayVersionString)
-        }
+        guard !state.userInitiated, !handleShowingUpdate else { return }
+        let version = update.displayVersionString
+        Task { @MainActor [weak self] in self?.onUpdateAvailable?(version) }
     }
 
-    func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
-        onUpdateCleared?()
+    nonisolated func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
+        Task { @MainActor [weak self] in self?.onUpdateCleared?() }
     }
 
-    func standardUserDriverWillFinishUpdateSession() {
-        onUpdateCleared?()
+    nonisolated func standardUserDriverWillFinishUpdateSession() {
+        Task { @MainActor [weak self] in self?.onUpdateCleared?() }
     }
 }
