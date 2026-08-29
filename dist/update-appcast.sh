@@ -20,15 +20,20 @@ done
 
 SPARKLE_ROOT="$(app/prepare_sparkle.sh)"
 SIGN_UPDATE="$SPARKLE_ROOT/bin/sign_update"
-SIGN_KEY_ARGS=()
 if [ -n "${HYPERVIBE_SPARKLE_PRIVATE_KEY_FILE:-}" ]; then
     [ -f "$HYPERVIBE_SPARKLE_PRIVATE_KEY_FILE" ] || {
         echo "Sparkle private-key file not found" >&2
         exit 1
     }
-    SIGN_KEY_ARGS=(--ed-key-file "$HYPERVIBE_SPARKLE_PRIVATE_KEY_FILE")
 fi
-SIGNATURE="$("$SIGN_UPDATE" "${SIGN_KEY_ARGS[@]}" -p "$ARCHIVE")"
+run_sign_update() {
+    if [ -n "${HYPERVIBE_SPARKLE_PRIVATE_KEY_FILE:-}" ]; then
+        "$SIGN_UPDATE" --ed-key-file "$HYPERVIBE_SPARKLE_PRIVATE_KEY_FILE" "$@"
+    else
+        "$SIGN_UPDATE" "$@"
+    fi
+}
+SIGNATURE="$(run_sign_update -p "$ARCHIVE")"
 [ -n "$SIGNATURE" ] || { echo "Sparkle archive signing returned an empty signature" >&2; exit 1; }
 LENGTH="$(/usr/bin/stat -f '%z' "$ARCHIVE")"
 CHANNEL="stable"
@@ -38,7 +43,7 @@ PUB_DATE="$(LC_ALL=C /bin/date -R)"
 /usr/bin/xcrun swift dist/tools/update_appcast.swift \
     "$APPCAST" "$VERSION" "$BUILD_NUMBER" "$(basename "$ARCHIVE")" \
     "$SIGNATURE" "$LENGTH" "$NOTES" "$CHANNEL" "$PUB_DATE"
-"$SIGN_UPDATE" "${SIGN_KEY_ARGS[@]}" "$APPCAST" --disable-signing-warning
-"$SIGN_UPDATE" "${SIGN_KEY_ARGS[@]}" --verify "$APPCAST"
+run_sign_update "$APPCAST" --disable-signing-warning
+run_sign_update --verify "$APPCAST"
 /usr/bin/xmllint --noout "$APPCAST"
 echo "✓ signed appcast updated ($CHANNEL, $VERSION, build $BUILD_NUMBER)"

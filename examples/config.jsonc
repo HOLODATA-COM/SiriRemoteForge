@@ -93,7 +93,9 @@
       "minimumRecordingSeconds": 1, // shorter turns stay local and are discarded without output
       "maxRecordingSeconds": 120,
       "dictionary": [
-        { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] }
+        { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] },
+        { "term": "hypergraph", "aliases": ["hyper graph"] },
+        { "term": "skill", "aliases": [] }
       ]
     },
     // Circular scroll (iPod wheel): circle a finger on the OUTER ring to scroll.

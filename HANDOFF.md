@@ -2747,6 +2747,13 @@ feel that evening; if any of these is wrong, this is where to look:
 - Release audit now requires the two exact UI-SFX Sci-fi Voice cue hashes and their shipped license.
   Release notes for `0.2.0-beta.6` begin with the one-time manual-upgrade boundary: beta.5 and older
   have no updater; beta.6 begins the authenticated beta channel.
+- The active private dictionary retains its six existing terms and now adds canonical `hypergraph`
+  (recognition alias `hyper graph`) and `skill`. Both public example configurations include the same
+  two beta defaults. The edited live JSONC was parsed through the real `ConfigLoader` before hot
+  reload; its pre-edit copy remains in `/private/tmp/hypervibe-keywords.SI1FPw/`.
+- `dist/update-appcast.sh` now routes optional key-file arguments through a helper function instead
+  of expanding an empty Bash array under `set -u`. This fixes the macOS Bash 3.2 failure that appeared
+  only when Sparkle correctly read its private key from the login Keychain.
 - Verification so far: app compilation passes; SiriRemoteCore passes **134/134** tests; the complete
   stable-signed bundle passes **73/73** native Voice checks, including local JSON round-trip,
   provider-preserving update, deletion and `0600/0700` permissions. Candidate
