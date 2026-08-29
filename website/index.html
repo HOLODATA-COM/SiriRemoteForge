@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f4ef">
-  <meta name="description" content="HyperVibe 把 Siri Remote 变成完整的 macOS 输入层：触控板指针、加速圆环滚动、多阶段手势、App × Layer、语音输入与 Agent 可编辑配置。">
+  <meta name="description" content="HyperVibe 把 Siri Remote 变成完整的 macOS 输入层：13 × 6 输入矩阵、触控板指针、双轴加速圆环、App × Layer、全局低延迟语音、原生反馈与 Agent 可编辑配置。">
   <meta property="og:title" content="HyperVibe — Siri Remote 的 macOS 输入层">
-  <meta property="og:description" content="从语音到指针、滚动、点击、拖动与上下文操作，一只遥控器完成完整输入链。">
+  <meta property="og:description" content="从 Agent coding 到现场演示：语音、指针、双轴滚动、点击、拖动、13 个按键与 App × Layer，共同完成一条不中断的输入链。">
   <title>HyperVibe — Siri Remote 的 macOS 输入层</title>
   <link rel="icon" type="image/png" href="media/hypervibe-icon.png">
   <link rel="stylesheet" href="styles.css">
@@ -19,8 +19,9 @@
         <span>HyperVibe</span>
       </a>
       <nav aria-label="页面章节">
+        <a href="#workflows">场景</a>
         <a href="#control">触控</a>
-        <a href="#gestures">手势</a>
+        <a href="#inputs">全部输入</a>
         <a href="#layers">App × Layer</a>
         <a href="#feedback">反馈</a>
         <a href="#voice">语音</a>
@@ -37,13 +38,15 @@
           <p class="overline"><i></i> macOS CONTROL LAYER</p>
           <h1>HyperVibe</h1>
           <p class="hero-title">Siri Remote 的完整 <span class="nowrap">macOS 输入层</span></p>
-          <p class="hero-summary">语音结束以后，不必再回到鼠标和触控板。移动、滚动、点击、拖动、切换 App 与 Layer，都留在同一只遥控器上。</p>
+          <p class="hero-summary">按下侧键，语音立即开始；边说，文字边出现。说完以后也不必回到鼠标和触控板——移动、滚动、点击、拖动、切换 App 与 Layer，都留在同一只遥控器上。</p>
 
           <ol class="hero-signals" aria-label="核心输入能力">
             <li class="is-active" data-hero-signal><b>01</b><span>触控板指针</span><em>VELOCITY</em></li>
             <li data-hero-signal><b>02</b><span>圆环滚动</span><em>ACCELERATED</em></li>
-            <li data-hero-signal><b>03</b><span>App × Layer</span><em>CONTEXTUAL</em></li>
-            <li data-hero-signal><b>04</b><span>实时语音</span><em>LIVE AUDIO</em></li>
+            <li data-hero-signal><b>03</b><span>13 × 6 输入矩阵</span><em>GESTURE GRAMMAR</em></li>
+            <li data-hero-signal><b>04</b><span>App × Layer</span><em>CONTEXTUAL</em></li>
+            <li data-hero-signal><b>05</b><span>低延迟语音</span><em>LOW LATENCY</em></li>
+            <li data-hero-signal><b>06</b><span>原生动态反馈</span><em>VISIBLE STATE</em></li>
           </ol>
 
           <div class="hero-actions">
@@ -61,9 +64,10 @@
               <source src="media/current-status-semantic.mp4" type="video/mp4">
             </video>
           </figure>
-          <div class="hero-live-tag"><i></i><span>LIVE APP BUILD</span><b>23 AUG 2026</b></div>
+          <div class="hero-live-tag"><i></i><span>LIVE APP BUILD</span><b>28 AUG 2026</b></div>
         </div>
       </div>
+
     </section>
 
     <section class="gap section-pad" id="agents">
@@ -113,6 +117,119 @@
           </article>
         </div>
       </div>
+
+      <div class="shell capability-catalog">
+        <header class="catalog-heading">
+          <div><p>ACTION VOCABULARY</p><h3>配置的不是“按钮”。<br>是 macOS 可以执行的动作语言。</h3></div>
+          <span>同一套 Action 可以来自 GUI、JSONC、脚本或 Agent。App 只维护一份真实配置，因此没有“界面里一套、文件里另一套”的漂移。</span>
+        </header>
+
+        <div class="action-groups">
+          <article><span>INPUT</span><h4>输入与媒体</h4><div><code>keystroke</code><code>repeatKey</code><code>mouse</code><code>media</code></div><p>发送完整快捷键、按住自动重复、鼠标点击与滚动，以及真实媒体键。</p></article>
+          <article><span>WINDOWS</span><h4>窗口与桌面</h4><div><code>space</code><code>fullscreen</code><code>minimize</code><code>closeWindow</code></div><p>切换 Space、全屏、最小化，或真正点击窗口红色关闭按钮，而不是误关浏览器 Tab。</p></article>
+          <article><span>OPEN + AUTOMATE</span><h4>打开与自动化</h4><div><code>launch</code><code>appWheel</code><code>AppleScript</code><code>shell</code></div><p>启动 App 或 URL、召唤径向启动器，以及接入现有 macOS 自动化工作流。</p></article>
+          <article><span>STATE</span><h4>系统与上下文</h4><div><code>layer</code><code>layerCycle</code><code>brightness</code><code>mode</code></div><p>改变整套遥控器语义、循环自定义 Layer、控制真实亮度，或切换应用模式。</p></article>
+        </div>
+
+        <div class="agent-config-flow" data-loop-root>
+          <div class="agent-request">
+            <span>YOU → AGENT</span>
+            <p>“把 Browser 的返回键设为 Delete，长按 0.5 秒才返回；Layer 3 的音量键改成亮度。”</p>
+            <i aria-hidden="true"></i>
+          </div>
+          <ol aria-label="Agent 修改配置的过程">
+            <li class="is-active" data-agent-step><span>01</span><b>READ</b><em>理解当前配置</em></li>
+            <li data-agent-step><span>02</span><b>PATCH</b><em>只改目标字段</em></li>
+            <li data-agent-step><span>03</span><b>VALIDATE</b><em>检查动作与语法</em></li>
+            <li data-agent-step><span>04</span><b>HOT RELOAD</b><em>保存立即生效</em></li>
+          </ol>
+          <footer><span><i></i>ONE SOURCE OF TRUTH</span><b>GUI ↔ JSONC ↔ AGENT</b></footer>
+        </div>
+      </div>
+    </section>
+
+    <section class="workflows section-pad" id="workflows">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">REAL WORKFLOWS</p><h2>不是多一个按钮。<br>是少一次回到电脑前。</h2></div>
+          <p>HyperVibe 把语音、导航和执行连成同一条输入链。下面四种场景都不需要改变握持方式，也不需要在说完一句话后重新寻找鼠标。</p>
+        </header>
+
+        <div class="workflow-system" data-loop-root data-workflow-system>
+          <div class="workflow-tabs" role="tablist" aria-label="选择使用场景">
+            <button class="is-active" type="button" role="tab" aria-selected="true" data-workflow-button="coding"><span>01</span><b>Agent Coding</b><em>说、看、选、继续</em></button>
+            <button type="button" role="tab" aria-selected="false" data-workflow-button="speaker"><span>02</span><b>Presentation</b><em>离开讲台，继续控制</em></button>
+            <button type="button" role="tab" aria-selected="false" data-workflow-button="multiscreen"><span>03</span><b>Multi-display</b><em>光标到哪，输入到哪</em></button>
+            <button type="button" role="tab" aria-selected="false" data-workflow-button="media"><span>04</span><b>Media + Reading</b><em>横滚、切歌、调节</em></button>
+          </div>
+
+          <div class="workflow-stage">
+            <article class="workflow-panel is-active" role="tabpanel" data-workflow-panel="coding">
+              <div class="workflow-story">
+                <p>AGENT CODING · COMPLETE INPUT LOOP</p>
+                <h3>Prompt 只是开始。<br>验收和继续修改，也留在遥控器上。</h3>
+                <span>长按侧键开始 Live 输入，第一段文字在说话时出现；外圈滚动检查生成结果，触控板移动到目标位置，中心键确认，再直接说下一轮。</span>
+              </div>
+              <ol class="workflow-steps">
+                <li><i>01</i><b>Speak</b><span>实时说出修改</span></li>
+                <li><i>02</i><b>Scroll</b><span>外圈检查结果</span></li>
+                <li><i>03</i><b>Point</b><span>触控移动光标</span></li>
+                <li><i>04</i><b>Select</b><span>点击接受或打开</span></li>
+                <li><i>05</i><b>Repeat</b><span>继续下一轮</span></li>
+              </ol>
+              <footer><span><i></i>VOICE + POINTER + RING</span><b>NO INPUT HANDOFF</b></footer>
+            </article>
+
+            <article class="workflow-panel" role="tabpanel" hidden data-workflow-panel="speaker">
+              <div class="workflow-story">
+                <p>PRESENTATION · STAND UP</p>
+                <h3>像 Speaker 一样站起来。<br>不再被演示电脑绑在桌前。</h3>
+                <span>切页、移动高亮、打开现场 Demo、在多个 App 之间切换，再用语音补充内容。听众看到的是演讲，不是讲者反复回到触控板。</span>
+              </div>
+              <ol class="workflow-steps">
+                <li><i>01</i><b>Present</b><span>播放与切页</span></li>
+                <li><i>02</i><b>Point</b><span>移动现场高亮</span></li>
+                <li><i>03</i><b>Launch</b><span>App Wheel 打开 Demo</span></li>
+                <li><i>04</i><b>Switch</b><span>Layer 切换整套控制</span></li>
+                <li><i>05</i><b>Speak</b><span>语音补充与记录</span></li>
+              </ol>
+              <footer><span><i></i>REMOTE PRESENTATION</span><b>MOVE AWAY FROM THE DESK</b></footer>
+            </article>
+
+            <article class="workflow-panel" role="tabpanel" hidden data-workflow-panel="multiscreen">
+              <div class="workflow-story">
+                <p>MULTI-DISPLAY · CURSOR CONTEXT</p>
+                <h3>屏幕可以很多。<br>当前意图只有一个。</h3>
+                <span>指针越过显示器时，安全的焦点跟随只接管覆盖屏幕的 App。HUD 在每块屏幕同步出现，拖动位置按显示器保存，屏幕断开后自动回到可见区域。</span>
+              </div>
+              <ol class="workflow-steps">
+                <li><i>01</i><b>Cross</b><span>光标跨越屏幕</span></li>
+                <li><i>02</i><b>Focus</b><span>安全识别目标 App</span></li>
+                <li><i>03</i><b>Act</b><span>快捷键发送到目标</span></li>
+                <li><i>04</i><b>Confirm</b><span>每屏 HUD 同步确认</span></li>
+                <li><i>05</i><b>Recover</b><span>断屏自动回迁</span></li>
+              </ol>
+              <footer><span><i></i>DISPLAY-AWARE STATE</span><b>FOCUS FOLLOWS INTENT</b></footer>
+            </article>
+
+            <article class="workflow-panel" role="tabpanel" hidden data-workflow-panel="media">
+              <div class="workflow-story">
+                <p>MEDIA + READING · TWO AXES</p>
+                <h3>读长页面，也浏览横向内容。<br>不用改变同一个圆环动作。</h3>
+                <span>纵向阅读使用惯性圆环；进入音乐与横向画廊后，Layer 可以把同一手势变成共享加速度的横向滚动。播放、静音、真实音量与亮度继续在原位工作。</span>
+              </div>
+              <ol class="workflow-steps">
+                <li><i>01</i><b>Read</b><span>纵向加速滚动</span></li>
+                <li><i>02</i><b>Layer</b><span>切换横向语义</span></li>
+                <li><i>03</i><b>Browse</b><span>横向浏览专辑</span></li>
+                <li><i>04</i><b>Control</b><span>切歌、播放、静音</span></li>
+                <li><i>05</i><b>Adjust</b><span>音量或亮度</span></li>
+              </ol>
+              <footer><span><i></i>VERTICAL + HORIZONTAL</span><b>ONE SHARED FEEL</b></footer>
+            </article>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="control section-pad" id="control">
@@ -160,6 +277,56 @@
       </div>
     </section>
 
+    <section class="input-atlas section-pad soft-section" id="inputs">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">THE WHOLE REMOTE</p><h2>13 个可按位置。<br>最多 78 个动作入口。</h2></div>
+          <p>方向环、中心键和机身按键都进入同一套手势语法。每一个位置都可以有单击、双击、三击与三段长按；配置得越简单，响应就越直接。</p>
+        </header>
+
+        <div class="atlas-layout" data-loop-root data-input-atlas>
+          <aside class="atlas-remote">
+            <div class="atlas-remote-frame">
+              <img src="media/current-remote.png" alt="Siri Remote 的 13 个可配置按键位置" width="390" height="1000">
+              <span class="atlas-orbit" aria-hidden="true"><i></i><i></i><i></i></span>
+            </div>
+            <div class="atlas-equation" aria-label="13 个按键乘以 6 种手势，最多 78 个动作入口">
+              <span><b>13</b><em>PRESS POINTS</em></span><i>×</i><span><b>6</b><em>GESTURES</em></span><i>=</i><span class="atlas-total"><b>78</b><em>ACTION SLOTS</em></span>
+            </div>
+          </aside>
+
+          <div class="atlas-content">
+            <div class="gesture-spectrum" aria-label="每个按键支持的六种输入">
+              <span><i>01</i><b>Tap</b><em>即时动作</em></span>
+              <span><i>02</i><b>Double</b><em>第二击确认</em></span>
+              <span><i>03</i><b>Triple</b><em>只执行三击</em></span>
+              <span><i>H1</i><b>Hold 1</b><em>松手选择</em></span>
+              <span><i>H2</i><b>Hold 2</b><em>继续深入</em></span>
+              <span><i>H3</i><b>Hold 3</b><em>最终阶段</em></span>
+            </div>
+
+            <div class="input-key-grid">
+              <article class="is-active" data-input-key><span>01</span><div><b>Ring Up</b><code>ring.up</code></div><p>方向、快捷键、多击或多段长按</p></article>
+              <article data-input-key><span>02</span><div><b>Ring Right</b><code>ring.right</code></div><p>前进、切换 Tab、Space 或自定义</p></article>
+              <article data-input-key><span>03</span><div><b>Ring Down</b><code>ring.down</code></div><p>方向、快捷键、重复键与自动化</p></article>
+              <article data-input-key><span>04</span><div><b>Ring Left</b><code>ring.left</code></div><p>返回、切换 Tab、Space 或自定义</p></article>
+              <article data-input-key><span>05</span><div><b>Select</b><code>select</code></div><p>点击；长按 0.5 秒进入粘性拖动</p></article>
+              <article data-input-key><span>06</span><div><b>Back</b><code>button.menu</code></div><p>Delete、浏览器返回、关窗、退出</p></article>
+              <article data-input-key><span>07</span><div><b>TV / Control</b><code>button.tv</code></div><p>循环 Layer；长按打开 App Wheel</p></article>
+              <article data-input-key><span>08</span><div><b>Play / Pause</b><code>button.playPause</code></div><p>媒体、启动 App 或任意组合动作</p></article>
+              <article data-input-key><span>09</span><div><b>Mute</b><code>button.mute</code></div><p>真实静音；按住时可切 Voice 模式</p></article>
+              <article data-input-key><span>10</span><div><b>Volume +</b><code>button.volumeUp</code></div><p>原生音量，或在指定 Layer 调亮度</p></article>
+              <article data-input-key><span>11</span><div><b>Volume −</b><code>button.volumeDown</code></div><p>原生音量，或在指定 Layer 调亮度</p></article>
+              <article data-input-key><span>12</span><div><b>Power</b><code>button.power</code></div><p>调暗显示器、恢复或执行自定义动作</p></article>
+              <article data-input-key><span>13</span><div><b>Side / Voice</b><code>button.siri</code></div><p>External、Final、Live 全局路线</p></article>
+            </div>
+
+            <p class="atlas-note"><i></i>只有真正配置了 Double 或 Triple 的按键才进入多击等待；其他按键的普通 Tap 不会被整套系统拖慢。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="gestures section-pad dark-section" id="gestures">
       <div class="shell">
         <header class="section-heading split-heading dark-heading">
@@ -187,7 +354,7 @@
 
         <div class="gesture-example">
           <p>当前返回键 · TAP THEN HOLD</p>
-          <ol><li><b>0.00 s</b><span>Delete</span></li><li><b>0.18 s</b><span>进度可见</span></li><li><b>0.50 s</b><span>Close Window</span></li><li><b>1.20 s</b><span>Quit App</span></li><li><b>＋1.00 s</b><span>Cancel</span></li></ol>
+          <ol><li><b>0.00 s</b><span>Delete</span></li><li><b>0.18 s</b><span>进度可见</span></li><li><b>0.50 s</b><span>浏览器返回</span></li><li><b>1.00 s</b><span>Close Window</span></li><li><b>1.70 s</b><span>Quit App</span></li></ol>
         </div>
       </div>
     </section>
@@ -217,6 +384,31 @@
               <li>JSONC 保存后实时生效</li>
             </ul>
           </aside>
+        </div>
+
+        <div class="resolver-lab" data-loop-root data-resolver-lab>
+          <div class="resolver-copy">
+            <p>CONTEXT RESOLUTION</p>
+            <h3>同一个按键，<br>从最具体的意图开始找。</h3>
+            <span>先看当前 App 与当前 Layer 的组合，再逐级回落。没有重复配置，也不会因为某一层缺少绑定就让按键失效。</span>
+            <div class="resolver-cases" role="group" aria-label="动作解析示例">
+              <button class="is-active" type="button" data-resolver-case="browser"><i></i><span>Browser</span><b>Back</b></button>
+              <button type="button" data-resolver-case="music"><i></i><span>Music</span><b>Ring</b></button>
+              <button type="button" data-resolver-case="spaces"><i></i><span>Any App</span><b>Left</b></button>
+              <button type="button" data-resolver-case="fallback"><i></i><span>Other App</span><b>Play</b></button>
+            </div>
+          </div>
+
+          <div class="resolver-console" aria-live="polite">
+            <header><span><i></i>RESOLVER TRACE</span><b data-resolver-context>Browser · Navigate · Back</b></header>
+            <ol>
+              <li class="is-active" data-resolver-step><span>01</span><div><b>App + Layer</b><em>browser.Navigate.button.menu</em></div><i>MATCH</i></li>
+              <li data-resolver-step><span>02</span><div><b>Global Layer</b><em>Navigate.button.menu</em></div><i>—</i></li>
+              <li data-resolver-step><span>03</span><div><b>App Base</b><em>browser.button.menu</em></div><i>—</i></li>
+              <li data-resolver-step><span>04</span><div><b>Global Base</b><em>global.button.menu</em></div><i>—</i></li>
+            </ol>
+            <footer><span>RESOLVED ACTION</span><b data-resolver-action>Browser Back</b><em data-resolver-code>⌘ [</em></footer>
+          </div>
         </div>
       </div>
     </section>
@@ -254,22 +446,94 @@
     </section>
 
     <section class="voice section-pad dark-section" id="voice">
-      <div class="shell voice-grid">
+      <div class="shell voice-grid" data-loop-root>
         <div class="voice-copy">
-          <p class="overline">REMOTE MICROPHONE</p>
-          <h2>长按侧键，声音本身成为界面。</h2>
-          <p>25 条实时波形记录音量历史；颜色同时编码相对音高、置信度与频谱亮度。松手后立即回到当前 Layer，不播放装饰性假波形。</p>
-          <div class="voice-source-flow">
-            <span><i>01</i>Siri Remote voice</span><b>优先</b><span><i>02</i>Mac 内置麦克风</span><b>回退</b><span><i>03</i>任意输入 App</span>
+          <p class="overline">GLOBAL · LOW-LATENCY VOICE</p>
+          <h2>说话还没结束，<br>文字已经开始出现。</h2>
+          <p>语音模式现在独立于 Layer。无论当前在哪一层，都可以直接切换现有侧键动作、最终润色或实时流式输入；换 Layer，不会再悄悄改变输入方式。</p>
+
+          <div class="voice-mode-system" data-voice-mode-system data-active-mode="final">
+            <div class="voice-mode-chord" aria-label="按住静音键，再点按侧键，静默切换语音模式">
+              <span><kbd>MUTE</kbd><small>HOLD</small></span>
+              <b>＋</b>
+              <span><kbd>SIDE</kbd><small>TAP</small></span>
+              <em><i></i>SILENT SWITCH</em>
+            </div>
+            <div class="voice-mode-grid" role="group" aria-label="全局语音模式预览">
+              <button type="button" data-voice-mode="external" aria-pressed="false">
+                <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4.5" y="7" width="23" height="18" rx="5"></rect><path d="M9 13h2m3 0h2m3 0h2M9 18h4m3 0h7"></path></svg>
+                <span>01</span><b>External</b><em>保留现有动作</em>
+              </button>
+              <button class="is-active" type="button" data-voice-mode="final" aria-pressed="true">
+                <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 9h11M7 15h9M7 21h7"></path><path d="m19 20 3 3 5-7"></path></svg>
+                <span>02</span><b>Final</b><em>松手，整理成稿</em>
+              </button>
+              <button type="button" data-voice-mode="streaming" aria-pressed="false">
+                <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 17h3l2-7 4 14 4-18 4 14 2-7 3 4"></path></svg>
+                <span>03</span><b>Live</b><em>边说，边落字</em>
+              </button>
+            </div>
+            <div class="voice-mode-readout" aria-live="polite">
+              <i data-voice-mode-dot></i>
+              <div><b data-voice-mode-title>Final · 最终润色</b><span data-voice-mode-copy>完整转写后快速整理表达，再交付到当前输入框。</span></div>
+              <em data-voice-mode-overlay>VOICE CAPSULE ON</em>
+            </div>
           </div>
-          <p class="voice-note">远程麦克风属于 Full Setup：通过虚拟 CoreAudio 设备在遥控器语音与 Mac 内置麦克风之间交叉切换。</p>
+
+          <div class="voice-source-flow">
+            <span><i>01</i>遥控器麦克风</span><b>或</b><span><i>02</i>Mac 麦克风</span><b>→</b><span><i>03</i>自动选择</span>
+          </div>
+          <p class="voice-note">一个全局选择，作用于所有 Layer。切到 External 时，侧键立即交还给 JSON 中原本的动作，并且不会出现语音悬浮窗。</p>
         </div>
-        <figure class="voice-film native-video-card">
-          <video muted loop playsinline autoplay preload="auto" data-native-loop aria-label="最新版真实语音音量、音高和频谱亮度动画">
-            <source src="media/current-status-voice.mp4" type="video/mp4">
-          </video>
-          <figcaption><span><i></i>LIVE PCM FEATURES</span><b>PITCH · LEVEL · BRIGHTNESS</b></figcaption>
-        </figure>
+        <div class="voice-showcase" data-voice-showcase data-voice-mode="final">
+          <figure class="voice-film native-video-card">
+            <div class="voice-film-stage">
+              <video muted loop playsinline autoplay preload="auto" data-native-loop aria-label="HyperVibe 低延迟语音从实时声波到文字交付的真实悬浮窗动画">
+                <source src="media/current-voice-pipeline.mp4" type="video/mp4">
+              </video>
+              <div class="voice-external-state" aria-hidden="true">
+                <div><i></i><i></i><i></i></div>
+                <span>EXTERNAL MODE</span>
+                <b>侧键交还给现有动作</b>
+                <em>NO VOICE CAPSULE</em>
+              </div>
+            </div>
+            <figcaption><span><i></i><em data-voice-film-state>FINAL VOICE PIPELINE</em></span><b data-voice-film-command>HOLD · SPEAK · POLISH</b></figcaption>
+          </figure>
+          <ol class="voice-pipeline-steps" aria-label="低延迟语音输入过程">
+            <li class="is-active" data-voice-stage><span>01</span><b>按下</b><em>即刻响应</em></li>
+            <li data-voice-stage><span>02</span><b>说话</b><em>实时可见</em></li>
+            <li data-voice-stage><span>03</span><b>松手</b><em>迅速落字</em></li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="shell voice-deep-dive">
+        <div class="voice-detail-heading">
+          <p>FROM SOUND TO TEXT</p>
+          <h3>快，不代表省略失败路径。</h3>
+          <span>正常输入走最短路径；目标控件拒绝文字、网络失败或焦点变化时，系统仍然会留下清楚、可恢复的结果。</span>
+        </div>
+
+        <div class="voice-detail-grid">
+          <article><span>01</span><b>Source Lock</b><h4>遥控器优先，Mac 自动接力</h4><p>短暂预录后锁定第一个可用输入源，整句话期间不反复探测，也不会让两套麦克风争抢波形。</p></article>
+          <article><span>02</span><b>Warm Path</b><h4>连接在按下之前准备</h4><p>Realtime 会话、HTTP/TLS 与凭据提前准备；Live 的第一段文字不等待润色，也不经过额外合并队列。</p></article>
+          <article><span>03</span><b>Final Polish</b><h4>完整转写，再选择是否整理</h4><p>Final 先应用自定义词典，再按设置使用轻量模型润色；选择 None 就得到最短的松手到文字路径。</p></article>
+          <article><span>04</span><b>Safe Delivery</b><h4>插入、粘贴、复制，逐级兜底</h4><p>先写入按下时的目标控件，再尝试粘贴，最后复制到剪贴板；安全密码框永远不会被强行注入。</p></article>
+          <article><span>05</span><b>Recover</b><h4>双击侧键，取回上一条语音</h4><p>上一条内容没有落在预期位置时，不必重新说一遍。双击侧键即可把最后一次语音结果重新复制。</p></article>
+          <article><span>06</span><b>Private Keys</b><h4>API Key 留在登录钥匙串</h4><p>密钥不进入 JSON、日志、App Bundle 或 Git；固定签名的凭据助手让正常更新继续复用授权。</p></article>
+        </div>
+
+        <div class="voice-observability">
+          <header><span><i></i>LIVE LATENCY TELEMETRY</span><b>VISIBLE IN SETTINGS</b></header>
+          <ol>
+            <li><span>PRESS</span><b>→ AUDIO</b><em>捕获何时真正开始</em></li>
+            <li><span>SESSION</span><b>READY</b><em>预热会话是否可用</em></li>
+            <li><span>FIRST</span><b>DELTA</b><em>第一段文字何时抵达</em></li>
+            <li><span>RELEASE</span><b>→ TEXT</b><em>松手到最终结果</em></li>
+          </ol>
+          <p>按下与抬起使用匹配的短提示音；停止音在录音关闭后才播放，不会被收进转写。切换 Voice 模式本身保持静音。</p>
+        </div>
       </div>
     </section>
 
@@ -318,28 +582,32 @@
             <li><i></i>App profiles 与继承链</li>
             <li><i></i>1–10 个自定义 Layer</li>
             <li><i></i>Tap / Double / Triple / Hold 1–3</li>
-            <li><i></i>所有 HUD 与窗口显隐开关</li>
+            <li><i></i>全局 Voice 模式、图标与 HUD 开关</li>
             <li><i></i>指针与滚动完整曲线参数</li>
             <li><i></i>Agent、脚本和人共享同一接口</li>
           </ul>
         </div>
         <div class="code-panel">
           <header><span><i></i><i></i><i></i></span><b>config.jsonc</b><em>HOT RELOAD</em></header>
-          <pre><code><span class="comment">// App × Layer × Gesture</span>
-<span class="key">"layers"</span>: [
-  { <span class="key">"id"</span>: <span class="string">"BASE"</span>, <span class="key">"name"</span>: <span class="string">"Layer 1"</span>, <span class="key">"color"</span>: <span class="string">"green"</span> },
-  { <span class="key">"id"</span>: <span class="string">"L1"</span>,   <span class="key">"name"</span>: <span class="string">"Layer 2"</span>, <span class="key">"color"</span>: <span class="string">"blue"</span> },
-  { <span class="key">"id"</span>: <span class="string">"L2"</span>,   <span class="key">"name"</span>: <span class="string">"Layer 3"</span>, <span class="key">"color"</span>: <span class="string">"purple"</span> }
-],
+          <pre><code><span class="comment">// Voice：一个全局模式，不再绑定到 Layer</span>
+<span class="key">"dictation"</span>: {
+  <span class="key">"enabled"</span>: <span class="boolean">true</span>,
+  <span class="key">"activeMode"</span>: <span class="string">"final"</span>
+},
 
+<span class="comment">// Browser：Delete → Back → Close → Quit</span>
 <span class="key">"button.menu"</span>: {
   <span class="key">"action"</span>: <span class="string">"keystroke"</span>, <span class="key">"keys"</span>: <span class="string">"delete"</span>
 },
 <span class="key">"button.menu.taphold"</span>: {
-  <span class="key">"action"</span>: <span class="string">"closeWindow"</span>, <span class="key">"after"</span>: <span class="number">0.5</span>
+  <span class="key">"action"</span>: <span class="string">"keystroke"</span>, <span class="key">"keys"</span>: <span class="string">"cmd+["</span>,
+  <span class="key">"after"</span>: <span class="number">0.5</span>
 },
 <span class="key">"button.menu.taphold2"</span>: {
-  <span class="key">"action"</span>: <span class="string">"applescript"</span>, <span class="key">"after"</span>: <span class="number">1.2</span>
+  <span class="key">"action"</span>: <span class="string">"closeWindow"</span>, <span class="key">"after"</span>: <span class="number">1.0</span>
+},
+<span class="key">"button.menu.taphold3"</span>: {
+  <span class="key">"action"</span>: <span class="string">"applescript"</span>, <span class="key">"after"</span>: <span class="number">1.7</span>
 }</code></pre>
         </div>
       </div>
@@ -355,13 +623,38 @@
           <article><span>04</span><h3>焦点跟随</h3><p>只对覆盖屏幕 90% 以上的窗口安全聚焦，不在鼠标穿越重叠窗口时打乱层级。</p></article>
           <article><span>05</span><h3>快捷键录制</h3><p>Layout 里直接按键录入，支持左右修饰键、Fn、F1–F20 与纯修饰键组合。</p></article>
           <article><span>06</span><h3>开机运行</h3><p>菜单栏、Login Item、权限引导和界面开关都由 App 与配置统一管理。</p></article>
+          <article><span>07</span><h3>Live System Check</h3><p>实时显示 Accessibility、Input Monitoring、麦克风组件与 Automation 状态，并在授权后自动重连。</p></article>
+          <article><span>08</span><h3>安全自动更新</h3><p>每天检查并可后台下载 Full Setup；Sparkle 在安装前验证 Ed25519 签名，保持 App 与语音组件同步。</p></article>
+          <article><span>09</span><h3>可恢复配置</h3><p>GUI 自动保存并显示 Saving、Auto-saved 或精确错误；JSONC 保存热更新，无需重新配对遥控器。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="onboarding section-pad" id="setup">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">FROM DOWNLOAD TO READY</p><h2>安装不是终点。<br>真正可用才是。</h2></div>
+          <p>原生安装器负责 App 和可选语音组件；System Check 只在需要时解释 macOS 权限，并在用户允许后实时确认。后续更新继续走同一条路径。</p>
+        </header>
+
+        <ol class="setup-rail">
+          <li><span>01</span><div><b>Install</b><h3>选择合适的安装包</h3><p>App-only 适合纯控制；Full Setup 同步安装遥控器麦克风与后台组件。</p></div><em>PKG / APP</em></li>
+          <li><span>02</span><div><b>Check</b><h3>打开实时 System Check</h3><p>核心权限、可选能力和组件版本逐项显示，不在启动时连续弹出无解释的请求。</p></div><em>LIVE STATE</em></li>
+          <li><span>03</span><div><b>Pair</b><h3>连接一次，之后自动恢复</h3><p>遥控器由 macOS 蓝牙配对；HyperVibe 启动后重新接管输入，不要求每次重新配置映射。</p></div><em>READY</em></li>
+          <li><span>04</span><div><b>Update</b><h3>App 与语音栈一起更新</h3><p>自动检查、后台下载与手动检查都可由 GUI 或 JSON 控制，安装前验证更新签名。</p></div><em>SPARKLE</em></li>
+        </ol>
+
+        <div class="install-choices">
+          <article><p>APP ONLY</p><h3>完整遥控与本机语音</h3><ul><li>指针、滚动、手势与 Layer</li><li>状态组件和全部 HUD</li><li>Mac 内置麦克风语音输入</li></ul><span>最轻量</span></article>
+          <article class="is-recommended"><p>FULL SETUP</p><h3>App 与遥控器麦克风一起安装</h3><ul><li>包含 App-only 的全部能力</li><li>Siri Remote Mic 系统组件</li><li>后台路由、检查与统一更新</li></ul><span>推荐</span></article>
+          <aside><b>当前 Beta</b><strong>macOS 13+</strong><span>Apple silicon · Siri Remote 第三代（USB-C）</span><a href="https://github.com/HOLODATA-COM/SiriRemoteForge/releases" target="_blank" rel="noreferrer">查看 Releases ↗</a></aside>
         </div>
       </div>
     </section>
 
     <section class="download-section section-pad">
       <div class="shell download-panel">
-        <div><p class="overline">OPEN SOURCE · macOS 13+</p><h2>HyperVibe Beta</h2><p>下载 App-only 版本，或使用 Full Setup 安装遥控器麦克风组件。</p></div>
+        <div><p class="overline">OPEN SOURCE · macOS 13+</p><h2>HyperVibe Beta</h2><p>从一支麦克风，走向一整套遥控输入。下载 App-only，或用原生 Full Setup 一次安装完整语音能力。</p></div>
         <div class="download-actions"><a class="button button-white" href="https://github.com/HOLODATA-COM/SiriRemoteForge/releases" target="_blank" rel="noreferrer">下载 Beta ↗</a><a class="button button-outline" href="https://github.com/HOLODATA-COM/SiriRemoteForge" target="_blank" rel="noreferrer">GitHub ↗</a></div>
       </div>
     </section>
