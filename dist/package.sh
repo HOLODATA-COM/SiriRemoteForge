@@ -15,7 +15,7 @@ BUILD_ROOT="$DIST/build"
 APP_SOURCE="${HYPERVIBE_APP_PATH:-$ROOT/app/HyperVibe.app}"
 MODE="public"
 VERSION="${HYPERVIBE_RELEASE_VERSION:-dev}"
-BUILD_NUMBER="${HYPERVIBE_BUILD_NUMBER:-1}"
+BUILD_NUMBER="${HYPERVIBE_BUILD_NUMBER:-}"
 WITH_PACKETLOGGER=0
 CONFIG_SOURCE=""
 
@@ -66,6 +66,14 @@ if ! [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
     else
         echo "public package version must start with a numeric app version: $VERSION" >&2
         exit 2
+    fi
+fi
+if [ -z "$BUILD_NUMBER" ]; then
+    if [ "$MODE" = "public" ]; then
+        . "$DIST/version.sh"
+        BUILD_NUMBER="$(hypervibe_build_number "$VERSION")"
+    else
+        BUILD_NUMBER=1
     fi
 fi
 if ! [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then

@@ -27,7 +27,8 @@ dist/build-release.sh 0.1.0-beta.1
 ```
 
 The command requires a clean worktree, rebuilds every shipping binary, injects the numeric app
-version, uses reproducible ad-hoc signing in an isolated staging bundle, runs the router and HAL
+version and a monotonic internal build number, uses reproducible ad-hoc signing in an isolated
+staging bundle, runs the router and HAL
 offline tests, and writes:
 
 ```text
@@ -46,6 +47,16 @@ runtime links, missing license notices, private paths, author config, PacketLogg
 The libopus source archive and build output are cached under ignored `dist/build/` paths.
 The builder never rewrites `app/HyperVibe.app`, so a locally running, stable-signed development App
 and its macOS privacy grants are left untouched.
+
+The final step also updates and signs the repository-root `appcast.xml`. HyperVibe checks that feed
+daily and can download the app-only ZIP in the background. Every archive is authenticated with
+Sparkle Ed25519 before extraction; published feeds receive an additional whole-feed signature.
+The private key remains in the maintainer's login Keychain and must never be committed. Back it up
+to encrypted offline storage with Sparkle's
+`generate_keys -x`, and import it on a replacement release machine with `generate_keys -f`.
+Automatic updates replace only `HyperVibe.app`, so they do not restart system audio or request an
+administrator password. Full Setup remains a separate, explicitly selected download when users want
+to install or refresh the virtual microphone and its privileged services.
 
 ## Public-package safety boundary
 
@@ -92,6 +103,10 @@ Personal output prints a warning and must never be uploaded to GitHub.
 
 These beta app bundles are ad-hoc signed, not Apple-notarized. The hardened runtime is intentionally
 disabled because it terminates the private MultitouchSupport callback used by the remote trackpad.
+An ad-hoc identifier is not a trustworthy Keychain peer identity, so public betas do not invoke the
+certificate-bound credential helper. Native cloud dictation remains available by storing keys in a
+separate current-user-only plaintext JSON file under Application Support; the shareable config and
+release artifacts never contain it. Certificate-bound builds continue to prefer the login Keychain.
 The native package is unsigned unless `HYPERVIBE_INSTALLER_SIGN_IDENTITY` names a real Developer ID
 Installer identity; App signing and Installer signing are separate Apple certificate types. Until
 both Developer ID signing and notarization are configured, use **right-click → Open** for the first

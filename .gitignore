@@ -1,5 +1,6 @@
 # Build artifacts
 app/HyperVibe
+app/HyperVibeCredentialBroker
 app/HyperVibe.app/
 app/HyperVibe.icns
 app/HyperVibe.iconset/
@@ -32,6 +33,7 @@ mic/router/test_parser
 mic/router/MonitorAudioRing.o
 mic/router/test_monitor_ring
 app/BuiltinMicRingWriter.o
+app/CredentialKeychainBridge.o
 
 # Installer build output. Public builds are sanitized by default; personal mode can still contain a
 # private config and PacketLogger, so generated output remains local-only and is uploaded explicitly
@@ -47,3 +49,5 @@ dist/hardware/
 # This directory contains narration, animation sources, app artwork, and final exports.
 # It is intentionally local-only and must never be published with the open-source repository.
 video/
+output/
+tmp/

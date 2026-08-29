@@ -14,6 +14,10 @@ if ! [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; 
     echo "invalid release version: $RELEASE_VERSION" >&2
     exit 2
 fi
+[ -f "dist/release-notes-v$RELEASE_VERSION.md" ] || {
+    echo "missing release notes: dist/release-notes-v$RELEASE_VERSION.md" >&2
+    exit 2
+}
 
 if [ "${HYPERVIBE_ALLOW_DIRTY:-0}" != "1" ] && [ -n "$(git status --porcelain)" ]; then
     echo "REFUSED: release builds require a clean worktree" >&2
@@ -27,7 +31,10 @@ if [ "$(uname -m)" != "arm64" ]; then
 fi
 
 APP_VERSION="${RELEASE_VERSION%%-*}"
-BUILD_NUMBER="${HYPERVIBE_BUILD_NUMBER:-1}"
+. dist/version.sh
+BUILD_NUMBER="$(hypervibe_build_number "$RELEASE_VERSION")"
+export HYPERVIBE_BUILD_NUMBER="$BUILD_NUMBER"
+export HYPERVIBE_RELEASE_VERSION="$RELEASE_VERSION"
 COMMIT="$(git rev-parse HEAD)"
 OPUS_PREFIX="$(dist/build-opus.sh)"
 APP_STAGE="$ROOT/dist/build/staging/$RELEASE_VERSION/HyperVibe.app"
@@ -48,6 +55,7 @@ echo "→ building HyperVibe $APP_VERSION ($COMMIT)"
     ./build.sh
     HYPERVIBE_VERSION="$APP_VERSION" \
     HYPERVIBE_BUILD_NUMBER="$BUILD_NUMBER" \
+    HYPERVIBE_RELEASE_VERSION="$RELEASE_VERSION" \
     HYPERVIBE_SIGN_MODE=adhoc \
     HYPERVIBE_APP_BUNDLE_PATH="$APP_STAGE" \
         ./create_app_bundle.sh
@@ -73,3 +81,4 @@ HYPERVIBE_APP_PATH="$APP_STAGE" \
     dist/package.sh --version "$RELEASE_VERSION"
 
 dist/audit-release.sh "$RELEASE_VERSION"
+dist/update-appcast.sh "$RELEASE_VERSION"

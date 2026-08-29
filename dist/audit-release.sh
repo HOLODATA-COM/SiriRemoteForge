@@ -16,7 +16,8 @@ if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
 fi
 
 APP_VERSION="${VERSION%%-*}"
-BUILD_NUMBER="${HYPERVIBE_BUILD_NUMBER:-1}"
+. dist/version.sh
+BUILD_NUMBER="$(hypervibe_build_number "$VERSION")"
 OUT="$ROOT/dist/build/$VERSION"
 APP_ZIP="$OUT/HyperVibe-$VERSION-macOS-arm64.zip"
 FULL_ZIP="$OUT/HyperVibe-Full-Setup-$VERSION-arm64.zip"
@@ -97,6 +98,8 @@ fi
 echo "→ auditing versions, architecture, and runtime links"
 [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")" \
     = "$APP_VERSION" ]
+[ "$(/usr/bin/plutil -extract HyperVibeReleaseVersion raw -o - "$APP/Contents/Info.plist")" \
+    = "$VERSION" ]
 [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$SETUP/Contents/Info.plist")" \
     = "$APP_VERSION" ]
 [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$UNINSTALL/Contents/Info.plist")" \
@@ -129,12 +132,46 @@ if /usr/bin/otool -L "$PAYLOAD/srm_router" | /usr/bin/grep -Eq '/opt/homebrew|/u
     echo "REFUSED: router has a package-manager runtime dependency" >&2
     exit 1
 fi
+SPARKLE_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
+[ -d "$SPARKLE_FRAMEWORK" ] || { echo "missing bundled Sparkle.framework" >&2; exit 1; }
+[ -f "$APP/Contents/Resources/Sparkle-LICENSE.txt" ] || {
+    echo "missing Sparkle license" >&2; exit 1;
+}
+for voice_asset in VoiceToggleOn.mp3 VoiceToggleOff.mp3 UI-SFX-LICENSE.txt; do
+    [ -f "$APP/Contents/Resources/Sounds/$voice_asset" ] || {
+        echo "missing Voice feedback resource: $voice_asset" >&2
+        exit 1
+    }
+done
+[ "$(/usr/bin/shasum -a 256 "$APP/Contents/Resources/Sounds/VoiceToggleOn.mp3" \
+    | /usr/bin/awk '{print $1}')" = \
+    "2f5ac451e043c08e23d14fe1bda7555ed8a627a469e834ab4300279ffe4ea135" ] || {
+    echo "unexpected Voice Toggle-on sound content" >&2; exit 1;
+}
+[ "$(/usr/bin/shasum -a 256 "$APP/Contents/Resources/Sounds/VoiceToggleOff.mp3" \
+    | /usr/bin/awk '{print $1}')" = \
+    "598186c2d47cb0c970a450ef3943521b6e07b20fd506edde9b401d30cc115fc1" ] || {
+    echo "unexpected Voice Toggle-off sound content" >&2; exit 1;
+}
+/usr/bin/codesign --verify --deep --strict --verbose=2 "$SPARKLE_FRAMEWORK"
+/usr/bin/otool -L "$APP/Contents/MacOS/HyperVibe" \
+    | /usr/bin/grep -Fq '@rpath/Sparkle.framework/' || {
+        echo "HyperVibe is not linked to the bundled Sparkle framework" >&2
+        exit 1
+    }
+for key in SUFeedURL SUPublicEDKey SUVerifyUpdateBeforeExtraction; do
+    /usr/bin/plutil -extract "$key" raw -o - "$APP/Contents/Info.plist" >/dev/null || {
+        echo "missing updater Info.plist key: $key" >&2
+        exit 1
+    }
+done
 
 echo "→ auditing licenses and public-data boundary"
 /usr/bin/cmp "$PAYLOAD/config.jsonc" "$ROOT/examples/config.jsonc"
 [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - \
     "$PAYLOAD/SiriRemoteMic.driver/Contents/Info.plist")" = "$APP_VERSION" ]
 for required in "$APP/Contents/Resources/LICENSE.txt" "$APP/Contents/Resources/NOTICE.txt" \
+    "$APP/Contents/Resources/Sounds/UI-SFX-LICENSE.txt" \
     "$PAYLOAD/Legal/GPL-3.0.txt" "$PAYLOAD/Legal/NOTICE.txt" \
     "$PAYLOAD/Legal/BlackHole-LICENSE.txt" "$PAYLOAD/Legal/Opus-LICENSE.txt"; do
     [ -f "$required" ] || { echo "missing distribution notice: $required" >&2; exit 1; }

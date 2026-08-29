@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+    <channel>
+        <title>HyperVibe Updates</title>
+        <link>https://github.com/HOLODATA-COM/SiriRemoteForge</link>
+        <description>Authenticated HyperVibe software updates</description>
+        <language>en</language>
+
+        <!-- hypervibe:stable:start -->
+        <!-- hypervibe:stable:end -->
+
+        <!-- hypervibe:beta:start -->
+        <!-- hypervibe:beta:end -->
+    </channel>
+</rss>

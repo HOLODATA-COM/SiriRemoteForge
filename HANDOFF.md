@@ -1,6 +1,6 @@
 # SiriRemoteForge — living handoff
 
-Last updated: 2026-08-24 (Australia/Sydney)
+Last updated: 2026-08-29 (Australia/Sydney)
 
 This document is the concise source of truth for continuing development. Keep it updated whenever
 the architecture, user-facing mappings, build/run workflow, or microphone investigation changes.
@@ -27,7 +27,497 @@ belong in `docs/mic-reverse-engineering.md`.
   **GPL-3.0-or-later** as of 2026-07-22, going public; the paid-release plan was dropped. Upstream's
   MIT notice is retained in `NOTICE` — see the licensing note at the end for why that is mandatory.
 - Local checkout: the repository root (`siriremote-release`).
-- Current committed HEAD: `3f1b017` (`feat(mic): clean real-time streaming — fragment reassembly + lock-free jitter buffer`).
+- Current committed HEAD: `c39f300` (`docs(release): detail beta.5 UI redesign`; history-rewritten
+  equivalent with Claude co-author trailers removed from public refs).
+
+### ⚡ LATEST — 2026-08-29: Sci-fi Voice edge cues + transactional personal dictionary (uncommitted, tested, deployed)
+
+- Native Voice now uses the exact UI SFX **Sci-fi Toggle on** cue when a real dictation turn opens
+  and **Sci-fi Toggle off** after capture closes. Both official MP3s are preloaded off the press
+  path into dedicated `AVAudioPlayer`s; rewinding still prevents duplicated HID edges from stacking
+  playback, and the existing JSON volume setting remains authoritative. Capture/meter suppression
+  is bounded at 0.30 s to exclude the audible cue without discarding the official MP3's nearly
+  silent encoder/reverb tail. Installed SHA-256 values are
+  `2f5ac451e043c08e23d14fe1bda7555ed8a627a469e834ab4300279ffe4ea135` (on) and
+  `598186c2d47cb0c970a450ef3943521b6e07b20fd506edde9b401d30cc115fc1` (off).
+- App packaging now copies the complete nested `app/Resources` tree and fails if either cue or its
+  license is absent. UI SFX audio is CC0-1.0; attribution/source text is embedded at
+  `Contents/Resources/Sounds/UI-SFX-LICENSE.txt` and recorded in the repository `NOTICE`.
+- Personal Dictionary remains one JSON-backed source of truth for transcription keywords/prompts,
+  deterministic Final correction and cleanup. Settings now presents readable term rows and a
+  draft-first Add/Edit sheet with autofocus, duplicate detection, optional aliases, comma/Chinese
+  comma/semicolon/newline parsing, deduplication, edit and delete. Invalid half-typed terms never
+  reach the live config; a confirmed edit is written once and auto-saved to `config.jsonc`.
+- The live configuration retains `HyperVibe` and adds `clique`, `sub-agent`, `审稿人`, `SIGMOD` and
+  `VLDB`, with conservative spelling aliases for the English terms. The pre-change config is
+  recoverable at `/private/tmp/hypervibe-config-before-dictionary-20260829.jsonc`.
+- Verification: warning-free optimized build; SiriRemoteCore **134/134**; packaged native Voice
+  self-test **66/66** (`dictionary=3.63 ms`, PCM 10 s `0.27 ms`, Realtime envelopes 10 s `0.19 ms`);
+  official installed audio hashes; `git diff --check`; and candidate/staged/installed deep-strict
+  signature verification using the unchanged stable Designated Requirement. Stable build
+  **`1.0.0-local.19`** is installed only at `/Applications/HyperVibe.app`, with exactly one UI
+  process from that path (PID **56881**). local.18 is recoverable at
+  `/private/tmp/HyperVibe-before-scifi-local18.app`. Nothing was committed or pushed.
+
+### ⚡ LATEST — 2026-08-29: No cleanup word blacklist + 1 s recording gate (uncommitted, tested, deployed)
+
+- Removed every natural-language keyword/prefix heuristic from the local cleanup validator. Words
+  such as `best`, `Sure`, `好的`, `没问题`, or any future vocabulary are ordinary dictated content;
+  no word can independently classify text as an assistant response. Safety still comes from the
+  system/user role boundary, typed JSON source envelope, provider prompt contract, language-neutral
+  length/content grounding, and preservation of question-mark structure.
+- Added explicit local and real-cloud regressions proving `Sure here is the best option` and
+  `好的没问题我现在就来处理` remain valid transcript content. The DeepSeek suite now covers six
+  fixed, non-private cases: those two legitimate phrases plus Chinese/English questions, a request,
+  and a prompt-injection question. All six used actual cloud cleanup rather than the local fallback.
+- The default and live `settings.dictation.minimumRecordingSeconds` are now **1.0 s**. Audio below
+  one second remains local and produces no upload, cleanup, insertion, history entry or error; the
+  exact one-second PCM boundary is accepted. Defaults, README, both example JSON files, GUI-backed
+  config and regressions agree.
+- Headless SF Symbol regression setup now creates a prohibited `NSApplication` and runs on the main
+  actor; the test still requires execution outside Codex's WindowServer-restricted sandbox, but no
+  longer touches AppKit from a background executor.
+- Verification: SiriRemoteCore **134/134**; packaged native Voice self-test **66/66**
+  (`dictionary=3.78 ms`, PCM 10 s `0.27 ms`, Realtime envelopes 10 s `0.19 ms`); real DeepSeek
+  guardrails **6/6 in 4125 ms total**; warning-free optimized build; `git diff --check`; and
+  candidate/staged/installed deep-strict signature verification. Stable build
+  **`1.0.0-local.18`** is installed only at `/Applications/HyperVibe.app`; existing Input
+  Monitoring remains granted, and exactly one UI process runs from that path (PID **23228**).
+  local.17 is recoverable at
+  `/private/tmp/hypervibe-before-no-blacklist.ynrVhj/HyperVibe-installed-local17.app`; the prior live
+  config is at `/private/tmp/hypervibe-before-prompt.uVSOKh/config-before-minimum-1.jsonc`. Nothing
+  was committed or pushed.
+
+### ⚡ LATEST — 2026-08-29: Final cleanup cannot answer the transcript (uncommitted, tested, deployed)
+
+- OpenAI and DeepSeek no longer receive dictated text as an ordinary free-form user message. The
+  source is JSON-escaped inside a typed `untrusted_voice_transcript` envelope, while the system
+  instruction defines it exclusively as quoted data to edit, including when it addresses the
+  model, asks a question, requests an action, contains prompt/role text, or attempts instruction
+  override.
+- The cleanup contract is now speech-act preserving: a question remains the speaker's question; a
+  request or command remains addressed to its intended recipient. The model must never answer,
+  comply, solve, summarize, continue the conversation, acknowledge, preface, or invent content.
+  Explicit numbered speech and dictionary correction remain supported. DeepSeek cleanup also uses
+  deterministic temperature zero.
+- HTTP success is no longer trusted by itself. A conservative local guard rejects newly introduced
+  assistant-style prefixes, questions changed into statements, lost request intent, extreme length
+  changes, and output insufficiently grounded in the original English/CJK content. Rejection keeps
+  the already-valid transcript rather than typing a model reply.
+- Verification: warning-free optimized build; native Voice regression exit success with **64**
+  checks; `git diff --check`; and four real DeepSeek guardrail cases (Chinese question, Chinese
+  request, prompt-injection question and English question) all passed as actual cloud cleanup rather
+  than local fallback in **3152 ms total**. Candidate, staged bundle and installed bundle passed
+  deep/strict signature verification using the stable identity. Build **`1.0.0-local.17`** is
+  installed only at `/Applications/HyperVibe.app`, Designated Requirement remains
+  `identifier "com.hypervibe.app" and certificate leaf =
+  H"80f746bd1de5a7ceb835a200ce4e43705f01aee6"`, and exactly one UI process runs there (PID
+  **7577**). local.16 is recoverable at
+  `/private/tmp/hypervibe-before-prompt.uVSOKh/HyperVibe-installed-original.app`. Nothing was
+  committed or pushed.
+
+### ⚡ LATEST — 2026-08-29: Final Voice insertion repaired for Chrome/web editors (uncommitted, tested, deployed)
+
+- The failure was reproduced in **Final**, not External: runtime logs showed
+  `settings.dictation.activeMode = final`, Chrome frontmost, and a four-second Voice hold. The old
+  Final chain tried `AXSelectedText` first. Chromium contenteditable controls can report that write
+  as successful without dispatching the DOM `input` event, so HyperVibe stopped before reaching the
+  same Command-V path that worked manually.
+- Final delivery now uses a guarded clipboard transaction first, followed independently by AX and
+  Unicode event fallbacks. It rechecks the original app/focus, Secure Input and secure-field state
+  immediately before mutation; optionally restores every clipboard item/type only while its private
+  marker and `changeCount` prove the transaction still owns the clipboard. Streaming remains a
+  direct, clipboard-free delta path.
+- Diagnostics record only bundle/role, selected-text capability, route and outcome; dictated text is
+  never logged. A production-inert `--test-voice-final-delivery` probe exercises the exact Final
+  delivery chain with fixed non-secret text.
+- Verification: packaged native Voice self-test **60/60**; `git diff --check`; stable-signed
+  candidate/stage/installed deep-strict verification before replacement; and an isolated Chrome
+  profile with a disposable `textarea` confirmed both the inserted fixed text and a real DOM
+  `input` event (`PASS — REAL INPUT EVENT RECEIVED`). Stable build **`1.0.0-local.16`** is installed
+  only at `/Applications/HyperVibe.app`; its Designated Requirement remains
+  `identifier "com.hypervibe.app" and certificate leaf =
+  H"80f746bd1de5a7ceb835a200ce4e43705f01aee6"`. The pre-change local.15 App is recoverable at
+  `/private/tmp/hypervibe-before-chrome-paste.rYoS1J/HyperVibe-local15.app`. Exactly one normal UI
+  process now runs from the required `/Applications` path (PID **76174**). Nothing was committed or
+  pushed.
+
+### ⚡ LATEST — 2026-08-29: Voice aperture motion, 2 s gate, structured lists, and rebuilt-editor delivery (uncommitted, tested, deployed)
+
+- The independent lower-centre Voice capsule no longer fades in/out generically. Capture opens from
+  a centre phosphor point into a horizontal scan line, then a shallow band and the complete fixed-size
+  material surface in **205 ms**. Exit reverses through a full-width scan line to a centre point in
+  **155 ms**. The actual panel frame never resizes. Waveform bars originate at the capsule centre;
+  the scan-line glow, border and icon are choreographed on the same Core Animation clock.
+- `settings.dictation.minimumRecordingSeconds` is now a JSON/UI setting (default **2.0 s**, JSON
+  validation 0...30 s and never above `maxRecordingSeconds`). Duration uses actual captured 24 kHz
+  PCM frames, not button/timer estimates. Before the exact gate, audio remains only in the local
+  unbounded capture buffer: the prepared Realtime socket receives no microphone bytes and Streaming
+  inserts nothing. At the gate, the complete buffered prefix drains to the warm socket, preserving
+  the first word. Releasing below the gate closes capture/capsule silently with no upload,
+  transcription, cleanup, insertion, history mutation, or error card.
+- Final cleanup now explicitly preserves a dictated introduction and recovers spoken enumerations
+  (`one/two/three`, `first/second`, `一、二、三`, `第一/第二…`) as consistent `1.`, `2.`, `3.` lines.
+  It is instructed not to turn ordinary prose into a list and still returns text only.
+- Voice delivery no longer assumes a long-lived Accessibility object is stable. React/Electron
+  editors such as the Codex/Claude composer can rebuild the same visible AX node while recording;
+  the old identity-only guard wrongly classified that as `focusChanged`, so Final copied instead of
+  inserting. Delivery now accepts only a semantically editable replacement with a matching stable
+  AX identifier or matching role/placeholder plus at least 58% geometric overlap. Frontmost PID,
+  Secure Input and secure-field checks remain mandatory, and a genuinely different field in the
+  same app remains rejected.
+- Verification: SiriRemoteCore **134/134**; packaged native Voice self-test **59/59**
+  (`dictionary=3.52 ms`, PCM 10 s `0.26 ms`, Realtime envelopes 10 s `0.18 ms`); warning-free
+  optimized App build; `git diff --check`; deep/strict candidate, staged and installed signature
+  verification; and a 120 fps visual pass of both aperture directions. Stable build
+  **`1.0.0-local.15`** is installed only at `/Applications/HyperVibe.app`; its Designated
+  Requirement remains `identifier "com.hypervibe.app" and certificate leaf =
+  H"80f746bd1de5a7ceb835a200ce4e43705f01aee6"`. Exactly one UI process runs from the required path
+  (PID **58212**). The pre-change local.14 App is recoverable at
+  `/private/tmp/hypervibe-before-voice-fixes.2CJ1Tr/HyperVibe-original.app`. Nothing was committed or
+  pushed.
+
+### ⚡ LATEST — 2026-08-28: Voice is global across Layers + hardware mode chord (uncommitted, tested, deployed)
+
+- Voice routing is now orthogonal to the configurable Layer stack. One authoritative
+  `settings.dictation.activeMode` (`external`, `final`, or `streaming`) applies on every Layer;
+  changing Layer can no longer silently change the side-button pipeline. Old configurations that
+  lack `activeMode` migrate deterministically from their legacy global `outputMode`, while legacy
+  `layerModes` remain decodable for downgrade compatibility but are ignored and cleared on the next
+  explicit mode selection/save.
+- Hold **Mute** and tap the **Side/Voice** button to cycle **External → Final → Live → External**.
+  The chord is recognized directly on the physical Side-down edge with no timer and therefore adds
+  no latency to an ordinary Side hold. Its own mode switch is silent; the existing matched begin/end
+  cues for an actual native dictation turn are unchanged. Both native transports remain prewarmed
+  even while External is selected, so the next native turn does not pay a new socket handshake.
+- The always-on status widget confirms all three choices through a 240 ms, fixed-size, depth-turn +
+  three-orbit animation and returns to the current Layer. Final and Live also animate an independent
+  lower-centre Voice capsule; **External never creates that Voice capsule** and dismisses an existing
+  selector preview. Real capture/delivery always takes presentation priority over a selector preview.
+  All three selector symbols are JSON-configurable through `voice.mode.external`,
+  `voice.mode.final`, and `voice.mode.streaming`.
+- Settings → Voice now has one global three-way selector and mode-specific explanations instead of
+  a per-Layer routing matrix. Final-only cleanup controls remain conditional. README, both example
+  configurations, defaults, localisation, migration tests, and the native self-test describe the
+  same global model.
+- Independent review found and closed one important teardown edge: after the chord takes ownership,
+  any already-open external/native PTT is paired closed, a held repeat receives key-up, and a
+  momentary Layer is unwound before both physical releases are consumed. The cleanup is idempotent.
+  Accepted custom-config constraint: an exotic Mute mapping that deliberately executes on its
+  initial press edge (`repeatKey`, or PTT held beyond its opener delay) can act before a later Side
+  press exists to identify the chord; teardown prevents any latched state. The shipped Mute mapping
+  is release/multi-tap-disambiguated and has no such leak.
+- Verification: warning-free optimized App build; SiriRemoteCore **134/134**; packaged native Voice
+  self-test **52/52** (`dictionary=3.84 ms`, PCM 10 s `0.26 ms`, packet construction `0.19 ms`);
+  `git diff --check`; deep/strict stable-signature verification before and after installation; and
+  candidate/installed executable SHA-256 equality. Stable build **`1.0.0-local.14`** is installed
+  only at `/Applications/HyperVibe.app`. Its Designated Requirement remains
+  `identifier "com.hypervibe.app" and certificate leaf = H"80f746bd1de5a7ceb835a200ce4e43705f01aee6"`;
+  credential-helper CDHash remains `13d5c95754534f4fcc26799385d9f48b8ac8c544`. Exactly one UI
+  process runs from the required path (PID **31020**) and Host PID **906** was preserved. Build 12 is
+  recoverable at `/private/tmp/HyperVibe-installed-before-global-voice-build13.backup`; build 13 is
+  recoverable at `/private/tmp/HyperVibe-installed-before-teardown-fix-build14.backup`. Nothing was
+  committed or pushed.
+
+### ⚡ LATEST — 2026-08-28: Final Voice omits the Inserting card (uncommitted, tested, deployed)
+
+- User Layer 2 (`L1`, Final mode) now presents exactly **Listening → Transcribing → Polishing →
+  Inserted / Copied / Error**. It no longer opens a separate `Inserting` card for the normally
+  millisecond-scale delivery step. Both the persistent status widget and independent Voice capsule
+  receive the same compressed live phase sequence.
+- This is presentation-only. Final text delivery still records insertion latency and retains the
+  complete guarded chain: captured-target validation, native AX selected-text replacement,
+  compatibility paste with optional clipboard restoration, Unicode fallback, secure-field/focus
+  rejection, and copy-on-failure. Streaming behavior is unchanged.
+- `VoiceDictationPresentationPolicy.showsInsertionProgress` now explicitly returns false for both
+  modes, and the native regression suite asserts the live Final sequence is monotonic without
+  `Inserting`. SiriRemoteCore passes **134/134**; the optimized App compiles cleanly; packaged Voice
+  self-test passes **48/48** (`dictionary=3.43 ms`, PCM 10 s `0.29 ms`, packet construction
+  `0.19 ms`); and `git diff --check` passes.
+- Stable build **`1.0.0-local.12`** is installed only at `/Applications/HyperVibe.app`. Deep/strict
+  verification and the unchanged certificate-bound Designated Requirement pass; credential-helper
+  CDHash remains `13d5c95754534f4fcc26799385d9f48b8ac8c544`, and both Voice credentials load
+  without a prompt. Exactly one UI process runs from the required path (PID **11393**) and Host PID
+  **906** was preserved. Build 11 is recoverable at
+  `/private/tmp/HyperVibe-installed-before-no-inserting-build12.app`. Nothing was committed or
+  pushed.
+
+### ⚡ LATEST — 2026-08-28: Voice capsule follows the pointer's display (uncommitted, tested, deployed)
+
+- The independent Voice pipeline capsule now chooses the display containing the mouse pointer at
+  the beginning of every native Voice turn and anchors at that display's lower centre. It remains
+  draggable for the current turn only. A new turn, a pointer transition to another display, or a
+  display-configuration change resets it to the lower centre of the newly relevant display; moving
+  the pointer within one display does not make the capsule chase it.
+- Cross-display detection runs on the main run loop every **60 ms** only while the capsule is
+  visible. It compares display IDs before doing any window/material work, pauses while the user is
+  dragging, and invalidates the timer as soon as the panel orders out. Dragging within the current
+  display therefore remains stable; dragging or moving the pointer across a display boundary
+  converges to the new display's default anchor without changing panel size.
+- `VoicePipelineScreenPlacement` keeps display hit-testing and lower-centre geometry pure and
+  independently testable. The native Voice self-test is now **48/48**, including two-display
+  selection and offset-coordinate anchor regressions; the packaged run measured a 500-term
+  dictionary at **3.69 ms**, ten seconds of PCM conversion at **0.27 ms**, and packet construction
+  at **0.18 ms**. SiriRemoteCore remains **134/134**, the optimized App build is warning-free, and
+  `git diff --check` passes.
+- Stable build **`1.0.0-local.11`** is installed only at `/Applications/HyperVibe.app`. Deep/strict
+  verification passes with the unchanged requirement `identifier "com.hypervibe.app" and
+  certificate leaf = H"80f746bd1de5a7ceb835a200ce4e43705f01aee6"`; the credential-helper
+  CDHash remains `13d5c95754534f4fcc26799385d9f48b8ac8c544`. Both existing Voice credentials
+  load without a prompt. Exactly one UI process runs from the required path (PID **8183**) and the
+  existing Host remains PID **906**. Build 10 is recoverable at
+  `/private/tmp/HyperVibe-installed-before-pointer-screen-build11.app`.
+- `create_app_bundle.sh` no longer puts the dedicated signing-keychain password in process argv.
+  A locked keychain must be unlocked through the native macOS secure prompt; the build still stops
+  rather than falling back to ad-hoc signing if the stable certificate/private-key identity is not
+  available. Nothing was committed or pushed.
+
+### ⚡ LATEST — 2026-08-28: Streaming success returns directly to Layer (uncommitted, tested, deployed)
+
+- Layer 3 remains true live insertion: the first transcript delta reaches the captured caret
+  immediately and later fragments retain the 8 ms coalescing window. On physical release, a
+  successful Streaming turn now closes the real waveform and returns directly to the current Layer.
+  It never presents the Final-only `Transcribing`, `Inserting`, or `Inserted` cards while the
+  authoritative committed suffix is reconciled silently in the background.
+- Attention states are deliberately unchanged: clipboard fallback still presents `Copied`, while
+  focus changes, secure fields, unavailable delivery and network failures still present `Error`.
+  Final mode retains its complete visible sequence.
+- A shared `VoiceDictationPresentationPolicy` owns these mode/outcome decisions, with three new
+  headless regression checks preventing the Final and Streaming presentations from converging
+  accidentally. Installed self-test is **43/43**; SiriRemoteCore remains **134/134**.
+- Stable build **`1.0.0-local.6`** is installed at `/Applications/HyperVibe.app`; its existing
+  certificate-bound DR and credential-helper CDHash are unchanged. Exactly one UI process runs from
+  that path (PID **60089**), Host PID **906** was not restarted, both Keychain credentials load, and
+  the live JSON config is byte-for-byte unchanged. Recoverable build 5 App/config copies are in
+  `/private/tmp/hypervibe-streaming-clean-exit-backup.lE1oSW/`. Nothing was committed or pushed.
+
+### ⚡ LATEST — 2026-08-28: JSON-owned icons + Voice hot-path hardening (uncommitted; reviewed, tested, deployed)
+
+- Ordinary binding symbols now come directly from each JSON action's `icon`, inheriting field by
+  field through the normal mode chain. Two truthful exceptions are enforced before that static
+  presentation: volume/brightness always render the measured variable system state, and actions
+  that launch/open an App always discover its installed real icon. Invalid or unavailable symbols
+  fall back without leaving a blank slot.
+- Every ordered Layer accepts `settings.layers[].icon`. Non-binding status symbols are portable in
+  `settings.icons`: `layer.default`, remote connected/disconnected, six native Voice result phases,
+  and `fallback`. One shared resolver validates every level independently in the exact chain
+  **Layer icon → layer.default → JSON fallback → built-in**; an unsupported symbol on an older macOS
+  cannot swallow a valid later choice. Layer/connection HUD, persistent widget, Voice Settings rows,
+  defaults and both examples use the same data and hot-reload together. The Layout Add Layer sheet
+  also accepts an optional SF Symbol name.
+- The live config was changed minimally: the three existing Layers received their current stack
+  symbol explicitly and the complete `settings.icons` map was inserted. No action, timing, curve,
+  Voice route, or other saved setting changed. The pre-change JSON is recoverable beside the App
+  backup below.
+- Independent latency/concurrency review found no remaining P0/P1. Its earlier five P1 findings are
+  closed: the begin cue is excluded from capture/metering; permanent socket failures stop until the
+  relevant credentials/settings change while transient failures use exponential jittered backoff;
+  Voice text-field reconnects are debounced; a quick side-button tap no longer checks out or destroys
+  a warm socket; and CoreAudio/brightness sampling is cached and performed off the main thread.
+  Quiet gated frames now release waveform peak normally, and Layout's Select/Touch native icons are
+  semantic rather than generic.
+- Accepted P2s: speaking deliberately during the 180 ms begin-cue exclusion may clip the first
+  phoneme; the first uncached real App icon lookup may perform one synchronous Workspace/filesystem
+  query. Neither affects later turns or first-token network latency.
+- Verification: warning-free optimized build; `git diff --check`; SiriRemoteCore **134/134**;
+  installed native self-test **43/43** (`PCM 10 s 0.32 ms`, packet construction `0.21 ms`, 500-term
+  dictionary `3.67 ms` in the final run); both Keychain credentials load without a prompt; and two
+  OpenAI Realtime sockets are established (plus the unrelated update/feed connection).
+- Stable build **`1.0.0-local.6`** is installed only at `/Applications/HyperVibe.app`. Its DR remains
+  `identifier "com.hypervibe.app" and certificate leaf = H"80f746bd1de5a7ceb835a200ce4e43705f01aee6"`;
+  credential-helper CDHash remains `13d5c95754534f4fcc26799385d9f48b8ac8c544`. Exactly one UI
+  process runs from the required path (PID **60089**) and Host PID **906** was not restarted.
+  Recoverable pre-deployment App/config copies are in
+  `/private/tmp/hypervibe-streaming-clean-exit-backup.lE1oSW/`. Nothing was committed or pushed.
+
+### ⚡ LATEST — 2026-08-28: Voice route per Layer (uncommitted; reviewed, tested, deployed)
+
+- The side button now resolves native Voice independently for each configured Layer through
+  `settings.dictation.layerModes`: `inherit` follows the global fallback, `existing` leaves the
+  ordinary JSON binding untouched, and `final` / `streaming` select their respective native paths.
+  Missing `layerModes` remains backward compatible and follows the existing global `outputMode`.
+- The live mapping is exactly **`BASE: existing` (user Layer 1), `L1: final` (Layer 2),
+  `L2: streaming` (Layer 3)**. Master Voice is enabled. Layer 1 therefore retains its existing
+  `button.siri: pushToTalk` and `.tap: Enter` behavior; native previous-transcript double-click is
+  also scoped to native Layers and cannot steal Layer 1's quick-button behavior.
+- Settings → Voice has a colour-keyed row for every configured Layer with **Use default / Keep
+  existing / Final / Streaming**. All choices persist through JSON and hot reload. A session freezes
+  its resolved mode at the physical press edge, so changing Layers mid-utterance cannot change an
+  in-flight Final turn into Streaming.
+- Final and Streaming keep separate prepared Realtime sockets. The number of warm sockets is capped
+  by output mode (**maximum two**), not Layer count (maximum ten), eliminating a fresh handshake on
+  the first press immediately after switching Layer without scaling resource use per Layer.
+- Native Voice holds have a matched **86 ms begin/end sound pair**, enabled by default. Both cues
+  are pre-rendered and played off the main thread; the end cue is scheduled only after capture has
+  stopped, so it cannot leak into the utterance. `feedbackSoundsEnabled` and
+  `feedbackSoundVolume` are available in both JSON and Settings. Layer 1 keeps its external
+  push-to-talk path unchanged, including any feedback owned by that external workflow.
+- The persistent widget now normalises real microphone levels against a hold-local adaptive peak
+  after a true acoustic noise gate. The same voice produces comparable waveform travel in Layers 2
+  and 3 even when the selected source/gain differs, without flattening syllable dynamics.
+- Every action family resolves a concrete icon. Layout rows show an action/native fallback symbol,
+  native dictation phases resolve their semantic SF Symbol at the final presentation boundary, and
+  an unavailable user-authored symbol falls back to `command.circle.fill` instead of leaving an
+  empty slot. The live Layer 2/3 bindings explicitly name Zoom, arrow, Delete, and Brightness
+  symbols; a visual Layout snapshot confirmed that every displayed row has an icon.
+- Verification: optimized App compiles without warnings; SiriRemoteCore **133/133**; native Voice
+  self-test **32/32**; the frozen stable-signed candidate plus ten concurrent self-tests all passed.
+  Ten seconds of PCM conversion measured **0.27–0.36 ms**, Realtime packet construction
+  **0.18–0.21 ms**, and a 500-term dictionary **3.63–4.16 ms**. Harmless synthetic-audio live API
+  checks passed: prewarmed Streaming first delta **597 ms from press**, final commit **745 ms after
+  release**; the prewarmed Final route committed **1.061 s after release**. Final mode no longer
+  sends the Streaming-only `delay: minimal` field, which OpenAI rejects for `gpt-transcribe` and
+  which had caused a hidden reconnect cycle.
+- Stable build `1.0.0-local.4` is installed only at `/Applications/HyperVibe.app`. Its Designated
+  Requirement is unchanged, credential-helper CDHash remains
+  `13d5c95754534f4fcc26799385d9f48b8ac8c544`, both Keychain credentials load without a prompt, and
+  exactly one UI process runs from the required bundle. Existing Host PID 906 was never restarted.
+  Recoverable pre-deployment backups are at
+  `/private/tmp/hypervibe-layer-voice-icons-backup.74EYVe/` (the earlier build is also at
+  `/private/tmp/hypervibe-layer-install-backup.jTOE0N/`). Nothing was committed or pushed.
+
+### ⚡ LATEST — 2026-08-28: App-native low-latency dictation (uncommitted; reviewed, tested, deployed)
+
+- **User behavior:** `Settings → Voice` enables native side-button dictation directly; it no longer
+  depends on a hidden `button.siri: pushToTalk` mapping. Capture and the prepared OpenAI Realtime
+  route begin on the raw press edge, Voice becomes visible only after the existing **0.2 s** hold
+  discriminator, and release ends the live presentation immediately. A quick tap cancels silently
+  and preserves an explicit `.tap` binding or the pre-existing base binding. When
+  `copyLastOnSideButtonDouble` is enabled, a side-button double-click copies the previous dictation;
+  disabling it restores the configured `.double` action.
+- **Two intentionally separate paths:** Streaming inserts the first true delta immediately and
+  coalesces later fragments for at most **8 ms**, with no LLM rewrite. Final uses `gpt-transcribe`,
+  applies the cached on-device dictionary, then optionally polishes with OpenAI `gpt-5.6-luna` or
+  DeepSeek `deepseek-v4-flash`. DeepSeek is the default cleanup provider because it measured faster;
+  cleanup is fail-open to the deterministic transcript.
+- **Capture/network hot path:** microphone demand, ring reading, AX target capture, credential
+  lookup, and network preparation overlap from the physical press edge. Credentials are preloaded
+  asynchronously and cached before input. The source probe prefers fresh remote voice, falls back
+  to the pinned built-in microphone, and locks after 120 ms. The 48→24 kHz converter writes into
+  pre-sized PCM memory; each 20 ms packet uses a fixed Realtime envelope. The optimized App uses
+  `-O` plus whole-module optimization, keeps the OpenAI socket warm with 15 s pings, and prewarms
+  cleanup-provider DNS/TLS/HTTP connections.
+- **No polling or guessed completion:** Realtime readiness and final results use checked
+  continuations with bounded timeout/cancellation, so there is no 5/10 ms polling tax. An ordered
+  callback drain guarantees all deltas/previews have been consumed before reconciliation; the REST
+  fallback starts in parallel with live-session cancellation/drain. A rejected handshake wakes the
+  fallback immediately instead of consuming the former four-second wait. Final mode sends only its
+  first delta to the UI thread for timing; Streaming forwards the first delta immediately.
+- **Delivery safety:** target inspection runs off the main thread. HyperVibe captures the concrete
+  focused AX editor before the HUD appears, then rechecks frontmost PID, Secure Input, and that AX
+  element immediately before mutation. It tries native AX insertion, guarded paste, then Unicode
+  CGEvents (with another guard every 20 UTF-16 units). Clipboard fallback is transactionally
+  restored only if neither the user nor another app changed it. Streaming accepts only a strict
+  missing suffix after commit; an unsafe revision is copied instead of duplicated. If an app exposes
+  no focused AX element, macOS supplies no same-process editor identity to compare; PID and Secure
+  Input guards still apply.
+- **Settings/config:** all non-secret behavior is represented in `settings.dictation` and round-trips
+  through JSONC/GUI: enable, Final/Streaming, models, language hints, cleanup provider, delivery
+  fallbacks, double-click copy, duration, and a 500-entry canonical/alias dictionary. The embedded
+  first-run template and both examples include the full schema. The Voice page exposes Keychain
+  setup/tests and in-memory press-to-audio/session/delta/transcript/cleanup/insertion timings. The
+  current live JSON explicitly enables Voice with the Layer-specific routing documented above.
+- **Credentials/signing boundary:** keys never enter JSON, UserDefaults, argv, logs, bundle resources,
+  or Git. A deterministic signed child helper owns login-keychain ACL service
+  `com.hypervibe.credentials.v6`; App and helper mutually validate code identity. Its stable CDHash is
+  **`13d5c95754534f4fcc26799385d9f48b8ac8c544`**. Treat `app/CredentialBroker/`,
+  `CredentialKeychainBridge.*`, its fixed Info.plist, build flags, and nested signing order as an
+  immutable compatibility boundary. Identifier-only ad-hoc public builds deliberately cannot read
+  these credentials; public native Voice requires the future Developer ID signing workflow.
+- **Final measured candidate:** a harmless synthetic-audio live OpenAI test, paced at real capture
+  cadence, measured a prewarmed-session first delta at **594 ms from press** and committed final at
+  **834 ms after release**. The **1.748 s** socket handshake happened during prewarm and is not charged
+  to the physical press. Across 30 consecutive candidate self-test runs: ten seconds of PCM
+  conversion took **0.26–0.35 ms**, ten seconds of Realtime packet construction **0.19–0.26 ms**, and
+  a 500-term dictionary **3.48–4.63 ms**.
+- **Final verification/deployment:** warning-free optimized compile; `git diff --check`; all
+  SiriRemoteCore tests **133/133**; native Voice self-test **24/24 checks**, passed 30× as a raw binary
+  and another 30× from the frozen candidate; credential/cache checks and the real OpenAI route pass.
+  An independent sub-agent reviewed latency and concurrency twice after fixes and found no remaining
+  P0/P1 issue. Stable-signed build `1.0.0-local.2` is installed only at
+  `/Applications/HyperVibe.app`; deep strict signing and its unchanged Designated Requirement pass,
+  helper CDHash is unchanged, exactly one UI process runs from that bundle, the existing Host process
+  was not restarted, and the final runtime log contains no permission denial. Nothing was committed
+  or pushed.
+
+### ⚡ LATEST — 2026-08-27: Apple outreach package (uncommitted; not sent)
+
+- A complete, public/non-confidential outreach kit now lives in `docs/apple-outreach/`: primary
+  Accessibility Feedback email, short follow-up, editable one-page brief, two separately fileable
+  Feedback Assistant enhancement reports, a 60-second animation-only demo script, and a public-claim
+  audit. No email or Feedback report has been submitted.
+- `output/pdf/HyperVibe-Apple-Overview.pdf` is the rendered one-page attachment. It passed visual
+  review plus PDF bounds, text, link, form, JavaScript, and encryption checks.
+- `website/apple/index.html` is an English Apple-review page that uses the current native App
+  captures and the shared non-scroll-driven site runtime. It covers the voice-only workflow gap,
+  pointer/ring/drag, all six gesture intents, App × Layer, visible state, voice, independent curves,
+  agent-editable JSONC, operating reliability, and two precise macOS API requests. The local and
+  Tailnet preview listeners on port 8765 serve it successfully; it still needs a public HTTPS URL
+  before submission.
+- Outreach language acknowledges Apple's existing Siri Remote Game Controller model for Apple TV
+  and scopes the request to the complete paired third-generation Remote input surface on macOS plus
+  a permissioned audio route. It avoids hardware-material, affiliation, clinical, App Store
+  impossibility, and supported-microphone claims.
+- Static website integrity, JavaScript syntax, all local HTTP resources, H.264 video metadata, and
+  `git diff --check` pass. SiriRemoteCore passes **130/130** tests. A connected browser instance was
+  unavailable for a fresh desktop/mobile visual pass, so signed-out browser QA remains on the final
+  send checklist.
+- A buildable, public-framework-only reproduction package lives at
+  `docs/apple-outreach/samples/PublicAPIProbe`: `InputProbe` timestamps Game Controller elements and
+  `AudioInputProbe` enumerates CoreAudio inputs. It contains no private HyperVibe implementation.
+- Before sending: replace `PUBLIC_DEMO_URL`, file the two Feedback Assistant reports, insert their
+  IDs, reconfirm the recorded macOS/Xcode/SDK versions, open every link signed out, then attach only
+  the PDF to the email and the matching probe source/output to each Feedback report.
+  Keep Tailnet URLs, raw packet data, identifiers, credentials, and private diagnostics out of the
+  email. Nothing in this outreach package has been committed or pushed.
+
+### ⚡ LATEST — 2026-08-27: Browser Layer 1 Delete + staged Back menu (uncommitted; live)
+
+- Chrome and Safari both use the shared `browser` mode, so the Back-button behavior is consistent
+  across browsers rather than living in an app-specific derived mode.
+- In Browser's user-facing Layer 1 (`BASE`), Back-button tap is Delete. Its deliberate tap-then-hold
+  ladder is: **Back at 0.5s**, **Close Window at 1.0s**, **Quit App at 1.7s**. This inserts a full
+  0.5-second Back selection window and shifts the two existing destructive stages without making
+  either easier to hit accidentally.
+- Source of truth updated in `examples/config.author.jsonc`; the live machine-managed
+  `~/.config/siriremote/config.jsonc` was updated atomically without changing any other saved GUI
+  settings. `ExampleConfigTests.testAuthorBrowserBackMenuStartsWithDeleteThenBack` locks both browser
+  profiles, actions, and thresholds against regression.
+- Verification: all **130** SiriRemoteCore tests pass. No App rebuild/re-sign occurred; the existing
+  `/Applications/HyperVibe.app` still validates as `siriRemote Local Signing`, and its sole UI process
+  is PID **29737** at `/Applications/HyperVibe.app/Contents/MacOS/HyperVibe`. Its watcher reopened the
+  replaced live config file, so the change is active. Nothing was committed or pushed.
+
+### ⚡ LATEST — 2026-08-25: native automatic updates (uncommitted; locally deployed)
+
+- Sparkle **2.9.4** is checksum-pinned by `app/prepare_sparkle.sh`, linked by the direct `swiftc`
+  build, embedded with symlinks intact, and signed deepest-helper-first. The outer local App still
+  has **no hardened runtime** (MultitouchSupport requirement); Sparkle's XPC/update helpers retain
+  hardened runtime. Its full license ships as `Sparkle-LICENSE.txt`.
+- Default behavior: daily background checks plus automatic verified download. Manual **Check for
+  Updates…** exists in both menu bar and Settings. JSON remains the only preference source:
+  `automaticUpdateChecksEnabled` and `automaticallyDownloadUpdatesEnabled` both default true and
+  hot-reload/persist with the rest of `settings`.
+- Update payload is the existing Full Setup `.pkg`, not app-only ZIP, so app, virtual mic, router
+  and capture daemon remain one version. Package extraction requires Sparkle Ed25519 verification;
+  installing system components still needs the normal macOS administrator authorization.
+- Scheduled updates use Sparkle gentle reminders: no surprise focus steal. When an update waits,
+  the menu icon gains a small dot and menu/Settings show its version; clicking brings Sparkle's
+  standard UI forward. A `-local.N` development build never schedules production-feed checks but
+  still supports manual checks.
+- Release plumbing: monotonic build mapping in `dist/version.sh`; `build-release.sh` embeds the full
+  prerelease version, audits Sparkle/framework/license/Info keys, then `update-appcast.sh` signs the
+  package and updates/signs repository-root `appcast.xml`. The private Ed25519 key exists only in the
+  login Keychain; public key is `soFR…c/Hk=` in Info.plist. Never export or commit the private key.
+- Verification completed: app compiles warning-free; all **129** SiriRemoteCore tests pass; stable
+  and explicit ad-hoc packaging paths both pass deep signature validation; shortcut-recorder
+  headless test passes. Current live build is `/Applications/HyperVibe.app`, local build **10**, one
+  process at last check, signed with the unchanged DR leaf
+  `80f746bd1de5a7ceb835a200ce4e43705f01aee6` (no new TCC grants requested).
+- Important publication state: `appcast.xml` is new and **not on GitHub main yet**, so manual update
+  checks cannot work publicly until these reviewed changes are committed/pushed. Do not push merely
+  to silence that 404; wait for explicit user approval. The current local build suppresses scheduled
+  production checks, so it remains quiet meanwhile.
 
 ### ⚡ LATEST — 2026-07-24: virtual-mic productionization + push-to-talk (read git log too)
 
@@ -341,11 +831,17 @@ taken from a different binding that merely shares the key.
 
 ### Presentation (`label` / `icon`)
 
-Display-only keys on any binding, used by the hold-progress HUD. Resolution order in
-`ActionVisual`: config `label`/`icon` → the real app icon for an action that OPENS an app (`launch`,
-`shell` of the form `open -a "X"`; shown alone, without a label) → the real app icon for an action
-AIMED at an app (`applescript` containing `tell application "X"`; shown beside the label) → an SF
-Symbol per action kind.
+Display-only keys on any binding, used across Layout and the HUDs. Resolution order in
+`ActionVisual`: measured variable volume/brightness symbol → real installed app icon for an action
+that OPENS an app (`launch`, `shell` of the form `open -a "X"`) → binding JSON `icon` → real app icon
+for an action AIMED at an app (`applescript` containing `tell application "X"`) → built-in action
+symbol. Thus nearly every static icon is authored beside its JSON action, while the two cases that
+must remain truthful—dynamic controls and launched Apps—cannot be accidentally made static.
+
+Layer definitions accept their own `icon`. `settings.icons` owns non-binding interface symbols:
+`layer.default`, `remote.connected`, `remote.disconnected`, all six native Voice result phases, and
+`fallback`. Unknown symbols fall back safely. Both maps round-trip through `ConfigWriter`, hot-reload
+into `LayerHUD`/`StatusWidget`, and remain intact after GUI settings saves.
 
 Presentation inherits down the mode chain **independently of the binding, field by field**. A key
 keeps its identity even where a mode re-binds it, so `label`/`icon` are set once in `global` and an
@@ -1873,8 +2369,8 @@ feel that evening; if any of these is wrong, this is where to look:
 - Volume-up/down are now two inputs into one measured output state, not two differently-sized
   icons. Both render Apple's variable `speaker.wave.3.fill`; CoreAudio's default output device,
   mute property and virtual-main/master/channel volume determine the visible waves. Mute resolves
-  to the related `speaker.slash.fill` state. Existing config icons in the `speaker.*` family are
-  canonicalised automatically; a genuinely custom unrelated icon remains an explicit override.
+  to the related `speaker.slash.fill` state. A configured static icon is deliberately ignored for
+  this dynamic family so it can never contradict measured system state; custom labels still work.
 - Brightness-up/down likewise share one state symbol. `sun.max.fill` must not be used for this: a
   raster probe confirmed that its 5% and 95% `variableValue` output is pixel-identical. The shipped
   feedback uses Apple's real variable `sun.max.circle`, whose authored circular state advances with
@@ -2054,6 +2550,212 @@ feel that evening; if any of these is wrong, this is where to look:
   `HYPERVIBE_INSTALLER_SIGN_IDENTITY` when a real Installer identity is supplied, otherwise emits
   an explicitly audited unsigned beta package. Do not install that public/ad-hoc payload over the
   stable-signed local test App.
+
+## Floating presentation remote controls (2026-08-27)
+
+- The passive remote-only presentation panel is controlled by one portable setting:
+  `settings.demoRemoteEnabled` (default `false`). The Settings **On-screen Status** toggle,
+  menu-bar **Demo Remote** item, JSONC hot reload and the panel's own Close command all converge on
+  the same `SettingsModel` value; GUI changes therefore persist back to `config.jsonc` instead of
+  creating a second preference source.
+- Right-clicking anywhere on the remote opens a non-activating native context menu. **Size** offers
+  Small (110 pt), Medium (156 pt) and Large (234 pt), with the exact active preset checked; resizing
+  animates around the current centre for 200 ms and clamps the result to the visible display.
+  **Close Demo Remote** hides it immediately and disables it in JSON through the shared model.
+- Free corner resizing remains available and preserves the authored aspect ratio. Window size,
+  normalized position and display ID stay in `UserDefaults` because they are machine/display local;
+  a missing display recovers the remote onto an available screen. They are intentionally not part
+  of portable JSON configuration.
+- Verification for this pass: `git diff --check`, the full App build, and **130/130**
+  SiriRemoteCore tests passed, including decode defaults, explicit JSON override and writer
+  round-trip coverage for `demoRemoteEnabled`.
+
+## Native Voice pipeline presentation and independent capsule (2026-08-28)
+
+- Final-mode Voice presentation now has one shared semantic model,
+  `VoicePipelineVisualStage`, for Listening, Transcribing, Polishing, Inserting, Inserted, Copied
+  and Error. The persistent status widget and the new temporary capsule therefore cannot drift into
+  different labels, icons, colours or stage ordering. Streaming remains deliberately different: a
+  successful release returns directly to the current Layer instead of pretending to run the Final
+  Transcribing/Inserting/Inserted sequence.
+- Layer 2's status-widget pipeline is now a continuous visual hand-off. The last real waveform
+  compresses into the Transcribing pulse; stage colours and acoustic contour filaments travel into
+  the next symbol; Apple's by-layer symbol replacement carries the icon; and title/detail lines flip
+  around their centre axes. The card keeps the exact same outer geometry throughout—no whole-window
+  scale, black shadow, layout jump or post-animation one-pixel text snap. Native key-up waits for the
+  synchronous coordinator phase, so Voice transforms directly into Transcribing rather than flashing
+  the Layer face in between.
+- `VoicePipelineHUD.swift` adds the requested independent Typeless-style temporary capsule. It is a
+  non-activating all-Spaces panel with a fixed 312×84 pt window and 300×60 pt visual card, a 21-bar
+  real acoustic waveform, pitch/brightness colour, a stage rail, open progress arc and semantic
+  terminal states. It can be dragged, stores a display-relative position, and recovers onto an
+  available screen when its previous monitor disappears. It is independent of the always-on status
+  widget and is controlled by `settings.dictation.pipelineOverlayEnabled` (default `true`) in JSONC
+  and the Voice settings page.
+- Animation teardown is interruption-safe. Temporary text layers are committed to their hidden model
+  endpoint before their Core Animation proxy is removed, stage generations reject stale completions,
+  key-up retains the last waveform until the coordinator supplies the real next phase, and a new hold
+  can interrupt either a terminal card or Streaming's release collapse without making the panel blink,
+  resize or resurrect old text.
+- Visual QA used only installed-App deterministic preview modes; it opened no microphone, HID device,
+  network session or input target. Normal capsule transitions were inspected in
+  `/private/tmp/hypervibe-voice-pipeline-build9-normal.mov`, rapid 100 ms stage changes and release
+  interruption in `/private/tmp/hypervibe-voice-pipeline-build10-interrupt.mov`, and the persistent
+  Layer 2 pipeline in `/private/tmp/hypervibe-status-widget-build10-pipeline-final.mov`. Retina screen
+  coordinates were measured before cropping; frame sheets confirmed one readable text state at a
+  time, fixed geometry, visible filled-symbol details and no stale-frame reappearance.
+- Final verification: SiriRemoteCore passes **134/134** tests and the exact packaged binary passes
+  **46/46** Voice self-checks (`dictionary=3.77 ms`, 10-second PCM conversion `0.32 ms`, packetisation
+  `0.19 ms`). Local build `1.0.0-local.10` is installed at `/Applications/HyperVibe.app`; deep/strict
+  verification succeeds with identifier `com.hypervibe.app`, `siriRemote Local Signing` certificate
+  leaf SHA-1 `80f746bd1de5a7ceb835a200ce4e43705f01aee6`, and unchanged credential-broker CDHash
+  `13d5c95754534f4fcc26799385d9f48b8ac8c544`. The preceding verified App and config are recoverable
+  from `/private/tmp/hypervibe-voice-pipeline-build6-backup.XwlNYg/`. Preview films and backups are
+  outside the repository; this pass has not been committed or pushed. Final restart left exactly one
+  UI process (PID 90784) at `/Applications/HyperVibe.app/Contents/MacOS/HyperVibe`, preserved
+  `HyperVibe Host` PID 906, and logged Input Monitoring granted, IOHIDManager open success, the media
+  event tap active and all five remote interfaces seized.
+
+## Cloudflare website — low-latency Voice story (2026-08-28)
+
+- The product site now presents native Voice as a concise speed story rather than a technical
+  pipeline explanation: **press for immediate response, speak for live text, release for rapid
+  delivery**. It distinguishes Streaming from polished Final output, notes automatic remote/Mac
+  microphone selection, and keeps the Layer-specific routing explanation brief.
+- `website/media/current-voice-pipeline.mp4` is a real native-App capture, curated into a seamless
+  5.37-second 60 fps loop covering Listening through Inserted. The website stage rail follows that
+  loop through `setupVoicePipeline()` and pauses with the existing off-screen/reduced-motion policy.
+- The public source mirror is the personal-site repository's `public/siriremote/` directory.
+  Production is the **`wenqian-dev` Cloudflare Worker** serving `wenqian.dev`, not a standalone
+  Pages project and not the Tailnet preview. Do not deploy `website/` as a Pages project or
+  overwrite the personal-site root.
+- Because `my-web` contained unrelated dirty work, this deployment reused the exact latest
+  `.open-next` Worker build and changed only five assets under `/siriremote/`: HTML, CSS, JavaScript,
+  the Voice film, and the Apple page. Deployment ran from an isolated `/private/tmp` staging tree
+  containing no `.dev.vars` or `.env`; Cloudflare's existing production secrets and bindings were
+  preserved. Production version is `cc702187-18f2-4cb6-b9d8-f93a7f3399a3`, message
+  `hypervibe-voice-showcase`.
+- Production回读 passed for the main personal site, `/siriremote/`, `/siriremote/apple/`, JS, CSS and
+  MP4. The live HTML/JS/CSS/video are byte-for-byte identical to this repository's website files;
+  the video SHA-256 is `26e23596d33af7562862a336388b88154dddfbda3c3c469b8a70065d18d84d39`.
+  No connected in-app browser was available for a new visual desktop/mobile pass, so do not claim
+  browser visual QA for this deployment. The macOS App was not rebuilt, installed, restarted or
+  otherwise touched.
+
+## Cloudflare website — global Voice mode switcher (2026-08-28)
+
+- The Voice chapter now matches the App's global routing model instead of presenting Voice as a
+  Layer-owned feature. **Hold Mute + tap Side** silently cycles External, Final and Live from every
+  Layer; the page explicitly states that External returns Side to its configured action and never
+  shows the Voice capsule.
+- The new three-state demonstration uses the App's blue/purple/orange mode identities and a single
+  authored GSAP loop. External truthfully clears the stage, Final replays the real native pipeline,
+  and Live presents immediate streaming. Manual selection pauses the loop long enough to inspect a
+  mode, then resumes. Icon turns and copy transitions stay within 220–240 ms; reduced-motion and
+  GSAP-unavailable fallbacks remain functional.
+- The configuration example now exposes `settings.dictation.activeMode` as `"final"` and describes
+  Voice, icons and HUD visibility as JSON-controllable. Source files are `website/index.html`,
+  `website/styles.css` and `website/app.js`; their exact copies were synced to
+  the personal-site repository's `public/siriremote/` directory.
+- Deployment again reused the isolated, previously verified OpenNext Worker tree so none of the
+  unrelated dirty `my-web` work could ship. Wrangler `--strict` dry-run passed with all production
+  D1/KV/R2/Analytics bindings intact, then uploaded exactly the three changed `/siriremote/` assets.
+  Cloudflare production version is `37072d26-ffaf-4267-adad-fa1ba238081c`, message
+  `hypervibe-global-voice-modes`.
+- Production回读 proved the live HTML, CSS and JavaScript are byte-for-byte identical to the website
+  sources (SHA-256 `73eeb2a633e4c6a72b47b0415ac93bdf1b7e1acb70dac9be38371328062426e8`,
+  `3975bf6a1e1230686c8d691944250cacc8a7e622d236df11da10cd5fe433eacb`, and
+  `feb55c193945865f0b7cd715c5073dcb88f6b872ee15c09c55202f49afb3a036`). JavaScript syntax and diff
+  whitespace checks pass. No connected in-app browser was available, so this pass does not claim a
+  fresh screenshot-based visual QA result. The macOS App was not rebuilt, installed or restarted.
+
+## Cloudflare website — complete product story (2026-08-28)
+
+- The product page is no longer a thin sequence of isolated feature highlights. Its HTML expanded
+  from 429 to 674 lines and now carries one continuous software story: the voice-only control gap,
+  four real workflows, touch/ring control, all 13 physical press points, the six-gesture grammar,
+  App × Layer resolution, native visual feedback, global Voice, acceleration tuning, shared
+  GUI/JSON/Agent configuration, long-running system behaviour, onboarding and updates.
+- The new **13 × 6** atlas names every configurable press point and shows up to 78 gesture slots.
+  The App × Layer chapter now animates all four resolver priorities instead of merely asserting that
+  contextual mapping exists. The action vocabulary enumerates input/media, window/Space,
+  launch/automation and state actions, followed by a concrete Agent → patch → validate → hot-reload
+  path.
+- Four authored workflow panels cover Agent coding, standing presentations, multi-display work and
+  media/reading. Voice now documents source locking, pre-warming, Final cleanup, insertion/paste/copy
+  fallback, secure-field refusal, last-result recovery, Keychain storage and the native latency
+  telemetry. Installation now distinguishes App-only from Full Setup and explains System Check,
+  pairing and signed Sparkle updates.
+- All new interactive systems use existing GSAP core/timelines, 220–240 ms UI transitions and
+  infinite authored loops. They pause outside the viewport through the existing observer, respect
+  reduced motion and do not add ScrollTrigger, scroll listeners or whole-card scaling. Manual
+  workflow/resolver selection pauses the automatic story long enough to inspect it, then resumes.
+- Source, the personal-site `public/siriremote/` mirror and the isolated OpenNext deployment tree
+  were synchronized byte-for-byte. Strict Wrangler dry-run preserved the existing Worker and all
+  D1/KV/R2/Analytics bindings; production uploaded exactly HTML, CSS and JavaScript while reusing
+  237 existing assets. Cloudflare version is `c98026fc-e7fe-4213-955b-e98718ba3ced`, message
+  `hypervibe-complete-product-story`.
+- Production回读 proved byte identity for HTML, CSS and JavaScript (SHA-256
+  `7b6644be9aadb902428478957328decadd0d0e35d30a20a5d0a429877c073c88`,
+  `2bee94da950b5f7fb5f62aaf395dbaf84f778dcef557a7a82cbd6ebb0271e2ab`, and
+  `9b1a9529240baf07b47bbb5dd0c6ff90c9ada56356054da03a9239e33559712b`). JavaScript syntax,
+  whitespace, duplicate-ID, anchor-target and local HTTP checks pass. Browser discovery again
+  returned no available browser, so do not claim fresh screenshot-level desktop/mobile QA. The
+  macOS App was not rebuilt, installed, restarted or otherwise touched.
+
+## Cloudflare website — compact information density (2026-08-28)
+
+- The full product story remains intact, but the page no longer treats every chapter like a
+  full-screen keynote slide. Global section spacing is down from a maximum of 132 px to 84 px
+  (about 36% less), with the tablet/mobile value reduced from 82 px to 54 px (about 34% less).
+  Heading gaps, nested chapter separators, card padding and repeated internal margins were reduced
+  as one density system rather than by removing content.
+- The tallest demonstrations were tightened independently so they retain hierarchy without forcing
+  unnecessary scrolling: the control lab is 720 -> 570 px, workflow stage 490 -> 378 px, curve
+  editor 620 -> 500 px and final download panel 330 -> 240 px. Gesture rows, resolver rows, setup,
+  engineering, voice-detail and observability cards were similarly reduced. Animation timing,
+  interaction logic, HTML and JavaScript did not change.
+- Only `website/styles.css` was synchronized to the public source mirror and isolated OpenNext
+  staging tree. The verified Worker stayed byte-identical at SHA-256
+  `d05223bf4d44c84108a102ab62aa3bc9c5568f0c3ac2064c37be5cc65c64bc45`; Wrangler strict dry-run
+  passed with all existing D1/KV/R2/Analytics bindings, and production uploaded exactly one modified
+  asset: `/siriremote/styles.css`.
+- Cloudflare production version is `5bf30dd9-fb6c-4c58-9fd9-49ab33d55407`, message
+  `hypervibe-compact-layout`. Production read-back proved the live CSS is byte-for-byte identical to
+  the source at SHA-256 `7c315f8dbaf5056896cd5de065205a0197fcfd73af24eaca66f122eb18dbb955`,
+  and `/siriremote/` returned HTTP 200 with the complete 47,185-byte page. Browser discovery returned
+  no available browser, so this pass does not claim screenshot-level visual QA. The macOS App was
+  not rebuilt, installed, restarted or otherwise touched.
+
+## Public beta credentials, app-only Sparkle updates and local.20 verification (2026-08-29)
+
+- Public ad-hoc builds no longer lose native Voice merely because they cannot authenticate the
+  certificate-bound credential broker. `VoiceCredentialStore` still prefers the login Keychain
+  whenever the App and broker share a certificate requirement; otherwise it uses the dedicated
+  plaintext `~/Library/Application Support/HyperVibe/Credentials/credentials.json`. This is not the
+  shareable `config.jsonc`: only the Settings credential cards are a supported writer, the directory
+  is mode `0700`, the file is mode `0600`, writes are atomic, symlinks are rejected, and the path is
+  excluded from backup. The plaintext design is an explicit beta trade-off and does not protect
+  against malware already running as the same macOS user.
+- The old `--import-voice-keys-from-environment` write path was removed. Explicit API benchmarks may
+  still read temporary environment values only when `--test-voice-api` is present; normal App launch
+  never imports shell state. Settings explains the actual backend at runtime.
+- Sparkle appcasts now sign and enclose the app-only ZIP, not the Full Setup package. Ordinary
+  updates therefore replace only `HyperVibe.app`, never restart system audio and do not ask for an
+  administrator password. The native/legacy Full Setup assets remain manual choices for installing
+  or refreshing the optional microphone stack.
+- Release audit now requires the two exact UI-SFX Sci-fi Voice cue hashes and their shipped license.
+  Release notes for `0.2.0-beta.6` begin with the one-time manual-upgrade boundary: beta.5 and older
+  have no updater; beta.6 begins the authenticated beta channel.
+- Verification so far: app compilation passes; SiriRemoteCore passes **134/134** tests; the complete
+  stable-signed bundle passes **73/73** native Voice checks, including local JSON round-trip,
+  provider-preserving update, deletion and `0600/0700` permissions. Candidate
+  `/private/tmp/HyperVibe-local20.app` passed deep/strict signing and Info.plist validation before
+  staging. It is installed as `/Applications/HyperVibe.app` with release
+  `1.0.0-local.20`, identifier `com.hypervibe.app`, Authority `siriRemote Local Signing`, and exactly
+  one UI process (PID 25016). Startup logs confirm Input Monitoring granted, IOHIDManager open and
+  the media event tap installed. The preceding App is recoverable from
+  `/private/tmp/hypervibe-local20-install.D9aI8E/HyperVibe.app`.
 
 ## Maintenance rules
 
