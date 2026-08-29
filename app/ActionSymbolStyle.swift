@@ -242,8 +242,17 @@ enum ActionSymbolStyle {
     /// hierarchical rendering's progressively reduced opacity. The three equal palette entries
     /// keep every authored layer equally legible while Apple's by-layer effects can still address
     /// those layers independently. Symbols with fewer layers simply ignore the extra entries.
-    static func hierarchicalImage(_ source: NSImage?, symbolName: String?, tint: NSColor) -> NSImage? {
+    static func hierarchicalImage(_ source: NSImage?, symbolName: String?, tint: NSColor,
+                                  cue: ActionSymbolCue? = nil) -> NSImage? {
         guard symbolName != nil, let source else { return source }
+        // Filled status symbols encode their semantic mark (waveform/check/exclamation) as a
+        // separate primary layer. Giving every layer the same colour turns that mark into a solid
+        // disc or triangle. Keep equal-colour depth for ordinary symbols, but use Apple's familiar
+        // white-on-semantic-colour treatment for the few states where the inner mark is the message.
+        if symbolName?.hasSuffix(".fill") == true,
+           cue == .voice || cue == .confirm || cue == .destructive {
+            return source.withSymbolConfiguration(.init(paletteColors: [.white, tint, tint]))
+        }
         return source.withSymbolConfiguration(.init(paletteColors: [tint, tint, tint]))
     }
 
@@ -276,13 +285,14 @@ enum ActionSymbolStyle {
     /// fallback for the macOS 13 deployment floor.
     @available(macOS 14.0, *)
     static func replaceSymbol(in imageView: NSImageView, with image: NSImage,
-                              cue: ActionSymbolCue?, speed: Double = 2.35) {
+                              cue: ActionSymbolCue?, speed: Double = 2.35,
+                              preferMagic: Bool = true) {
         // A replacement is a new semantic transaction. Cancel an interrupted effect before
         // installing the new transition so two variable-colour/bounce timelines can never fight
         // over the same authored layers.
         imageView.removeAllSymbolEffects(options: .default, animated: false)
         let options = SymbolEffectOptions.speed(speed)
-        if #available(macOS 15.0, *) {
+        if #available(macOS 15.0, *), preferMagic {
             imageView.setSymbolImage(
                 image,
                 contentTransition: .replace.magic(fallback: .replace.downUp.byLayer),
@@ -385,7 +395,13 @@ enum ActionSymbolStyle {
             } else {
                 imageView.addSymbolEffect(.pulse.byLayer, options: options)
             }
-        case .appWheel, .repeatAction:
+        case .appWheel:
+            // The 3×3 launcher is a set of destinations, not a rotary control. Rotating the whole
+            // grid makes the large hold HUD read like a loading spinner. The persistent widget and
+            // hold HUD provide their own nine-piece relay; this is the restrained fallback for any
+            // other surface (and for custom App Wheel symbols).
+            imageView.addSymbolEffect(.appear.up.byLayer, options: options)
+        case .repeatAction:
             if #available(macOS 15.0, *) {
                 imageView.addSymbolEffect(.rotate.clockwise.byLayer, options: options)
             } else {

@@ -102,10 +102,27 @@ enum ConfigStore {
         // Bind a key to { "action": "layerCycle" } to walk this order and loop at the end.
         // `name` is arbitrary; colour accepts system names or #RRGGBB / #RRGGBBAA.
         "layers": [
-          { "id": "BASE", "name": "Layer 1", "color": "green" },
-          { "id": "L1",   "name": "Layer 2", "color": "blue" },
-          { "id": "L2",   "name": "Layer 3", "color": "purple" }
+          { "id": "BASE", "name": "Layer 1", "color": "green",  "icon": "square.stack.3d.up.fill" },
+          { "id": "L1",   "name": "Layer 2", "color": "blue",   "icon": "square.stack.3d.up.fill" },
+          { "id": "L2",   "name": "Layer 3", "color": "purple", "icon": "square.stack.3d.up.fill" }
         ],
+        // Non-action UI states. Ordinary binding icons stay next to each action below.
+        "icons": {
+          "layer.default": "square.stack.3d.up.fill",
+          "remote.connected": "appletvremote.gen4.fill",
+          "remote.disconnected": "appletvremote.gen4",
+          "voice.listening": "waveform.circle.fill",
+          "voice.mode.external": "keyboard.badge.ellipsis",
+          "voice.mode.final": "text.badge.checkmark",
+          "voice.mode.streaming": "bolt.horizontal.circle.fill",
+          "voice.transcribing": "waveform.badge.magnifyingglass",
+          "voice.polishing": "wand.and.stars",
+          "voice.inserting": "text.cursor",
+          "voice.inserted": "checkmark.circle.fill",
+          "voice.copied": "doc.on.doc.fill",
+          "voice.error": "exclamationmark.triangle.fill",
+          "fallback": "command.circle.fill"
+        },
         "cursorSpeed": 0.6,          // lower = slower / less sensitive
         "cursorDeadzone": 0.006,     // higher = more jitter ignored, easier to hold & click
         "accelCurve": 1.0,           // pointer curve bend: 1 = symmetric, >1 stays precise longer
@@ -116,12 +133,45 @@ enum ConfigStore {
         // this Mac already completed onboarding) deliberately stays on this Mac.
         "interfaceLanguage": "en",  // en | zh; hot-reloads across Settings, menu bar and HUDs
         "launchAtLoginEnabled": false,
+        "automaticUpdateChecksEnabled": true,
+        "automaticallyDownloadUpdatesEnabled": true,
         "menuBarIconEnabled": true,
         "statusWidgetEnabled": true,  // draggable always-on Layer/action status card
+        "demoRemoteEnabled": false,   // floating live remote visualiser for presentations
         "layerHUDEnabled": true,       // layer-switch + remote connect/disconnect cards
         "holdHUDEnabled": true,       // larger release-to-select progress HUD
         "dragIndicatorEnabled": true, // cursor-adjacent sticky-drag badge
         "showSetupWizardOnFirstLaunch": true,
+        // App-native speech-to-text. API keys live in machine-local credential storage; never put
+        // them in this shareable configuration.
+        // `final` returns one optionally polished result; `streaming` inserts live deltas and skips
+        // LLM cleanup so the first text can arrive while you are still speaking.
+        "dictation": {
+          "enabled": false,
+          // One global route on every Layer. Hold Mute + tap Side to cycle it at runtime.
+          "activeMode": "final", // external | final | streaming
+          // Legacy downgrade compatibility; activeMode above is authoritative.
+          "outputMode": "final",
+          "layerModes": {},
+          "finalModel": "gpt-transcribe",
+          "streamingModel": "gpt-live-transcribe",
+          "languageHints": ["zh", "en"],
+          "cleanupProvider": "deepseek", // none | openai | deepseek; Final mode only
+          "openAICleanupModel": "gpt-5.6-luna",
+          "deepSeekCleanupModel": "deepseek-v4-flash",
+          "autoInsert": true,
+          "copyOnFailure": true,
+          "restoreClipboardAfterInsert": true,
+          "copyLastOnSideButtonDouble": true,
+          "feedbackSoundsEnabled": true,
+          "feedbackSoundVolume": 0.55,
+          "pipelineOverlayEnabled": true,
+          "minimumRecordingSeconds": 1,
+          "maxRecordingSeconds": 120,
+          "dictionary": [
+            { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] }
+          ]
+        },
         "holdThreshold": 0.5,        // seconds held → stage 1 (".hold"). Fires on RELEASE (release-to-select).
         "holdThreshold2": 1.0,       // seconds held → stage 2 (".hold2"), a deeper hold
         "holdThreshold3": 1.6,       // seconds held → stage 3 (".hold3"), the deepest hold

@@ -32,6 +32,7 @@ struct LayoutView: View {
     @State private var addName = ""
     @State private var addLayerTitle = ""
     @State private var addLayerColor = ""
+    @State private var addLayerIcon = ""
     @State private var addTargetMode = "global"
 
     // The mode currently being viewed (falls back to the default if the selection is gone
@@ -216,7 +217,7 @@ struct LayoutView: View {
 
     private var addChip: some View {
         Button {
-            addName = ""; addLayerTitle = ""; addLayerColor = ""
+            addName = ""; addLayerTitle = ""; addLayerColor = ""; addLayerIcon = ""
             addIsLayer = false; addTargetMode = config.defaultModeName; showAdd = true
         } label: {
             HStack(spacing: 8) {
@@ -247,6 +248,9 @@ struct LayoutView: View {
                 TextField(L("Internal id (e.g. L3)"), text: $addName).textFieldStyle(.roundedBorder)
                 TextField(L("Display name (e.g. Editing)"), text: $addLayerTitle).textFieldStyle(.roundedBorder)
                 TextField(L("Colour (e.g. orange or #FF9500)"), text: $addLayerColor)
+                    .textFieldStyle(.roundedBorder)
+                TextField(L("SF Symbol (e.g. square.stack.3d.up.fill)"),
+                          text: $addLayerIcon)
                     .textFieldStyle(.roundedBorder)
                 Text(L("Added to the end of settings.layers and inherited from Global. %d/10 layers used.", config.settings.layers.count))
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -294,9 +298,11 @@ struct LayoutView: View {
         if addIsLayer {
             let title = addLayerTitle.trimmingCharacters(in: .whitespacesAndNewlines)
             let color = addLayerColor.trimmingCharacters(in: .whitespacesAndNewlines)
+            let icon = addLayerIcon.trimmingCharacters(in: .whitespacesAndNewlines)
             onSave(config.addLayer(id: name,
                                    name: title.isEmpty ? nil : title,
                                    color: color.isEmpty ? nil : color,
+                                   icon: icon.isEmpty ? nil : icon,
                                    inherits: config.defaultModeName))
             selectedMode = config.defaultModeName
             editLayer = name
@@ -394,6 +400,11 @@ struct LayoutView: View {
             }
             .frame(minWidth: 150, alignment: .leading)
             Spacer(minLength: 8)
+            Image(nsImage: r.image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 18, height: 18)
+                .foregroundStyle(r.kind == .system ? Color.secondary : Color.primary)
             Text(r.label)
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(r.kind == .system ? .secondary : .primary)
@@ -450,17 +461,62 @@ struct LayoutView: View {
     // MARK: - Resolution
 
     private enum Kind { case custom, inherited, system }
-    private struct Resolved { let label: String; let kind: Kind; let tag: String }
+    private struct Resolved {
+        let label: String
+        let image: NSImage
+        let kind: Kind
+        let tag: String
+    }
 
     private func resolve(_ key: String) -> Resolved {
         if let res = config.resolveBinding(key, in: mode) {
+            let presentation = MappingEngine(config: config).resolvePresentation(key, in: mode)
+            let visual = ActionVisual.resolve(res.action, presentation)
+            let image = visual.image ?? Self.fallbackIcon("command")
             if res.sourceMode == mode {
-                return Resolved(label: res.action.displayLabel, kind: .custom, tag: L("Custom"))
+                return Resolved(label: visual.label, image: image,
+                                kind: .custom, tag: L("Custom"))
             }
             let tag = res.sourceMode == config.defaultModeName ? L("Global") : L("Inherited")
-            return Resolved(label: res.action.displayLabel, kind: .inherited, tag: tag)
+            return Resolved(label: visual.label, image: image,
+                            kind: .inherited, tag: tag)
         }
-        return Resolved(label: Self.nativeLabel(key), kind: .system, tag: L("System"))
+        return Resolved(label: Self.nativeLabel(key), image: Self.nativeIcon(key),
+                        kind: .system, tag: L("System"))
+    }
+
+    private static func nativeIcon(_ key: String) -> NSImage {
+        let bare = key.split(separator: ".").suffix(2).joined(separator: ".")
+        let name: String
+        if key.contains("ring.up") || key.hasSuffix("swipe.up") { name = "arrow.up" }
+        else if key.contains("ring.down") || key.hasSuffix("swipe.down") { name = "arrow.down" }
+        else if key.contains("ring.left") || key.hasSuffix("swipe.left") { name = "arrow.left" }
+        else if key.contains("ring.right") || key.hasSuffix("swipe.right") { name = "arrow.right" }
+        else {
+            switch bare {
+            case "button.siri": name = "mic.fill"
+            case "button.power": name = "power"
+            case "button.playPause": name = "playpause.fill"
+            case "button.volumeUp": name = "speaker.plus.fill"
+            case "button.volumeDown": name = "speaker.minus.fill"
+            case "button.mute": name = "speaker.slash.fill"
+            case "button.tv": name = "tv.fill"
+            case "button.menu": name = "chevron.backward"
+            case "select", "button.select": name = "cursorarrow.click"
+            case "touch": name = "hand.draw.fill"
+            case "tap.two": name = "cursorarrow.click.2"
+            default: name = "command"
+            }
+        }
+        return fallbackIcon(name)
+    }
+
+    private static func fallbackIcon(_ requested: String) -> NSImage {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+        return (NSImage(systemSymbolName: requested, accessibilityDescription: nil)
+                ?? NSImage(systemSymbolName: "command", accessibilityDescription: nil)
+                ?? NSImage(size: NSSize(width: 16, height: 16)))
+            .withSymbolConfiguration(configuration) ?? NSImage(size: NSSize(width: 16, height: 16))
     }
 
     // MARK: - Static tables

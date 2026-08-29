@@ -27,6 +27,77 @@ public enum ConfigLoader {
                 "settings.interfaceLanguage must be 'en' or 'zh' (got '\(language)')"
             )
         }
+        let dictation = c.settings.dictation
+        if dictation.enabled {
+            guard !dictation.finalModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ConfigError.validation("settings.dictation.finalModel must not be empty")
+            }
+            guard !dictation.streamingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ConfigError.validation("settings.dictation.streamingModel must not be empty")
+            }
+            switch dictation.cleanupProvider {
+            case .none:
+                break
+            case .openAI:
+                guard !dictation.openAICleanupModel
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw ConfigError.validation(
+                        "settings.dictation.openAICleanupModel must not be empty"
+                    )
+                }
+            case .deepSeek:
+                guard !dictation.deepSeekCleanupModel
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw ConfigError.validation(
+                        "settings.dictation.deepSeekCleanupModel must not be empty"
+                    )
+                }
+            }
+        }
+        guard (1...600).contains(dictation.maxRecordingSeconds) else {
+            throw ConfigError.validation(
+                "settings.dictation.maxRecordingSeconds must be between 1 and 600"
+            )
+        }
+        guard dictation.minimumRecordingSeconds.isFinite,
+              (0...30).contains(dictation.minimumRecordingSeconds) else {
+            throw ConfigError.validation(
+                "settings.dictation.minimumRecordingSeconds must be between 0 and 30"
+            )
+        }
+        guard dictation.minimumRecordingSeconds <= dictation.maxRecordingSeconds else {
+            throw ConfigError.validation(
+                "settings.dictation.minimumRecordingSeconds must not exceed maxRecordingSeconds"
+            )
+        }
+        guard dictation.feedbackSoundVolume.isFinite,
+              (0...1).contains(dictation.feedbackSoundVolume) else {
+            throw ConfigError.validation(
+                "settings.dictation.feedbackSoundVolume must be between 0 and 1"
+            )
+        }
+        guard dictation.dictionary.count <= 500 else {
+            throw ConfigError.validation("settings.dictation.dictionary supports at most 500 terms")
+        }
+        var canonicalTerms = Set<String>()
+        for entry in dictation.dictionary {
+            let term = entry.term.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !term.isEmpty, term == entry.term else {
+                throw ConfigError.validation(
+                    "settings.dictation.dictionary contains an empty or padded term"
+                )
+            }
+            guard !term.contains("\n"), !term.contains("\r") else {
+                throw ConfigError.validation(
+                    "settings.dictation.dictionary terms cannot contain newlines"
+                )
+            }
+            guard canonicalTerms.insert(term.lowercased()).inserted else {
+                throw ConfigError.validation(
+                    "settings.dictation.dictionary contains duplicate term '\(term)'"
+                )
+            }
+        }
         let layers = c.settings.layers
         let usesLayerCycle = c.modes.values.contains { mode in
             mode.bindings.values.contains { $0 == .layerCycle }
@@ -51,6 +122,24 @@ public enum ConfigLoader {
                 if usesLayerCycle, id != "BASE", c.modes[id] == nil {
                     throw ConfigError.validation("settings.layers id '\(id)' is not in modes")
                 }
+                if let icon = layer.icon {
+                    guard !icon.isEmpty, icon == icon.trimmingCharacters(in: .whitespacesAndNewlines),
+                          icon.count <= 128 else {
+                        throw ConfigError.validation(
+                            "settings.layers['\(id)'].icon must be a non-empty SF Symbol name"
+                        )
+                    }
+                }
+            }
+        }
+        for (key, icon) in c.settings.icons {
+            guard !key.isEmpty, key == key.trimmingCharacters(in: .whitespacesAndNewlines),
+                  key.count <= 128, !icon.isEmpty,
+                  icon == icon.trimmingCharacters(in: .whitespacesAndNewlines),
+                  icon.count <= 128 else {
+                throw ConfigError.validation(
+                    "settings.icons keys and values must be non-empty, unpadded names"
+                )
             }
         }
         for (app, mode) in c.appProfiles where c.modes[mode] == nil {

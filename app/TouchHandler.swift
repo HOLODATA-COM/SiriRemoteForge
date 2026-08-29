@@ -357,8 +357,23 @@ class TouchHandler {
     
     /// `--dump-touches`: log every MTTouch field, to find out which the remote actually populates.
     /// We only ever read `normalizedVector.position` and `zTotal`; the struct carries more.
-    /// Set to observe raw touch frames (the touch-monitor window). Called on the MAIN thread.
-    var onRawTouch: (([TouchSnapshot]) -> Void)?
+    /// Set to observe raw touch frames (the touch-monitor / Demo Mode windows). The multitouch
+    /// callback and AppKit window lifecycle run on different threads, so changing this sink at
+    /// runtime must be synchronized even though the sink itself is always invoked on main.
+    private let rawTouchSinkLock = NSLock()
+    private var rawTouchSink: (([TouchSnapshot]) -> Void)?
+    var onRawTouch: (([TouchSnapshot]) -> Void)? {
+        get {
+            rawTouchSinkLock.lock()
+            defer { rawTouchSinkLock.unlock() }
+            return rawTouchSink
+        }
+        set {
+            rawTouchSinkLock.lock()
+            rawTouchSink = newValue
+            rawTouchSinkLock.unlock()
+        }
+    }
 
     private let dumpTouches = CommandLine.arguments.contains("--dump-touches")
     private static var dumpCount = 0
@@ -376,8 +391,12 @@ class TouchHandler {
 
     func handleTouches(touches: UnsafeMutablePointer<MTTouch>?, count: Int, timestamp: Double) {
         // Live monitor tap: every frame, verbatim, for the touch-monitor window. Nil in normal use.
-        if let sink = onRawTouch, let touches = touches {
-            let snaps = (0..<count).map { TouchSnapshot(touches[$0]) }
+        if let sink = onRawTouch {
+            // A zero-contact callback may carry a nil pointer. Still publish an empty frame so a
+            // monitor or Demo Mode never leaves the final contact frozen on screen.
+            let snaps = touches.map { pointer in
+                (0..<count).map { TouchSnapshot(pointer[$0]) }
+            } ?? []
             DispatchQueue.main.async { sink(snaps) }
         }
 

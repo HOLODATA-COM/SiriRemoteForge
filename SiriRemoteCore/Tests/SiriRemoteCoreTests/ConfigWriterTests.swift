@@ -122,16 +122,45 @@ final class ConfigWriterTests: XCTestCase {
         "findCursorEnabled": true,
         "interfaceLanguage": "zh",
         "launchAtLoginEnabled": true,
+        "automaticUpdateChecksEnabled": false,
+        "automaticallyDownloadUpdatesEnabled": false,
         "menuBarIconEnabled": false,
         "statusWidgetEnabled": true,
+        "demoRemoteEnabled": true,
         "layerHUDEnabled": false,
         "holdHUDEnabled": true,
         "dragIndicatorEnabled": false,
         "showSetupWizardOnFirstLaunch": false,
+        "dictation": {
+          "enabled": true,
+          "activeMode": "streaming",
+          "outputMode": "streaming",
+          "layerModes": { "BASE": "existing", "L1": "final" },
+          "finalModel": "gpt-transcribe",
+          "streamingModel": "gpt-live-transcribe",
+          "languageHints": ["zh", "en"],
+          "cleanupProvider": "deepseek",
+          "openAICleanupModel": "gpt-5.6-luna",
+          "deepSeekCleanupModel": "deepseek-v4-flash",
+          "autoInsert": true,
+          "copyOnFailure": true,
+          "restoreClipboardAfterInsert": true,
+          "copyLastOnSideButtonDouble": true,
+          "feedbackSoundsEnabled": true,
+          "feedbackSoundVolume": 0.55,
+          "pipelineOverlayEnabled": true,
+          "minimumRecordingSeconds": 2,
+          "maxRecordingSeconds": 90,
+          "dictionary": [{ "term": "HyperVibe", "aliases": ["hyper vibe"] }]
+        },
         "layers": [
-          { "id": "BASE", "name": "Layer 1", "color": "green" },
-          { "id": "L1", "name": "Layer 2", "color": "#0A84FF" }
+          { "id": "BASE", "name": "Layer 1", "color": "green", "icon": "house.fill" },
+          { "id": "L1", "name": "Layer 2", "color": "#0A84FF", "icon": "hammer.fill" }
         ],
+        "icons": {
+          "remote.connected": "appletvremote.gen4.fill",
+          "voice.copied": "doc.on.doc.fill"
+        },
         "circularScroll": {
           "enabled": true, "minRadius": 0.35, "startThreshold": 0.35,
           "pixelsPerRadian": 160, "scrollEase": 0.3, "invert": false
@@ -185,7 +214,9 @@ final class ConfigWriterTests: XCTestCase {
     func testConfigRoundTripsThroughWriter() throws {
         let original = try ConfigLoader.load(representativeConfig)
         XCTAssertEqual(original.settings.layers[1],
-                       Config.LayerDefinition(id: "L1", name: "Layer 2", color: "#0A84FF"))
+                       Config.LayerDefinition(id: "L1", name: "Layer 2", color: "#0A84FF",
+                                              icon: "hammer.fill"))
+        XCTAssertEqual(original.settings.icons["voice.copied"], "doc.on.doc.fill")
         let written = try ConfigWriter.serialize(original)
         let reparsed = try ConfigLoader.load(written)
         XCTAssertEqual(reparsed, original)

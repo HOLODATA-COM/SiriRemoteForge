@@ -48,3 +48,12 @@ mic/driver/vendor/BlackHole-LICENSE.txt.
 
 The Siri Remote Mic router links Opus by Xiph.Org and contributors. Its BSD
 license and patent notice are retained in mic/router/Opus-LICENSE.txt.
+
+HyperVibe embeds Sparkle 2 by the Sparkle Project for software updates. Its MIT
+license and bundled third-party notices are retained in the application as
+Contents/Resources/Sparkle-LICENSE.txt.
+
+The native Voice start/stop cues use the Sci-fi Toggle on and Toggle off audio
+assets from UI SFX by Romain Simon. These audio assets are dedicated to the
+public domain under CC0-1.0. The notice is retained in the application as
+Contents/Resources/Sounds/UI-SFX-LICENSE.txt.

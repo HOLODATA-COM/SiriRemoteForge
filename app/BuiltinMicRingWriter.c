@@ -407,6 +407,75 @@ int srm_remote_meter_snapshot(SRMMeterFeatures *features,
     return snapshot_meter_ring(gRemoteMeterShared, features, writeIndex, producerActive);
 }
 
+static int audio_state(const SRMSharedMemory *shared,
+                       uint64_t *writeIndex,
+                       uint32_t *producerActive)
+{
+    if (writeIndex == NULL || producerActive == NULL || !valid_meter_ring(shared))
+    {
+        return -1;
+    }
+    *producerActive = atomic_load_explicit(&shared->producerActive, memory_order_acquire);
+    *writeIndex = atomic_load_explicit(&shared->writeIndex, memory_order_acquire);
+    return 0;
+}
+
+static size_t audio_read(const SRMSharedMemory *shared,
+                         uint64_t *cursor,
+                         float *samples,
+                         size_t capacity,
+                         uint32_t *producerActive)
+{
+    if (cursor == NULL || samples == NULL || producerActive == NULL || capacity == 0 ||
+        !valid_meter_ring(shared))
+    {
+        return 0;
+    }
+
+    const uint32_t active = atomic_load_explicit(&shared->producerActive, memory_order_acquire);
+    const uint64_t published = atomic_load_explicit(&shared->writeIndex, memory_order_acquire);
+    *producerActive = active;
+
+    // A producer restart or an overrun must never turn subtraction into an enormous unsigned
+    // backlog. Retain the newest ringful: it is the only audio that physically still exists.
+    if (*cursor > published) { *cursor = published; }
+    if (published - *cursor > SRM_RING_FRAMES) {
+        *cursor = published - SRM_RING_FRAMES;
+    }
+
+    uint64_t available = published - *cursor;
+    if (available > capacity) { available = capacity; }
+    for (uint64_t frame = 0; frame < available; ++frame) {
+        samples[frame] = shared->ring[(uint32_t)((*cursor + frame) % SRM_RING_FRAMES)];
+    }
+    *cursor += available;
+    return (size_t)available;
+}
+
+int srm_builtin_audio_state(uint64_t *writeIndex, uint32_t *producerActive)
+{
+    return audio_state(gShared, writeIndex, producerActive);
+}
+
+int srm_remote_audio_state(uint64_t *writeIndex, uint32_t *producerActive)
+{
+    if (open_remote_meter() != 0) { return -1; }
+    return audio_state(gRemoteMeterShared, writeIndex, producerActive);
+}
+
+size_t srm_builtin_audio_read(uint64_t *cursor, float *samples, size_t capacity,
+                              uint32_t *producerActive)
+{
+    return audio_read(gShared, cursor, samples, capacity, producerActive);
+}
+
+size_t srm_remote_audio_read(uint64_t *cursor, float *samples, size_t capacity,
+                             uint32_t *producerActive)
+{
+    if (open_remote_meter() != 0) { return 0; }
+    return audio_read(gRemoteMeterShared, cursor, samples, capacity, producerActive);
+}
+
 void srm_builtin_ring_close(void)
 {
     if (gShared != NULL)

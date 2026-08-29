@@ -16,10 +16,27 @@
     "defaultMode": "global",
     // Ordered layer cycle (max 10). Names/colours hot-reload; the final entry loops to BASE.
     "layers": [
-      { "id": "BASE", "name": "Layer 1", "color": "green" },
-      { "id": "L1",   "name": "Layer 2", "color": "blue" },
-      { "id": "L2",   "name": "Layer 3", "color": "purple" }
+      { "id": "BASE", "name": "Layer 1", "color": "green",  "icon": "square.stack.3d.up.fill" },
+      { "id": "L1",   "name": "Layer 2", "color": "blue",   "icon": "square.stack.3d.up.fill" },
+      { "id": "L2",   "name": "Layer 3", "color": "purple", "icon": "square.stack.3d.up.fill" }
     ],
+    // Non-action states. For ordinary actions, put `icon` directly beside `action` in the binding.
+    "icons": {
+      "layer.default": "square.stack.3d.up.fill",
+      "remote.connected": "appletvremote.gen4.fill",
+      "remote.disconnected": "appletvremote.gen4",
+      "voice.listening": "waveform.circle.fill",
+      "voice.mode.external": "keyboard.badge.ellipsis",
+      "voice.mode.final": "text.badge.checkmark",
+      "voice.mode.streaming": "bolt.horizontal.circle.fill",
+      "voice.transcribing": "waveform.badge.magnifyingglass",
+      "voice.polishing": "wand.and.stars",
+      "voice.inserting": "text.cursor",
+      "voice.inserted": "checkmark.circle.fill",
+      "voice.copied": "doc.on.doc.fill",
+      "voice.error": "exclamationmark.triangle.fill",
+      "fallback": "command.circle.fill"
+    },
     "cursorSpeed": 1.8,          // higher = faster cursor (overall baseline)
     "cursorDeadzone": 0.006,     // higher = more jitter ignored, easier to hold & click
     // Pointer acceleration: multiplier layered on cursorSpeed, driven by per-frame finger speed
@@ -40,8 +57,11 @@
     "findCursorEnabled": true,   // shake the cursor (rapid back-and-forth) to flash a locate highlight
     "interfaceLanguage": "en",  // en | zh; all app surfaces update live
     "launchAtLoginEnabled": false, // desired macOS Login Item registration
+    "automaticUpdateChecksEnabled": true, // check the release feed in the background
+    "automaticallyDownloadUpdatesEnabled": true, // download verified Full Setup updates automatically
     "menuBarIconEnabled": true,
     "statusWidgetEnabled": true,  // draggable always-on Layer/action status card (also in Settings)
+    "demoRemoteEnabled": false,   // floating live remote visualiser for presentations
     "layerHUDEnabled": true,       // layer-switch + remote connect/disconnect cards
     "holdHUDEnabled": true,       // larger release-to-select progress HUD
     "dragIndicatorEnabled": true, // cursor-adjacent sticky-drag badge
@@ -51,6 +71,31 @@
     // display: raising one of those changes nothing you can see, whereas doing this to overlapping
     // windows would reshuffle them as the pointer crossed — and macOS cannot focus without raising.
     "focusFollowsCursor": false,
+    // App-native speech-to-text. Secrets live only in macOS Keychain, never in this JSON file.
+    "dictation": {
+      "enabled": false,
+      "activeMode": "final", // external | final | streaming; global on every Layer
+      "outputMode": "final", // legacy downgrade compatibility
+      "layerModes": {}, // deprecated compatibility; routing no longer reads this
+      "finalModel": "gpt-transcribe",
+      "streamingModel": "gpt-live-transcribe",
+      "languageHints": ["zh", "en"],
+      "cleanupProvider": "deepseek", // none | openai | deepseek (Final mode only)
+      "openAICleanupModel": "gpt-5.6-luna",
+      "deepSeekCleanupModel": "deepseek-v4-flash",
+      "autoInsert": true,
+      "copyOnFailure": true,
+      "restoreClipboardAfterInsert": true,
+      "copyLastOnSideButtonDouble": true,
+      "feedbackSoundsEnabled": true,
+      "feedbackSoundVolume": 0.55,
+      "pipelineOverlayEnabled": true, // temporary draggable Voice capsule (independent of status widget)
+      "minimumRecordingSeconds": 1, // shorter turns stay local and are discarded without output
+      "maxRecordingSeconds": 120,
+      "dictionary": [
+        { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] }
+      ]
+    },
     // Circular scroll (iPod wheel): circle a finger on the OUTER ring to scroll.
     "circularScroll": {
       "enabled": true,

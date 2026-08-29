@@ -14,6 +14,32 @@ import CoreText
 import QuartzCore
 import Symbols
 
+/// Microphones expose different analogue gain, so raw 0...1 envelopes are not visually
+/// comparable: the same voice can look huge through the Siri Remote and tiny through the Mac's
+/// built-in array. Normalize each Voice hold against its own slowly decaying acoustic peak after a
+/// real noise gate. The waveform still carries syllable-to-syllable loudness, but changing Layer
+/// (and therefore capture route) no longer changes the apparent size of the speaker's voice.
+struct VoiceWaveformLevelNormalizer {
+    private(set) var peak: CGFloat = 0.22
+
+    mutating func reset() { peak = 0.22 }
+
+    mutating func normalize(_ rawValue: Float) -> CGFloat {
+        let raw = CGFloat(rawValue.isFinite ? min(1, max(0, rawValue)) : 0)
+        let gate: CGFloat = 0.055
+        // Release is wall-clock/display-tick based, including quiet gaps. A loud transient must not
+        // pin the scale indefinitely merely because silence sits below the acoustic gate.
+        peak = max(0.22, peak * 0.994)
+        guard raw > gate else { return 0 }
+        let gated = (raw - gate) / (1 - gate)
+        // About a 5.5-second peak release at the 30 Hz display cadence. A word can soften without
+        // instantly being auto-amplified, while a later sentence can still establish a new scale.
+        peak = max(peak, gated)
+        let relative = min(1, max(0, gated / peak))
+        return min(1, pow(relative, 0.86) * 0.76)
+    }
+}
+
 final class StatusWidgetController: NSObject, NSWindowDelegate {
 
     private final class StatusPanel: NSPanel {
@@ -103,6 +129,13 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         case actionImpulse(count: Int)
         case returnSweep
         case holdSequence
+        /// A global Voice route advances independently of Layer. Three orbital traces briefly
+        /// exchange depth around the exact destination symbol; the card itself never scales.
+        case voiceModeSwitch(direction: CGFloat)
+        /// Final Voice is one continuous signal changing state, not a stack of unrelated cards.
+        /// The live SF Symbol keeps its authored layers while a short acoustic filament carries
+        /// energy from the outgoing stage into the incoming one.
+        case voicePipeline(VoicePipelineVisualStage)
         case settleToLayer
 
         var titleDirection: CGFloat {
@@ -110,8 +143,15 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             case .layerRebuild(let direction): return direction
             case .returnSweep: return -1
             case .settleToLayer: return -1
+            case .voicePipeline: return 1
+            case .voiceModeSwitch(let direction): return direction
             default: return 1
             }
+        }
+
+        var usesStrictByLayerReplacement: Bool {
+            if case .voicePipeline = self { return true }
+            return false
         }
     }
 
@@ -179,6 +219,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
 
     private var configuredLayers: [String: Config.LayerDefinition] = [:]
     private var configuredOrdinals: [String: Int] = [:]
+    private var configuredIcons: [String: String] = [:]
     private var currentLayerID = "BASE"
     private var currentPresentationKey: String?
     private var currentSymbolName: String?
@@ -227,10 +268,18 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     private var voicePitchPosition: CGFloat = 0
     private var voicePitchConfidence: CGFloat = 0
     private var voiceBrightness: CGFloat = 0
+    private var voiceLevelNormalizer = VoiceWaveformLevelNormalizer()
+    private var voiceMeterSuppressedUntil: CFTimeInterval = 0
     private var voiceLastVoicedAt: CFTimeInterval = 0
     private var voiceNeutralTint = NSColor.systemBlue
     private var voiceStartedAt: CFTimeInterval = 0
     private var voiceLastReadoutTick = -1
+    /// Key-up and the coordinator's first post-capture phase are synchronous but separate
+    /// callbacks. Keep the final acoustic silhouette alive across that boundary so it can become
+    /// the Transcribing symbol directly instead of flashing the Layer face between them.
+    private var awaitingNativeVoicePhase = false
+    private var nativeVoiceHandoffGeneration = 0
+    private var voicePipelineAccentRoot: CALayer?
     private var contentMorphGeneration = 0
     private var contentMorphProxyViews: [NSView] = []
     private var contentMorphTransientLayers: [CALayer] = []
@@ -251,7 +300,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     /// update direction) instead of replaying the entrance/effect from frame zero.
     private var activeContinuousFamily: String?
 
-    init(layers: [Config.LayerDefinition], enabled: Bool,
+    init(layers: [Config.LayerDefinition], icons: [String: String] = [:], enabled: Bool,
          defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.surface = Self.makeSurface(windowSize: windowSize, cardFrame: cardFrame,
@@ -262,6 +311,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             self?.materialAppearanceChanged()
         }
         configureHoldProgressVisualStyle()
+        configuredIcons = icons
         normalize(layers)
         applyLayerIdentity(animated: false)
 
@@ -289,9 +339,11 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
 
     // MARK: - Public state
 
-    func configure(layers: [Config.LayerDefinition], enabled: Bool) {
+    func configure(layers: [Config.LayerDefinition], icons: [String: String] = [:],
+                   enabled: Bool) {
         onMain { [weak self] in
             guard let self = self else { return }
+            self.configuredIcons = icons
             self.normalize(layers)
             self.applyLayerIdentity(animated: self.enabled)
             self.setEnabledOnMain(enabled)
@@ -331,6 +383,9 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             guard !self.isHolding else { return }
             self.isTransient = false
             guard self.enabled else { return }
+            if self.completeNativeVoiceHandoff(to: self.idleFace(), pipelineStage: nil) {
+                return
+            }
             let iconMotion: IconMotion = animated && previousLayerID != destinationLayerID
                 ? .layerRebuild(direction: self.layerTransitionDirection(
                     from: previousLayerID, to: destinationLayerID
@@ -338,6 +393,30 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                 : .ordinary
             self.present(self.idleFace(), animated: animated, returningToIdle: false,
                          iconMotion: iconMotion)
+        }
+    }
+
+    /// Hardware Voice-mode feedback. This is a transient semantic state of the always-on surface,
+    /// never a Layer change, so its return target remains whichever Layer is currently active.
+    func showVoiceModeSwitch(_ mode: Config.DictationMode) {
+        onMain { [weak self] in
+            guard let self, self.enabled, self.isConnected, !self.isHolding else { return }
+            self.idleGeneration += 1
+            self.activeContinuousFamily = nil
+            self.pendingActivation = nil
+            let icon = self.configuredIcon("voice.mode.\(mode.rawValue)",
+                                           fallback: mode.presentationSymbol)
+            let face = Face(key: "voice-mode:\(mode.rawValue)",
+                            title: mode.presentationTitle,
+                            subtitle: mode.presentationDetail,
+                            image: nil,
+                            symbolName: icon,
+                            symbolCue: mode.presentationCue,
+                            tint: mode.presentationTint,
+                            controlState: nil)
+            self.presentTransient(face, duration: 0.78, animate: true,
+                                  iconMotion: .voiceModeSwitch(direction: 1),
+                                  playSymbolCue: false)
         }
     }
 
@@ -355,6 +434,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
             self.lastEvent = nil
             self.activeContinuousFamily = nil
             self.idleGeneration += 1
+            self.awaitingNativeVoicePhase = false
+            self.nativeVoiceHandoffGeneration += 1
+            self.voicePipelineAccentRoot?.removeFromSuperlayer()
+            self.voicePipelineAccentRoot = nil
             if self.isHolding {
                 self.isHolding = false
                 self.holdGeneration += 1
@@ -367,6 +450,9 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                 self.stopHoldProgress(immediate: true)
                 self.setVoiceWaveformActive(false, immediate: true)
                 self.stopHoldRipple(immediate: true)
+            } else if self.isVoiceWaveformActive {
+                // A disconnect can arrive in the tiny key-up → phase hand-off interval.
+                self.setVoiceWaveformActive(false, immediate: true)
             }
             self.isTransient = false
             guard self.enabled else { return }
@@ -644,6 +730,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         onMain { [weak self] in
             guard let self = self, self.enabled, self.isHolding,
                   self.holdBase?.key == handled.key else { return }
+            self.awaitingNativeVoicePhase = false
+            self.nativeVoiceHandoffGeneration += 1
+            self.voicePipelineAccentRoot?.removeFromSuperlayer()
+            self.voicePipelineAccentRoot = nil
             // Voice is driven by real microphone power. Do not layer the decorative looping
             // hold rings underneath it; silence should visibly settle to a flat waveform.
             self.stopHoldRipple(immediate: true)
@@ -666,23 +756,35 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     }
 
     func endContinuousAction(key: String) {
+        endContinuousAction(key: key, awaitsNativePhase: false)
+    }
+
+    /// Native Voice has an immediate coordinator phase after key-up; the legacy Layer 1 external
+    /// push-to-talk path does not. Keeping these boundaries explicit prevents the old path from
+    /// inheriting even the defensive 120 ms native hand-off window.
+    func endNativeContinuousAction(key: String) {
+        endContinuousAction(key: key, awaitsNativePhase: true)
+    }
+
+    private func endContinuousAction(key: String, awaitsNativePhase: Bool) {
         onMain { [weak self] in
             guard let self = self, self.isHolding else { return }
             // Only close the session that opened this key; a stale release from another mirrored
             // HID interface must not dismiss a newer continuous action.
             guard self.holdBase?.key == key else { return }
             if let base = self.holdBase, case .pushToTalk = base.action {
-                self.endVoiceHold()
+                self.endVoiceHold(awaitsNativePhase: awaitsNativePhase)
                 return
             }
             self.endHold(firedIndex: 0)
         }
     }
 
-    /// Voice is a mode of the same compact surface, not a navigated page. On release, return
-    /// directly to the current Layer underneath the console; never expose a temporary Completed
-    /// face or route through the ordinary left/right action transition.
-    private func endVoiceHold() {
+    /// Voice is a mode of the same compact surface, not a navigated page. Key-up and the first
+    /// post-capture coordinator phase are two callbacks on the same run-loop turn. Preserve the
+    /// final real waveform between them: Final can turn it directly into Transcribing, while
+    /// Streaming turns it directly back into its Layer. There is never a Layer flash in between.
+    private func endVoiceHold(awaitsNativePhase: Bool) {
         isHolding = false
         holdVisualIsVisible = false
         holdGeneration += 1
@@ -690,18 +792,97 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         cancelHoldVisualWork()
         stopHoldRipple()
         stopHoldProgress()
-
-        let destination = idleFace()
-        setVoiceWaveformActive(false)
-        configure(face: destination)
-        applyColors(destination.tint, animated: true)
-        currentPresentationKey = destination.key
-        isTransient = false
+        awaitingNativeVoicePhase = true
+        nativeVoiceHandoffGeneration += 1
+        let handoffGeneration = nativeVoiceHandoffGeneration
+        isTransient = true
         releasedHold = nil
         holdBase = nil
         holdStages = []
         holdStageDelays = []
         activeHoldKey = nil
+
+        if !awaitsNativePhase {
+            _ = completeNativeVoiceHandoff(to: idleFace(), pipelineStage: nil)
+            return
+        }
+
+        // The coordinator normally answers synchronously. This defensive edge handles shutdown,
+        // cancellation, or a future caller that omits its phase callback without leaving a frozen
+        // waveform on screen. It does not add latency to the normal Final/Streaming paths.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self, self.awaitingNativeVoicePhase,
+                  self.nativeVoiceHandoffGeneration == handoffGeneration else { return }
+            _ = self.completeNativeVoiceHandoff(to: self.idleFace(), pipelineStage: nil)
+        }
+    }
+
+    /// Configure the hidden destination first, then let the existing 25 acoustic bars physically
+    /// converge into that exact icon and let the Voice readouts fold into its labels. This is the
+    /// only legal exit from a native Voice hold, which keeps both output modes frame-synchronous.
+    @discardableResult
+    private func completeNativeVoiceHandoff(to face: Face,
+                                            pipelineStage: VoicePipelineVisualStage?) -> Bool {
+        guard awaitingNativeVoicePhase else { return false }
+        awaitingNativeVoicePhase = false
+        nativeVoiceHandoffGeneration += 1
+        configure(face: face, applyPalette: false)
+        applyColors(face.tint, animated: true)
+        currentPresentationKey = face.key
+        isTransient = pipelineStage != nil
+        setVoiceWaveformActive(false)
+        if let pipelineStage {
+            animateVoicePipelineIgnition(pipelineStage, expectedKey: face.key,
+                                         cue: face.symbolCue)
+        }
+        return true
+    }
+
+    /// Native transcription keeps using the same physical card after the microphone edge ends.
+    /// Work phases stay visible until superseded; terminal phases dwell briefly, then settle back
+    /// to the Layer. No second panel and no page-navigation animation are introduced.
+    func showNativeDictationPhase(_ phase: VoiceDictationPhase, message: String) {
+        onMain { [weak self] in
+            guard let self, self.enabled, self.isConnected, !self.isHolding else { return }
+            switch phase {
+            case .priming, .listening:
+                return
+            case .idle:
+                if self.completeNativeVoiceHandoff(to: self.idleFace(), pipelineStage: nil) {
+                    return
+                }
+                guard self.currentPresentationKey?.hasPrefix("native-dictation:") == true else {
+                    return
+                }
+                self.idleGeneration += 1
+                self.isTransient = false
+                self.present(self.idleFace(), animated: true, returningToIdle: true,
+                             iconMotion: .settleToLayer)
+                return
+            case .transcribing, .polishing, .inserting, .inserted, .copied, .error:
+                break
+            }
+            guard let stage = VoicePipelineVisualStage(phase) else { return }
+            let icon = self.configuredIcon(stage.configIconKey,
+                                           fallback: stage.fallbackSymbol)
+            let face = Face(key: "native-dictation:\(phase.rawValue)",
+                            title: stage.title,
+                            subtitle: message,
+                            image: nil,
+                            symbolName: icon,
+                            symbolCue: stage.symbolCue,
+                            tint: stage.tint,
+                            controlState: nil)
+            self.idleGeneration += 1
+            self.isTransient = true
+            if !self.completeNativeVoiceHandoff(to: face, pipelineStage: stage) {
+                self.present(face, animated: true, returningToIdle: false,
+                             iconMotion: .voicePipeline(stage))
+            }
+            if stage.isTerminal {
+                self.scheduleIdle(after: phase == .error ? 2.2 : 1.0)
+            }
+        }
     }
 
     /// Real acoustic samples from BuiltinMicFeeder. Every bar retains its own loudness, relative
@@ -710,14 +891,28 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     func updateVoiceMeter(_ sample: VoiceMeterSample) {
         onMain { [weak self] in
             guard let self = self, self.enabled, self.isVoiceWaveformActive else { return }
+            guard CACurrentMediaTime() >= self.voiceMeterSuppressedUntil else { return }
             self.voiceHistory.removeFirst()
             self.voiceHistory.append(self.voiceVisualSample(from: sample))
             self.renderVoiceBars(animated: true)
         }
     }
 
+    /// Keep HyperVibe's own start cue out of the real-audio visualization. Resetting the adaptive
+    /// reference here also prevents that short chirp from compressing the user's next few words.
+    func suppressVoiceMeter(for duration: TimeInterval) {
+        onMain { [weak self] in
+            guard let self, duration.isFinite, duration > 0 else { return }
+            self.voiceMeterSuppressedUntil = CACurrentMediaTime() + min(1, duration)
+            self.voiceLevelNormalizer.reset()
+            self.voiceHistory = [VoiceVisualSample](repeating: .silence,
+                                                    count: self.surface.voiceBarLayers.count)
+            if self.isVoiceWaveformActive { self.renderVoiceBars(animated: false) }
+        }
+    }
+
     private func voiceVisualSample(from sample: VoiceMeterSample) -> VoiceVisualSample {
-        let level = CGFloat(min(1, max(0, sample.level.isFinite ? sample.level : 0)))
+        let level = voiceLevelNormalizer.normalize(sample.level)
         let rawBrightness = CGFloat(min(1, max(0,
             sample.brightness.isFinite ? sample.brightness : 0)))
         // A silent fricative/noise estimate must not leave a glowing cap behind. Preserve the
@@ -827,6 +1022,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         idleGeneration += 1
         pendingActivation = nil
         activeContinuousFamily = nil
+        awaitingNativeVoicePhase = false
+        nativeVoiceHandoffGeneration += 1
+        voicePipelineAccentRoot?.removeFromSuperlayer()
+        voicePipelineAccentRoot = nil
         isHolding = false
         holdGeneration += 1
         holdBase = nil
@@ -975,6 +1174,8 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         guard enabled, isConnected else { return }
         ensureReachable()
         surface.panel.orderFrontRegardless()
+        voicePipelineAccentRoot?.removeFromSuperlayer()
+        voicePipelineAccentRoot = nil
         let contentChanges = currentPresentationKey != face.key
         let outgoing = animated && contentChanges ? makeNormalContentProxy() : nil
         applyColors(face.tint, animated: animated && contentChanges)
@@ -1011,30 +1212,53 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         holdVisualWorkItems.removeAll()
     }
 
-    private func configure(face: Face) {
+    private func configure(face: Face, applyPalette: Bool = true) {
         currentFaceTint = face.tint
-        currentSymbolName = face.symbolName
+        // A Face may carry only semantic symbol provenance (native dictation phases do), and a
+        // user-authored symbol can be unavailable on an older supported macOS. Resolve here at the
+        // final presentation boundary and always retain a known system fallback; no transition is
+        // allowed to land on an empty 40 pt icon slot.
+        let resolvedImage: NSImage?
+        let resolvedSymbolName: String?
+        if let requested = face.symbolName,
+           let image = face.image ?? symbol(requested, size: 26) {
+            resolvedImage = image
+            resolvedSymbolName = requested
+        } else if let image = face.image {
+            resolvedImage = image
+            resolvedSymbolName = nil
+        } else if let fallback = symbol("command.circle.fill", size: 26) {
+            resolvedImage = fallback
+            resolvedSymbolName = "command.circle.fill"
+        } else if let fallback = symbol("command", size: 26) {
+            resolvedImage = fallback
+            resolvedSymbolName = "command"
+        } else {
+            resolvedImage = NSImage(size: NSSize(width: 26, height: 26))
+            resolvedSymbolName = nil
+        }
+        currentSymbolName = resolvedSymbolName
         currentSymbolCue = face.symbolCue
         currentControlState = face.controlState
         if #available(macOS 14.0, *) {
             surface.iconView.removeAllSymbolEffects(options: .default, animated: false)
         }
-        if face.symbolName != nil, let source = face.image {
+        if let symbolName = resolvedSymbolName, let source = resolvedImage {
             // Hierarchical rendering uses the symbol's authored primary/secondary/tertiary layers
             // and derives accessible depth from one semantic system colour. It falls back to
             // monochrome automatically for a symbol without hierarchy.
             surface.iconView.image = ActionSymbolStyle.hierarchicalImage(
-                source, symbolName: face.symbolName, tint: face.tint
+                source, symbolName: symbolName, tint: face.tint, cue: face.symbolCue
             )
             surface.iconView.contentTintColor = nil
         } else {
-            surface.iconView.image = face.image
-            surface.iconView.contentTintColor = face.image?.isTemplate == true ? face.tint : nil
+            surface.iconView.image = resolvedImage
+            surface.iconView.contentTintColor = resolvedImage?.isTemplate == true ? face.tint : nil
         }
         surface.titleLabel.stringValue = face.title
         surface.subtitleLabel.stringValue = face.subtitle
         applyHoldContentContrast()
-        applyColors(face.tint, animated: false)
+        if applyPalette { applyColors(face.tint, animated: false) }
         currentPresentationKey = face.key
     }
 
@@ -1075,10 +1299,11 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
 
     private func idleFace() -> Face {
         let appearance = layerAppearance(currentLayerID)
+        let symbolName = appearance.icon
         return Face(key: "layer:\(currentLayerID)", title: appearance.label,
                     subtitle: L("Current Layer"),
-                    image: symbol("square.stack.3d.up.fill", size: 26),
-                    symbolName: "square.stack.3d.up.fill",
+                    image: symbol(symbolName, size: 26),
+                    symbolName: symbolName,
                     symbolCue: .layer,
                     tint: appearance.tint,
                     controlState: nil)
@@ -1184,13 +1409,24 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         return forward <= backward ? 1 : -1
     }
 
-    private func layerAppearance(_ rawID: String) -> (label: String, tint: NSColor) {
+    private func layerAppearance(_ rawID: String) -> (label: String, tint: NSColor, icon: String) {
         let id = rawID.uppercased()
         let definition = configuredLayers[id]
         let explicitName = definition?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = explicitName.flatMap { $0.isEmpty ? nil : $0 } ?? fallbackLayerName(id)
         let tint = definition?.color.flatMap(configuredColor) ?? fallbackLayerTint(id)
-        return (label, tint)
+        let icon = ActionVisual.firstValidSystemSymbol(
+            [definition?.icon, configuredIcons["layer.default"], configuredIcons["fallback"]],
+            fallback: "square.stack.3d.up.fill"
+        )
+        return (label, tint, icon)
+    }
+
+    private func configuredIcon(_ key: String, fallback: String) -> String {
+        ActionVisual.firstValidSystemSymbol(
+            [configuredIcons[key], fallback, configuredIcons["fallback"]],
+            fallback: "command.circle.fill"
+        )
     }
 
     private func fallbackLayerName(_ id: String) -> String {
@@ -1416,7 +1652,8 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
 
         var containers: [NSView] = []
         if !requiresAuthoredIconTransition(iconMotion),
-           supportsNativeSymbolMorph(from: proxy.symbolName, to: currentSymbolName),
+           supportsNativeSymbolMorph(from: proxy.symbolName, to: currentSymbolName,
+                                     allowingUnrelated: iconMotion.usesStrictByLayerReplacement),
            let oldImage = proxy.iconView.image,
            let newImage = surface.iconView.image {
             let iconMorph = makeNativeSymbolMorph(
@@ -1595,21 +1832,28 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         case .settleToLayer: return 0.22
         case .layerRebuild, .applicationArrival, .appWheelWave: return 0.28
         case .holdSequence: return 0.26
+        case .voiceModeSwitch: return 0.24
+        case .voicePipeline: return 0.26
         case .ordinary: return 0.22
         }
     }
 
     private func requiresAuthoredIconTransition(_ motion: IconMotion) -> Bool {
-        if case .appWheelWave = motion { return true }
-        return false
+        switch motion {
+        case .appWheelWave, .voiceModeSwitch: return true
+        default: return false
+        }
     }
 
     /// Morphicons' public engine consumes stroke-path data, while AppKit deliberately exposes an
     /// SF Symbol as `NSImage` rather than public SVG geometry. On supported systems the Symbols
     /// framework is the native topology-aware path: Magic Replace preserves related layers and
     /// falls back cleanly for unrelated symbols. macOS 13 keeps the compositor-only 3D fallback.
-    private func supportsNativeSymbolMorph(from oldName: String?, to newName: String?) -> Bool {
-        guard ActionSymbolStyle.supportsTopologyAwareReplacement(from: oldName, to: newName)
+    private func supportsNativeSymbolMorph(from oldName: String?, to newName: String?,
+                                           allowingUnrelated: Bool = false) -> Bool {
+        guard oldName != nil, newName != nil else { return false }
+        guard allowingUnrelated
+                || ActionSymbolStyle.supportsTopologyAwareReplacement(from: oldName, to: newName)
         else { return false }
         if #available(macOS 14.0, *) { return true }
         return false
@@ -1690,6 +1934,31 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                 NSValue(caTransform3D: spatialTransform(perspective: 290)),
             ]
             times = [0, 0.38, 0.80, 1]
+        case .voicePipeline(let stage):
+            // The vector symbol remains live while its authored layers replace. A different,
+            // restrained camera inflection for each semantic stage makes the pipeline legible
+            // without moving or scaling the card itself.
+            let direction: CGFloat = stage.rawValue.isMultiple(of: 2) ? 1 : -1
+            let depth: CGFloat = stage.isTerminal ? 8 : 6
+            spatial = [
+                NSValue(caTransform3D: spatialTransform(perspective: 330)),
+                NSValue(caTransform3D: spatialTransform(
+                    x: direction * 0.65, y: stage == .inserting ? -0.7 : 0,
+                    z: depth, scale: stage.isTerminal ? 1.045 : 1.035,
+                    scaleX: 1.035, scaleY: 0.94,
+                    rotateX: stage == .transcribing ? -0.10 : 0.06,
+                    rotateY: direction * 0.12,
+                    rotateZ: direction * (stage == .polishing ? 0.10 : 0.035),
+                    perspective: 330
+                )),
+                NSValue(caTransform3D: spatialTransform(
+                    x: -direction * 0.18, z: 2, scale: 1.012,
+                    rotateX: -0.018, rotateY: -direction * 0.025,
+                    perspective: 330
+                )),
+                NSValue(caTransform3D: spatialTransform(perspective: 330)),
+            ]
+            times = [0, 0.38, 0.78, 1]
         case .settleToLayer:
             spatial = [
                 NSValue(caTransform3D: spatialTransform(z: -5, scale: 0.92,
@@ -1701,7 +1970,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                 NSValue(caTransform3D: spatialTransform(perspective: 310)),
             ]
             times = [0, 0.70, 1]
-        case .ordinary, .applicationArrival, .appWheelWave:
+        case .ordinary, .applicationArrival, .appWheelWave, .voiceModeSwitch:
             spatial = [
                 NSValue(caTransform3D: spatialTransform(perspective: 320)),
                 NSValue(caTransform3D: spatialTransform(z: 6, scale: 1.035,
@@ -1729,7 +1998,10 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                   outgoing.superview != nil else { return }
             outgoing.contentTintColor = destinationTint
             if #available(macOS 14.0, *) {
-                ActionSymbolStyle.replaceSymbol(in: outgoing, with: newImage, cue: cue)
+                ActionSymbolStyle.replaceSymbol(
+                    in: outgoing, with: newImage, cue: cue,
+                    preferMagic: !motion.usesStrictByLayerReplacement
+                )
             }
         }
         return container
@@ -1798,25 +2070,32 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                       self.enabled, self.isConnected, !self.isHolding, self.isTransient,
                       self.currentPresentationKey == expectedPresentationKey,
                       self.lastEvent?.key == handled.key else { return }
-                let refreshed = self.actionFace(
-                    key: handled.key,
-                    action: handled.action,
-                    presentation: handled.presentation,
-                    subtitle: self.gestureLabel(for: handled.key)
-                )
-                guard refreshed.controlState != nil,
-                      refreshed.controlState != self.currentControlState else { return }
-                if SystemControlState.isSystemOutputMuteToggle(handled.action) {
-                    self.refreshMuteState(
-                        refreshed,
-                        expectedPresentationKey: expectedPresentationKey,
-                        handledKey: handled.key,
-                        duration: duration,
-                        generation: refreshGeneration
+                SystemControlState.refresh(for: handled.action) { [weak self] state in
+                    guard let self, let state,
+                          self.controlStateRefreshGeneration == refreshGeneration,
+                          self.enabled, self.isConnected, !self.isHolding, self.isTransient,
+                          self.currentPresentationKey == expectedPresentationKey,
+                          self.lastEvent?.key == handled.key else { return }
+                    let refreshed = self.actionFace(
+                        key: handled.key,
+                        action: handled.action,
+                        presentation: handled.presentation,
+                        subtitle: self.gestureLabel(for: handled.key),
+                        controlStateOverride: state
                     )
-                } else {
-                    self.presentTransient(refreshed, duration: duration, animate: false,
-                                          playSymbolCue: false)
+                    guard refreshed.controlState != self.currentControlState else { return }
+                    if SystemControlState.isSystemOutputMuteToggle(handled.action) {
+                        self.refreshMuteState(
+                            refreshed,
+                            expectedPresentationKey: expectedPresentationKey,
+                            handledKey: handled.key,
+                            duration: duration,
+                            generation: refreshGeneration
+                        )
+                    } else {
+                        self.presentTransient(refreshed, duration: duration, animate: false,
+                                              playSymbolCue: false)
+                    }
                 }
             }
         }
@@ -1863,7 +2142,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         }
         let oldSymbolName = currentSymbolName
         let image = ActionSymbolStyle.hierarchicalImage(
-            source, symbolName: face.symbolName, tint: face.tint
+            source, symbolName: face.symbolName, tint: face.tint, cue: face.symbolCue
         ) ?? source
 
         currentFaceTint = face.tint
@@ -2018,6 +2297,11 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                                       key: "nativeHoldRailOpacity\(side)")
             }
 
+        case .voicePipeline(let stage):
+            installVoicePipelineFilaments(in: root, bounds: container.bounds,
+                                           tint: tint, stage: stage,
+                                           duration: duration, begin: begin)
+
         case .settleToLayer:
             let seam = CAShapeLayer()
             seam.frame = container.bounds
@@ -2044,8 +2328,159 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                                   beginTime: begin, timing: timing, to: seam,
                                   key: "nativeSettleOpacity")
 
-        case .ordinary, .applicationArrival, .appWheelWave:
+        case .ordinary, .applicationArrival, .appWheelWave, .voiceModeSwitch:
             break
+        }
+    }
+
+    /// A stage-specific signal contour. It is deliberately neither a progress bar nor a spinner:
+    /// the same acoustic filament changes topology as Voice moves from sound, through refinement
+    /// and delivery, into its terminal state. Two staggered strokes create depth without particles
+    /// or dots, both of which become noisy in a 40 pt icon aperture.
+    private func voicePipelineContourPaths(in bounds: CGRect,
+                                           stage: VoicePipelineVisualStage) -> [CGPath] {
+        let left = bounds.minX + 4
+        let right = bounds.maxX - 4
+        let midX = bounds.midX
+        let midY = bounds.midY
+        func path(_ build: (CGMutablePath) -> Void) -> CGPath {
+            let value = CGMutablePath()
+            build(value)
+            return value
+        }
+
+        switch stage {
+        case .transcribing:
+            return [-3.0, 3.0].map { offset in
+                path {
+                    $0.move(to: CGPoint(x: left, y: midY + offset))
+                    $0.addCurve(to: CGPoint(x: right, y: midY - offset),
+                                control1: CGPoint(x: left + 8, y: midY + 9 + offset),
+                                control2: CGPoint(x: right - 8, y: midY - 9 - offset))
+                }
+            }
+        case .polishing:
+            return [-1.0, 1.0].map { direction in
+                path {
+                    $0.move(to: CGPoint(x: left + 1, y: midY))
+                    $0.addCurve(to: CGPoint(x: right - 1, y: midY),
+                                control1: CGPoint(x: midX - 3, y: midY + direction * 15),
+                                control2: CGPoint(x: midX + 3, y: midY - direction * 15))
+                }
+            }
+        case .inserting:
+            return [-3.2, 3.2].map { offset in
+                path {
+                    $0.move(to: CGPoint(x: left, y: midY + offset))
+                    $0.addCurve(to: CGPoint(x: midX + 4, y: midY + offset),
+                                control1: CGPoint(x: left + 7, y: midY + offset),
+                                control2: CGPoint(x: midX - 3, y: midY + offset))
+                    $0.addCurve(to: CGPoint(x: right - 1, y: midY + directionFor(offset) * 8),
+                                control1: CGPoint(x: midX + 9, y: midY + offset),
+                                control2: CGPoint(x: right - 4, y: midY + directionFor(offset) * 5))
+                }
+            }
+        case .inserted:
+            return [0.0, 2.2].map { offset in
+                path {
+                    $0.move(to: CGPoint(x: left + 2, y: midY + offset))
+                    $0.addLine(to: CGPoint(x: midX - 2, y: midY - 7 + offset))
+                    $0.addLine(to: CGPoint(x: right - 1, y: midY + 9 + offset))
+                }
+            }
+        case .copied:
+            return [-2.4, 2.4].map { offset in
+                let rect = CGRect(x: left + 5 + offset, y: midY - 8 - offset,
+                                  width: 17, height: 16)
+                return CGPath(roundedRect: rect, cornerWidth: 3, cornerHeight: 3,
+                              transform: nil)
+            }
+        case .error:
+            return [-2.0, 2.0].map { offset in
+                path {
+                    $0.move(to: CGPoint(x: left, y: midY + offset))
+                    $0.addLine(to: CGPoint(x: midX - 5, y: midY + 7 + offset))
+                    $0.addLine(to: CGPoint(x: midX + 4, y: midY - 7 + offset))
+                    $0.addLine(to: CGPoint(x: right, y: midY + offset))
+                }
+            }
+        }
+    }
+
+    private func directionFor(_ value: CGFloat) -> CGFloat { value < 0 ? -1 : 1 }
+
+    private func installVoicePipelineFilaments(in root: CALayer, bounds: CGRect,
+                                               tint: NSColor,
+                                               stage: VoicePipelineVisualStage,
+                                               duration: CFTimeInterval,
+                                               begin: CFTimeInterval) {
+        let timing = CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.16, 1)
+        for (index, path) in voicePipelineContourPaths(in: bounds, stage: stage).enumerated() {
+            let filament = CAShapeLayer()
+            filament.frame = bounds
+            filament.path = path
+            filament.fillColor = nil
+            filament.strokeColor = tint.withAlphaComponent(index == 0 ? 0.78 : 0.46).cgColor
+            filament.lineWidth = index == 0 ? 1.25 : 0.82
+            filament.lineCap = .round
+            filament.lineJoin = .round
+            filament.strokeStart = 0
+            filament.strokeEnd = 0
+            filament.opacity = 0
+            filament.shadowColor = tint.cgColor
+            filament.shadowOpacity = index == 0 ? 0.28 : 0.14
+            filament.shadowRadius = index == 0 ? 2.8 : 1.7
+            filament.shadowOffset = .zero
+            root.insertSublayer(filament, at: 0)
+
+            let stagger = Double(index) * 0.018
+            let localDuration = max(0.16, duration - stagger)
+            addConnectedKeyframes(keyPath: "strokeEnd", values: [0, 0.86, 1],
+                                  keyTimes: [0, 0.66, 1], duration: localDuration,
+                                  beginTime: begin + stagger, timing: timing,
+                                  to: filament, key: "voicePipelineDraw\(index)")
+            addConnectedKeyframes(keyPath: "strokeStart", values: [0, 0.04, 0.76],
+                                  keyTimes: [0, 0.58, 1], duration: localDuration,
+                                  beginTime: begin + stagger, timing: timing,
+                                  to: filament, key: "voicePipelineErase\(index)")
+            addConnectedKeyframes(keyPath: "opacity", values: [0, 0.88, 0.52, 0],
+                                  keyTimes: [0, 0.22, 0.72, 1], duration: localDuration,
+                                  beginTime: begin + stagger, timing: timing,
+                                  to: filament, key: "voicePipelineOpacity\(index)")
+        }
+    }
+
+    /// First Final stage has no outgoing ordinary icon: it inherits the live acoustic console.
+    /// Install the same signal contour beside that collapse and start the destination symbol's
+    /// authored layers as they become visible. Subsequent stages use makeNativeSymbolMorph above.
+    private func animateVoicePipelineIgnition(_ stage: VoicePipelineVisualStage,
+                                               expectedKey: String,
+                                               cue: SymbolCue?) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let contentRoot = surface.contentView.layer else { return }
+        voicePipelineAccentRoot?.removeFromSuperlayer()
+        let root = CALayer()
+        root.frame = surface.iconView.frame
+        root.masksToBounds = false
+        if let normalLayer = surface.normalContentView.layer {
+            contentRoot.insertSublayer(root, below: normalLayer)
+        } else {
+            contentRoot.addSublayer(root)
+        }
+        voicePipelineAccentRoot = root
+        let begin = CACurrentMediaTime() + 0.030
+        installVoicePipelineFilaments(in: root, bounds: root.bounds,
+                                      tint: stage.tint, stage: stage,
+                                      duration: 0.26, begin: begin)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.082) { [weak self] in
+            guard let self, self.currentPresentationKey == expectedKey else { return }
+            self.applyNativeSymbolCue(cue, to: self.surface.iconView)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.33) { [weak self, weak root] in
+            guard let self, let root, self.voicePipelineAccentRoot === root else { return }
+            root.removeFromSuperlayer()
+            self.voicePipelineAccentRoot = nil
         }
     }
 
@@ -2219,6 +2654,52 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                 rail.opacity = 0
                 container.layer?.addSublayer(rail)
                 depthRails.append(rail)
+            }
+        case .voiceModeSwitch:
+            // Three routes share one physical side button. Concentric partial traces expose that
+            // topology for one beat, then disappear into the selected symbol; no generic spinner
+            // and no card-scale pulse are introduced.
+            for index in 0..<3 {
+                let orbit = CAShapeLayer()
+                orbit.frame = container.bounds
+                let inset = CGFloat(5 + index * 4)
+                orbit.path = CGPath(ellipseIn: container.bounds.insetBy(dx: inset, dy: inset),
+                                    transform: nil)
+                orbit.fillColor = nil
+                orbit.strokeColor = tint.withAlphaComponent(0.78 - CGFloat(index) * 0.14).cgColor
+                orbit.lineWidth = index == 1 ? 1.15 : 0.85
+                orbit.lineCap = .round
+                orbit.strokeStart = 0
+                orbit.strokeEnd = 0
+                orbit.opacity = 0
+                orbit.shadowColor = tint.cgColor
+                orbit.shadowOpacity = index == 1 ? 0.24 : 0.10
+                orbit.shadowRadius = index == 1 ? 2.6 : 1.4
+                orbit.shadowOffset = .zero
+                container.layer?.addSublayer(orbit)
+                structureLayers.append(orbit)
+            }
+        case .voicePipeline(let stage):
+            for (index, path) in voicePipelineContourPaths(
+                in: container.bounds, stage: stage
+            ).enumerated() {
+                let filament = CAShapeLayer()
+                filament.frame = container.bounds
+                filament.path = path
+                filament.fillColor = nil
+                filament.strokeColor = tint.withAlphaComponent(index == 0 ? 0.82 : 0.48).cgColor
+                filament.lineWidth = index == 0 ? 1.30 : 0.84
+                filament.lineCap = .round
+                filament.lineJoin = .round
+                filament.strokeStart = 0
+                filament.strokeEnd = 0
+                filament.opacity = 0
+                filament.shadowColor = tint.cgColor
+                filament.shadowOpacity = index == 0 ? 0.28 : 0.14
+                filament.shadowRadius = index == 0 ? 2.8 : 1.6
+                filament.shadowOffset = .zero
+                container.layer?.insertSublayer(filament, at: 0)
+                structureLayers.append(filament)
             }
         case .settleToLayer:
             let seam = CAShapeLayer()
@@ -2575,6 +3056,93 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                     spatialValue(x: sign * 2.0, scaleY: 0.32,
                                  perspective: 270),
                 ], [0, 0.56, 1], rail, decelerate, "holdRailDepth\(index)")
+            }
+
+        case .voiceModeSwitch(let direction):
+            let sign: CGFloat = direction >= 0 ? 1 : -1
+            // The old and new symbols are opposite faces of the same shallow voice selector. The
+            // hand-off clears the centre at 90 degrees, avoiding the muddy cross-fade that made
+            // earlier icon transitions look like a blur.
+            opacity([outgoingOpacity, outgoingOpacity, 0, 0],
+                    [0, 0.18, 0.48, 1], front.layer, accelerate, "voiceModeOld")
+            transforms([
+                spatialValue(perspective: 285),
+                spatialValue(z: 6, scale: 1.035, rotateY: sign * 0.34, perspective: 285),
+                spatialValue(z: -10, scaleX: 0.07, scaleY: 0.86,
+                             rotateY: sign * .pi / 2, perspective: 285),
+            ], [0, 0.34, 1], front.layer, accelerate, "voiceModeOldTurn")
+            opacity([0, 0, 0.78, 1], [0, 0.28, 0.58, 1],
+                    back.layer, decelerate, "voiceModeNew")
+            transforms([
+                spatialValue(z: -10, scaleX: 0.07, scaleY: 0.86,
+                             rotateY: -sign * .pi / 2, perspective: 285),
+                spatialValue(z: 6, scale: 1.055, rotateY: -sign * 0.08,
+                             perspective: 285),
+                spatialValue(perspective: 285),
+            ], [0, 0.76, 1], back.layer, decelerate, "voiceModeNewTurn")
+            for (index, orbit) in structureLayers.enumerated() {
+                let stagger = Double(index) * 0.012
+                let localBegin = begin + stagger
+                let localDuration = max(0.17, duration - stagger)
+                addConnectedKeyframes(keyPath: "strokeEnd", values: [0, 0.68, 1, 1],
+                                      keyTimes: [0, 0.38, 0.70, 1], duration: localDuration,
+                                      beginTime: localBegin, timing: standard,
+                                      to: orbit, key: "voiceModeOrbitDraw\(index)")
+                addConnectedKeyframes(keyPath: "strokeStart", values: [0, 0, 0.18, 0.86],
+                                      keyTimes: [0, 0.46, 0.72, 1], duration: localDuration,
+                                      beginTime: localBegin, timing: standard,
+                                      to: orbit, key: "voiceModeOrbitErase\(index)")
+                opacity([0, 0.72, 0.48, 0], [0, 0.24, 0.72, 1], orbit, standard,
+                        "voiceModeOrbitOpacity\(index)", duration: localDuration,
+                        begin: localBegin)
+                transforms([
+                    spatialValue(scale: 0.64, rotateX: 0.72,
+                                 rotateZ: -sign * (0.28 + CGFloat(index) * 0.12), perspective: 260),
+                    spatialValue(z: 5, scale: 1.04, rotateX: 0.16,
+                                 rotateZ: sign * (0.20 + CGFloat(index) * 0.10), perspective: 260),
+                    spatialValue(scale: 1.10, rotateX: 0,
+                                 rotateZ: sign * (0.48 + CGFloat(index) * 0.16), perspective: 260),
+                ], [0, 0.58, 1], orbit, decelerate, "voiceModeOrbitTurn\(index)",
+                           duration: localDuration, begin: localBegin)
+            }
+
+        case .voicePipeline(let stage):
+            // macOS 13 fallback for the live by-layer Symbols replacement used above. Both exact
+            // snapshots meet at the same horizontal signal edge, so the icon becomes its next
+            // semantic state instead of cross-fading or behaving like another card.
+            let direction: CGFloat = stage.rawValue.isMultiple(of: 2) ? 1 : -1
+            opacity([outgoingOpacity, outgoingOpacity, 0, 0],
+                    [0, 0.16, 0.48, 1], front.layer, accelerate, "voicePipelineOld")
+            transforms([
+                spatialValue(perspective: 315),
+                spatialValue(z: 4, scaleX: 1.035, scaleY: 0.90,
+                             rotateX: direction * 0.16, perspective: 315),
+                spatialValue(z: -9, scaleX: 0.78, scaleY: 0.045,
+                             rotateX: direction * 1.18, perspective: 315),
+            ], [0, 0.30, 1], front.layer, accelerate, "voicePipelineOldFold")
+            opacity([0, 0, 0.76, 1], [0, 0.24, 0.58, 1],
+                    back.layer, decelerate, "voicePipelineNew")
+            transforms([
+                spatialValue(z: -9, scaleX: 0.78, scaleY: 0.045,
+                             rotateX: -direction * 1.18, perspective: 315),
+                spatialValue(z: 5, scaleX: 1.035, scaleY: 1.045,
+                             rotateX: -direction * 0.07, perspective: 315),
+                spatialValue(perspective: 315),
+            ], [0, 0.76, 1], back.layer, decelerate, "voicePipelineNewUnfold")
+            for (index, filament) in structureLayers.enumerated() {
+                let stagger = Double(index) * 0.018
+                let localDuration = max(0.16, duration - stagger)
+                addConnectedKeyframes(keyPath: "strokeEnd", values: [0, 0.88, 1],
+                                      keyTimes: [0, 0.66, 1], duration: localDuration,
+                                      beginTime: begin + stagger, timing: standard,
+                                      to: filament, key: "voiceFallbackDraw\(index)")
+                addConnectedKeyframes(keyPath: "strokeStart", values: [0, 0.04, 0.76],
+                                      keyTimes: [0, 0.58, 1], duration: localDuration,
+                                      beginTime: begin + stagger, timing: standard,
+                                      to: filament, key: "voiceFallbackErase\(index)")
+                opacity([0, 0.86, 0.44, 0], [0, 0.22, 0.72, 1],
+                        filament, standard, "voiceFallbackOpacity\(index)",
+                        duration: localDuration, begin: begin + stagger)
             }
 
         case .settleToLayer:
@@ -3828,6 +4396,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         if active || immediate {
             voiceHistory = [VoiceVisualSample](repeating: .silence,
                                                count: surface.voiceBarLayers.count)
+            voiceLevelNormalizer.reset()
             voicePitchBaselineLog2 = nil
             voiceSmoothedPitchLog2 = nil
             voicePitchPosition = 0

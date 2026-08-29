@@ -137,6 +137,17 @@ final class BuiltinMicFeeder {
         queue.async { [weak self] in self?.meterLevelHandler = handler }
     }
 
+    /// Build and initialize the pinned, stopped AUHAL before the first physical Voice press. This
+    /// never starts microphone IO and never asks for permission; it only moves synchronous HAL
+    /// setup off the latency-critical edge when permission was granted previously.
+    func prepareVoiceCapture() {
+        queue.async { [weak self] in
+            guard let self, self.context == nil,
+                  AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
+            self.context = self.buildContext()
+        }
+    }
+
     /// Adds/removes the compact Voice widget's capture demand. This deliberately reuses the
     /// already pinned built-in-mic AUHAL instead of opening the default input through a second
     /// AVAudioEngine, which could accidentally select our own virtual microphone.

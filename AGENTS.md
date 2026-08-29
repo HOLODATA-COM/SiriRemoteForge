@@ -12,6 +12,10 @@ These rules are non-negotiable for every local macOS App build and test deployme
    user.
 5. Restart only after installation and signature verification, then confirm the single running UI
    process executes `/Applications/HyperVibe.app/Contents/MacOS/HyperVibe`.
+6. Treat HyperVibe as an always-on App. Unless the user explicitly asks to stop it, finish every
+   local App build, installation, configuration change that needs a reload, or user-test handoff by
+   ensuring `/Applications/HyperVibe.app` is running as exactly one UI process. Do this
+   automatically; never wait for the user to ask for the App to be started.
 
 Public release artifacts may use their explicitly requested release signing workflow, but must not
 be substituted for the stable-signed local development App.

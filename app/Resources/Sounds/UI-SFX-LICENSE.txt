@@ -1,0 +1,14 @@
+UI SFX audio assets
+===================
+
+The VoiceToggleOn.mp3 and VoiceToggleOff.mp3 files are the Sci-fi Toggle on and
+Toggle off cues from UI SFX by Romain Simon:
+
+https://github.com/romainsimon/uisfx
+
+The audio assets are dedicated to the public domain under the Creative Commons
+CC0 1.0 Universal dedication:
+
+https://creativecommons.org/publicdomain/zero/1.0/
+
+SPDX-License-Identifier: CC0-1.0

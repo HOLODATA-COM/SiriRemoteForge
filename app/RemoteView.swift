@@ -55,9 +55,34 @@ private struct FocusRing<S: InsettableShape>: ViewModifier {
     }
 }
 
+/// A physical down-state is deliberately distinct from the blue editor-selection ring. The
+/// cyan edge reads clearly on the remote's near-black controls, while a very small local scale
+/// change gives the button depth without making the remote itself jump around.
+private struct PhysicalPress<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let pressed: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(pressed ? 0.94 : 1)
+            .brightness(pressed ? 0.13 : 0)
+            .overlay {
+                if pressed {
+                    shape.stroke(Color(hex: 0x67E8F9), lineWidth: 2)
+                        .padding(-2)
+                        .shadow(color: Color(hex: 0x22D3EE, opacity: 0.85), radius: 7)
+                }
+            }
+            .animation(.interactiveSpring(response: 0.16, dampingFraction: 0.78), value: pressed)
+    }
+}
+
 private extension View {
     func focusRing<S: InsettableShape>(_ shape: S, lit: Bool) -> some View {
         modifier(FocusRing(shape: shape, lit: lit))
+    }
+    func physicalPress<S: InsettableShape>(_ shape: S, pressed: Bool) -> some View {
+        modifier(PhysicalPress(shape: shape, pressed: pressed))
     }
     /// Make an element clickable: tapping it reports its control-identifier `key` (bidirectional
     /// selection — click a remote button to jump to its row in the editor).
@@ -68,10 +93,30 @@ private extension View {
 
 // MARK: - Remote
 
+/// A presentation-safe copy of one live touch. Coordinates use MultitouchSupport's normalized
+/// bottom-up convention; `RemoteView` performs the single y-axis flip needed for SwiftUI.
+struct RemoteTouchPoint: Identifiable, Equatable {
+    let id: Int32
+    let normalized: CGPoint
+    let isHovering: Bool
+    let strength: CGFloat
+}
+
 struct RemoteView: View {
     @Binding var highlightedKey: String?
     /// Optional: tapping a remote element reports its control-identifier (for bidirectional select).
     var onSelect: ((String) -> Void)? = nil
+    /// Raw physical down states used by Demo Mode. Kept independent from `highlightedKey`, so the
+    /// Layout editor remains a selection surface while Demo Mode behaves like the real remote.
+    var pressedKeys: Set<String> = []
+    /// Live contacts on the clickpad. Empty during ordinary Layout editing.
+    var touchPoints: [RemoteTouchPoint] = []
+    /// Layout uses a soft grounding shadow. A shaped floating window must omit it so the pixels
+    /// outside the physical aluminum silhouette remain completely transparent.
+    var showsOuterShadow = true
+    /// The editor benefits from a one-pixel silhouette edge against its own canvas. In the
+    /// transparent demo window that edge reads as an unwanted black halo, so it can be omitted.
+    var showsOuterStroke = true
 
     var body: some View {
         ZStack {
@@ -84,16 +129,20 @@ struct RemoteView: View {
             // Face buttons — LEFT column: Back, Play/Pause, Mute; RIGHT column: TV, then Volume pill.
             Group {
                 FaceButton(systemName: "chevron.backward", key: "button.menu",
-                           iconSize: 15, weight: .semibold, highlightedKey: highlightedKey, onSelect: onSelect)
+                           iconSize: 15, weight: .semibold, highlightedKey: highlightedKey,
+                           pressed: isPressed("button.menu"), onSelect: onSelect)
                     .position(x: 40.5, y: 199)
                 FaceButton(systemName: "tv", key: "button.tv",
-                           iconSize: 16, highlightedKey: highlightedKey, onSelect: onSelect)
+                           iconSize: 16, highlightedKey: highlightedKey,
+                           pressed: isPressed("button.tv"), onSelect: onSelect)
                     .position(x: 109.5, y: 199)
                 FaceButton(systemName: "playpause", key: "button.playPause",
-                           iconSize: 15, highlightedKey: highlightedKey, onSelect: onSelect)
+                           iconSize: 15, highlightedKey: highlightedKey,
+                           pressed: isPressed("button.playPause"), onSelect: onSelect)
                     .position(x: 40.5, y: 265)
                 FaceButton(systemName: "speaker.slash", key: "button.mute",
-                           iconSize: 14, highlightedKey: highlightedKey, onSelect: onSelect)
+                           iconSize: 14, highlightedKey: highlightedKey,
+                           pressed: isPressed("button.mute"), onSelect: onSelect)
                     .position(x: 40.5, y: 331)
                 volumePill
                     .position(x: 109.5, y: 298)
@@ -115,11 +164,14 @@ struct RemoteView: View {
             .overlay(   // inner shadow toward the bottom
                 r.fill(LinearGradient(colors: [.clear, Color(hex: 0x78808C, opacity: 0.24)],
                                       startPoint: .center, endPoint: .bottom)))
-            .overlay(r.stroke(RemotePalette.aluEdge, lineWidth: 1))
+            .overlay(r.stroke(RemotePalette.aluEdge.opacity(showsOuterStroke ? 1 : 0), lineWidth: 1))
             .overlay(   // subtle inner top highlight
                 r.stroke(Color.white.opacity(0.6), lineWidth: 1)
                     .mask(LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .center)))
-            .shadow(color: Color(hex: 0x1C222C, opacity: 0.22), radius: 20, y: 16)
+            .shadow(color: showsOuterShadow
+                    ? Color(hex: 0x1C222C, opacity: 0.22) : .clear,
+                    radius: showsOuterShadow ? 20 : 0,
+                    y: showsOuterShadow ? 16 : 0)
     }
 
     // MARK: Top details
@@ -137,6 +189,7 @@ struct RemoteView: View {
             .foregroundStyle(RemotePalette.power)
             .frame(width: 19, height: 19)
             .focusRing(Circle(), lit: highlightedKey == "button.power")
+            .physicalPress(Circle(), pressed: isPressed("button.power"))
             .selectable("button.power", onSelect)
             .position(x: 124.5, y: 29.5)
     }
@@ -148,6 +201,7 @@ struct RemoteView: View {
             .frame(width: 6, height: 62)
             .shadow(color: .black.opacity(0.16), radius: 1, x: 1)
             .focusRing(RoundedRectangle(cornerRadius: 3), lit: highlightedKey == "button.siri")
+            .physicalPress(RoundedRectangle(cornerRadius: 3), pressed: isPressed("button.siri"))
             .selectable("button.siri", onSelect)
             .position(x: 149, y: 181)
     }
@@ -165,14 +219,6 @@ struct RemoteView: View {
 
             Circle().stroke(Color.white.opacity(0.045), lineWidth: 1).padding(20)   // faint inner ring
 
-            // Four touch dots at the diagonals.
-            Group {
-                touchDot.position(x: 35.5, y: 23.5)
-                touchDot.position(x: 86.5, y: 23.5)
-                touchDot.position(x: 35.5, y: 98.5)
-                touchDot.position(x: 86.5, y: 98.5)
-            }
-
             // Four faint direction glyphs near the edges (the ring hotspots).
             dirGlyph("▲", "ring.up").position(x: 61, y: 14)
             dirGlyph("▼", "ring.down").position(x: 61, y: 108)
@@ -186,15 +232,21 @@ struct RemoteView: View {
                 .overlay(Circle().stroke(Color.white.opacity(0.04), lineWidth: 1))
                 .frame(width: 52, height: 52)
                 .focusRing(Circle(), lit: highlightedKey == "select")
+                .physicalPress(Circle(), pressed: isPressed("select"))
                 .selectable("select", onSelect)
+
+            // A live finger is the top-most piece of clickpad feedback. In particular it must
+            // remain visible while crossing the physical Select disc in the centre.
+            ForEach(touchPoints) { point in
+                TouchPointIndicator(point: point)
+                    .position(x: clamped(point.normalized.x) * 110 + 6,
+                              y: (1 - clamped(point.normalized.y)) * 110 + 6)
+                    .zIndex(10)
+            }
         }
         .frame(width: 122, height: 122)
         .shadow(color: .black.opacity(0.3), radius: 3, y: 3)
         .position(x: 75, y: 97)
-    }
-
-    private var touchDot: some View {
-        Circle().fill(Color.white.opacity(0.3)).frame(width: 3, height: 3)
     }
 
     private func dirGlyph(_ ch: String, _ key: String) -> some View {
@@ -203,6 +255,7 @@ struct RemoteView: View {
             .foregroundStyle(RemotePalette.glyph.opacity(0.55))
             .frame(width: 22, height: 22)   // slightly larger tap target than the glyph
             .focusRing(Circle(), lit: highlightedKey == key)
+            .physicalPress(Circle(), pressed: isPressed(key))
             .selectable(key, onSelect)
     }
 
@@ -224,15 +277,52 @@ struct RemoteView: View {
                 .foregroundStyle(RemotePalette.glyph)
                 .frame(width: 46, height: 56).offset(y: -28)
                 .focusRing(RoundedRectangle(cornerRadius: 20), lit: highlightedKey == "button.volumeUp")
+                .physicalPress(RoundedRectangle(cornerRadius: 20),
+                               pressed: isPressed("button.volumeUp"))
                 .selectable("button.volumeUp", onSelect)
             Image(systemName: "minus").font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(RemotePalette.glyph)
                 .frame(width: 46, height: 56).offset(y: 28)
                 .focusRing(RoundedRectangle(cornerRadius: 20), lit: highlightedKey == "button.volumeDown")
+                .physicalPress(RoundedRectangle(cornerRadius: 20),
+                               pressed: isPressed("button.volumeDown"))
                 .selectable("button.volumeDown", onSelect)
         }
         .frame(width: 46, height: 112)
         .shadow(color: .black.opacity(0.22), radius: 2, y: 2)
+    }
+
+    private func isPressed(_ key: String) -> Bool { pressedKeys.contains(key) }
+
+    private func clamped(_ value: CGFloat) -> CGFloat { min(max(value, 0), 1) }
+}
+
+private struct TouchPointIndicator: View {
+    let point: RemoteTouchPoint
+
+    var body: some View {
+        let strength = min(max(point.strength, 0), 1.6)
+        let diameter = 13 + strength * 4
+        ZStack {
+            Circle()
+                .fill(point.isHovering
+                      ? Color(hex: 0xFBBF24, opacity: 0.18)
+                      : Color(hex: 0x22D3EE, opacity: 0.26))
+                .frame(width: diameter + 10, height: diameter + 10)
+            Circle()
+                .stroke(point.isHovering
+                        ? Color(hex: 0xFBBF24, opacity: 0.85)
+                        : Color(hex: 0x67E8F9, opacity: 0.95),
+                        lineWidth: point.isHovering ? 1.2 : 1.8)
+                .frame(width: diameter, height: diameter)
+            Circle()
+                .fill(Color.white.opacity(point.isHovering ? 0.7 : 0.95))
+                .frame(width: 3.5, height: 3.5)
+        }
+        .shadow(color: point.isHovering
+                ? Color(hex: 0xF59E0B, opacity: 0.35)
+                : Color(hex: 0x06B6D4, opacity: 0.75), radius: 8)
+        .transition(.scale(scale: 0.55).combined(with: .opacity))
     }
 }
 
@@ -244,6 +334,7 @@ private struct FaceButton: View {
     var iconSize: CGFloat = 16
     var weight: Font.Weight = .medium
     let highlightedKey: String?
+    var pressed = false
     var onSelect: ((String) -> Void)? = nil
 
     var body: some View {
@@ -257,6 +348,7 @@ private struct FaceButton: View {
             .frame(width: 46, height: 46)
             .shadow(color: .black.opacity(0.22), radius: 2, y: 2)
             .focusRing(Circle(), lit: highlightedKey == key)
+            .physicalPress(Circle(), pressed: pressed)
             .selectable(key, onSelect)
     }
 }

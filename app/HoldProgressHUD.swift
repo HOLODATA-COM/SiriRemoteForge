@@ -168,6 +168,8 @@ final class HoldProgressHUD: NSObject {
         let metalLayer: CAMetalLayer?
         let flatFill: CALayer?
         var halfPixel: Float = 0.25          // ½ device pixel in points; shader AA width
+        var appWheelTransitionLayer: CALayer?
+        var appWheelTransitionGeneration = 0
 
         init(window: NSWindow, iconView: NSImageView,
              metalLayer: CAMetalLayer?, flatFill: CALayer?) {
@@ -176,6 +178,11 @@ final class HoldProgressHUD: NSObject {
             self.metalLayer = metalLayer
             self.flatFill = flatFill
         }
+    }
+
+    private struct IconSnapshot {
+        let image: CGImage
+        let scale: CGFloat
     }
     private var surfaces: [CGDirectDisplayID: Surface] = [:]
 
@@ -296,6 +303,7 @@ final class HoldProgressHUD: NSObject {
             self.isShowing = false
             self.confirming = false
             for surface in self.surfaces.values {
+                self.clearAppWheelTransition(on: surface)
                 surface.window.alphaValue = 0
                 surface.window.orderOut(nil)
             }
@@ -583,6 +591,7 @@ final class HoldProgressHUD: NSObject {
         displayedFace = face
         guard let face else {
             for surface in surfaces.values {
+                clearAppWheelTransition(on: surface)
                 surface.iconView.image = nil
                 surface.iconView.contentTintColor = nil
             }
@@ -590,23 +599,52 @@ final class HoldProgressHUD: NSObject {
         }
 
         let configured = ActionSymbolStyle.hierarchicalImage(
-            face.image, symbolName: face.symbolName, tint: face.tint
+            face.image, symbolName: face.symbolName, tint: face.tint, cue: face.symbolCue
         )
+        // Releasing after the App Wheel threshold confirms the face already on screen. It must not
+        // restart the nine-dot entrance (the former native effect restarted a full rotation here).
+        let repeatsAppWheelFace = animated
+            && previous?.symbolCue == .appWheel && face.symbolCue == .appWheel
+            && previous?.symbolName == face.symbolName
+        if repeatsAppWheelFace {
+            return
+        }
+
+        let reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let usesAppWheelRelay = animated
+            && face.symbolCue == .appWheel
+            && isAppWheelGrid(face.symbolName)
+            && configured != nil
+            && !reducedMotion
         let canUseNativeReplacement = animated
+            && face.symbolCue != .appWheel
             && previous?.symbolName != nil && face.symbolName != nil && configured != nil
             && ActionSymbolStyle.supportsTopologyAwareReplacement(
                 from: previous?.symbolName, to: face.symbolName
             )
-            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            && !reducedMotion
 
         for surface in surfaces.values {
             let icon = surface.iconView
+            clearAppWheelTransition(on: surface)
             if face.symbolName != nil {
                 icon.contentTintColor = nil      // colour is embedded in hierarchical configuration
             } else {
                 icon.contentTintColor = face.image?.isTemplate == true ? face.tint : nil
             }
-            if canUseNativeReplacement, #available(macOS 14.0, *), let configured {
+            if usesAppWheelRelay, let configured {
+                let outgoing = snapshot(of: icon)
+                icon.image = configured
+                icon.displayIfNeeded()
+                if animateAppWheelRelay(on: surface, outgoing: outgoing) {
+                    continue
+                }
+                // Snapshotting can be unavailable in a stripped-down graphics session. Keep the
+                // semantic fallback layered and stationary rather than ever returning to rotation.
+                if #available(macOS 14.0, *) {
+                    ActionSymbolStyle.apply(.appWheel, to: icon)
+                }
+            } else if canUseNativeReplacement, #available(macOS 14.0, *), let configured {
                 ActionSymbolStyle.replaceSymbol(in: icon, with: configured, cue: face.symbolCue)
             } else {
                 icon.image = configured
@@ -616,9 +654,163 @@ final class HoldProgressHUD: NSObject {
             }
         }
 
-        if animated && !canUseNativeReplacement {
+        if animated && !canUseNativeReplacement && !usesAppWheelRelay {
             popIcon(from: previous?.symbolName == nil && face.symbolName == nil ? 0.90 : 0.84)
         }
+    }
+
+    private func isAppWheelGrid(_ symbolName: String?) -> Bool {
+        guard let symbolName else { return false }
+        let lower = symbolName.lowercased()
+        return lower == "circle.grid.3x3" || lower == "circle.grid.3x3.fill"
+    }
+
+    /// Render the actual configured symbol rather than drawing substitute circles. The relay's
+    /// final crossfade therefore lands on exactly the same weight, colour and antialiasing as the
+    /// permanent NSImageView.
+    private func snapshot(of view: NSView) -> IconSnapshot? {
+        guard view.bounds.width > 0, view.bounds.height > 0,
+              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let image = rep.cgImage else { return nil }
+        let scale = max(1, CGFloat(rep.pixelsWide) / view.bounds.width)
+        return IconSnapshot(image: image, scale: scale)
+    }
+
+    /// The App Wheel is nine destinations, so its large-HUD entrance is a diagonal relay of those
+    /// nine real symbol pieces. Nothing rotates and neither the card nor the permanent icon changes
+    /// its model size. The complete symbol only fades in for the last pixel-exact landing frames.
+    @discardableResult
+    private func animateAppWheelRelay(on surface: Surface,
+                                      outgoing: IconSnapshot?) -> Bool {
+        let icon = surface.iconView
+        guard let parent = icon.superview?.layer, let iconLayer = icon.layer,
+              let incoming = snapshot(of: icon) else { return false }
+
+        surface.appWheelTransitionGeneration &+= 1
+        let generation = surface.appWheelTransitionGeneration
+        let duration: CFTimeInterval = 0.28
+        let bounds = icon.bounds
+        let transition = CALayer()
+        transition.frame = icon.frame
+        transition.masksToBounds = false
+
+        if let outgoing {
+            let old = CALayer()
+            old.frame = bounds
+            old.contents = outgoing.image
+            old.contentsGravity = .resize
+            old.contentsScale = outgoing.scale
+            old.minificationFilter = .linear
+            old.magnificationFilter = .linear
+            // The animation is removed before the proxy container itself. Keep the model layer at
+            // its true final state so the outgoing symbol cannot flash back for that cleanup frame.
+            old.opacity = 0
+            transition.addSublayer(old)
+
+            let opacity = CAKeyframeAnimation(keyPath: "opacity")
+            opacity.values = [1.0, 0.66, 0.0, 0.0]
+            opacity.keyTimes = [0.0, 0.16, 0.40, 1.0]
+            opacity.duration = duration
+            opacity.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            old.add(opacity, forKey: "appWheelOutgoingOpacity")
+
+            let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+            scale.values = [1.0, 0.86]
+            scale.keyTimes = [0.0, 1.0]
+            scale.duration = duration * 0.42
+            scale.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            old.add(scale, forKey: "appWheelOutgoingScale")
+        }
+
+        let xCentres: [CGFloat] = [0.200, 0.481, 0.768]
+        let yCentres: [CGFloat] = [0.231, 0.494, 0.753]
+        let dotSide = min(bounds.width, bounds.height) * 0.262
+        let pixel = 1 / incoming.scale
+        func snap(_ value: CGFloat) -> CGFloat { (value / pixel).rounded() * pixel }
+        let relayRank = [0, 2, 5,
+                         1, 4, 7,
+                         3, 6, 8]
+
+        var index = 0
+        for y in yCentres {
+            for x in xCentres {
+                let centre = CGPoint(x: bounds.minX + bounds.width * x,
+                                     y: bounds.minY + bounds.height * y)
+                let rect = CGRect(x: snap(centre.x - dotSide / 2),
+                                  y: snap(centre.y - dotSide / 2),
+                                  width: snap(dotSide), height: snap(dotSide))
+                    .intersection(bounds)
+                let dot = CALayer()
+                dot.frame = rect
+                dot.contents = incoming.image
+                dot.contentsRect = CGRect(x: (rect.minX - bounds.minX) / bounds.width,
+                                          y: (rect.minY - bounds.minY) / bounds.height,
+                                          width: rect.width / bounds.width,
+                                          height: rect.height / bounds.height)
+                dot.contentsGravity = .resize
+                dot.contentsScale = incoming.scale
+                dot.minificationFilter = .linear
+                dot.magnificationFilter = .linear
+                dot.opacity = 0
+                transition.addSublayer(dot)
+
+                let rank = relayRank[index]
+                let appear = 0.030 + Double(rank) * 0.0115
+                let crest = appear + 0.050
+                let settle = min(0.205, crest + 0.044)
+                let appearT = NSNumber(value: appear / duration)
+                let crestT = NSNumber(value: crest / duration)
+                let settleT = NSNumber(value: settle / duration)
+
+                let opacity = CAKeyframeAnimation(keyPath: "opacity")
+                opacity.values = [0.0, 0.0, 0.44, 1.0, 1.0, 0.0]
+                opacity.keyTimes = [0.0, appearT,
+                                    NSNumber(value: (appear + 0.020) / duration),
+                                    crestT, 0.82, 1.0]
+                opacity.duration = duration
+                opacity.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                dot.add(opacity, forKey: "appWheelDotOpacity")
+
+                let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+                scale.values = [0.24, 0.24, 1.13, 1.0, 1.0]
+                scale.keyTimes = [0.0, appearT, crestT, settleT, 1.0]
+                scale.duration = duration
+                scale.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                dot.add(scale, forKey: "appWheelDotScale")
+
+                let travel = CAKeyframeAnimation(keyPath: "transform.translation.y")
+                travel.values = [-1.7, -1.7, 0.55, 0.0, 0.0]
+                travel.keyTimes = [0.0, appearT, crestT, settleT, 1.0]
+                travel.duration = duration
+                travel.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                dot.add(travel, forKey: "appWheelDotTravel")
+                index += 1
+            }
+        }
+
+        let reveal = CAKeyframeAnimation(keyPath: "opacity")
+        reveal.values = [0.0, 0.0, 1.0]
+        reveal.keyTimes = [0.0, 0.82, 1.0]
+        reveal.duration = duration
+        reveal.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        iconLayer.add(reveal, forKey: "appWheelReveal")
+
+        parent.addSublayer(transition)
+        surface.appWheelTransitionLayer = transition
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.04) { [weak self, weak surface] in
+            guard let self, let surface,
+                  surface.appWheelTransitionGeneration == generation else { return }
+            self.clearAppWheelTransition(on: surface)
+        }
+        return true
+    }
+
+    private func clearAppWheelTransition(on surface: Surface) {
+        surface.appWheelTransitionGeneration &+= 1
+        surface.appWheelTransitionLayer?.removeFromSuperlayer()
+        surface.appWheelTransitionLayer = nil
+        surface.iconView.layer?.removeAnimation(forKey: "appWheelReveal")
     }
 
     private func popIcon(from: CGFloat) {

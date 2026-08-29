@@ -19,6 +19,12 @@ enum ConfigSaveSource: Hashable {
 
 /// Observable wrapper around TuneSettings. Any change persists and applies live.
 final class SettingsModel: ObservableObject {
+    /// API secrets/status are machine-local credential state, intentionally separate from `tune`
+    /// (which is serialized into the shareable config.jsonc).
+    let voiceCredentials = VoiceCredentialModel()
+    /// Ephemeral live state and latency measurements. Transcripts themselves are never persisted.
+    let voiceRuntime = VoiceRuntimeModel()
+
     @Published var tune: TuneSettings {
         didSet {
             guard tune != oldValue else { return }
@@ -34,6 +40,9 @@ final class SettingsModel: ObservableObject {
     /// Applying `settings.launchAtLoginEnabled` crosses into SMAppService and can be rejected by
     /// macOS. Keep the requested JSON value intact while surfacing the real OS error in Settings.
     @Published var launchAtLoginError: String?
+
+    /// Set only while a scheduled update waits gently in the background for user attention.
+    @Published var availableUpdateVersion: String?
 
     /// Remote battery/firmware/interfaces. Owned here rather than by the SwiftUI view so the
     /// window controller can start and stop the polling: the settings window is cached with
@@ -54,6 +63,10 @@ final class SettingsModel: ObservableObject {
 
     /// Set by AppDelegate to push values into the running TouchHandler.
     var onApply: ((TuneSettings) -> Void)?
+
+    /// User-initiated update checks are routed to the single long-lived updater owned by
+    /// AppDelegate. SettingsView does not create a second Sparkle controller.
+    var onCheckForUpdates: (() -> Void)?
 
     init(initial: TuneSettings) {
         self.tune = initial

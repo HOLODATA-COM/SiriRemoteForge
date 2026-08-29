@@ -32,6 +32,8 @@ final class MenuBarManager {
     private let permissionMenuItem: NSMenuItem
     private var isConnected = false
     private var permissionsReady = false
+    private var demoRemoteVisible = false
+    private var availableUpdateVersion: String?
     private var localeObserver: NSObjectProtocol?
 
     /// Two-finger scroll scale (see `ScrollSpeed`).
@@ -41,6 +43,10 @@ final class MenuBarManager {
     var onOpenSettings: (() -> Void)?
     /// Set by the AppDelegate to re-open the first-run setup guide.
     var onOpenSetup: (() -> Void)?
+    /// Set by the AppDelegate to present Sparkle's standard update UI.
+    var onCheckForUpdates: (() -> Void)?
+    /// Set by the AppDelegate to show/hide the live, presentation-oriented remote visualiser.
+    var onToggleDemoMode: (() -> Void)?
 
     init(statusItem: NSStatusItem) {
         self.statusItem = statusItem
@@ -70,7 +76,7 @@ final class MenuBarManager {
 
     /// Procedurally draw the menu-bar icon — a walkie-talkie glyph (antenna + body with a display
     /// slot and a speaker hole, punched via even-odd fill). Template image, so it tints correctly.
-    private static func makeWaveIcon() -> NSImage {
+    private static func makeWaveIcon(updateAvailable: Bool = false) -> NSImage {
         let pt: CGFloat = 18
         let image = NSImage(size: NSSize(width: pt, height: pt), flipped: true) { rect in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
@@ -97,6 +103,12 @@ final class MenuBarManager {
 
             ctx.addPath(path)
             ctx.fillPath(using: .evenOdd)
+            if updateAvailable {
+                // A compact status dot remains legible in both menu-bar appearances because the
+                // whole image is a template. It does not resize or shift the familiar remote mark.
+                ctx.fillEllipse(in: CGRect(x: 0.72 * s, y: 0.08 * s,
+                                           width: 0.18 * s, height: 0.18 * s))
+            }
             return true
         }
         image.isTemplate = true
@@ -124,6 +136,17 @@ final class MenuBarManager {
         statusMenuItem.isEnabled = false
         menu.addItem(statusMenuItem)
 
+        if let version = availableUpdateVersion {
+            let updateItem = NSMenuItem(
+                title: L("Update %@ Available…", version),
+                action: #selector(checkForUpdates), keyEquivalent: ""
+            )
+            updateItem.image = NSImage(systemSymbolName: "arrow.down.circle.fill",
+                                       accessibilityDescription: nil)
+            updateItem.target = self
+            menu.addItem(updateItem)
+        }
+
         permissionMenuItem.title = permissionsReady
             ? L("Permissions: Ready ✓") : L("Permissions: Action needed")
         permissionMenuItem.action = permissionsReady ? nil : #selector(openSetup)
@@ -142,6 +165,21 @@ final class MenuBarManager {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
+        let demoItem = NSMenuItem(
+            title: L("Demo Remote"), action: #selector(toggleDemoMode), keyEquivalent: ""
+        )
+        demoItem.image = NSImage(systemSymbolName: "appletvremote.gen4.fill",
+                                 accessibilityDescription: nil)
+        demoItem.state = demoRemoteVisible ? .on : .off
+        demoItem.target = self
+        menu.addItem(demoItem)
+
+        let updatesItem = NSMenuItem(
+            title: L("Check for Updates…"), action: #selector(checkForUpdates), keyEquivalent: ""
+        )
+        updatesItem.target = self
+        menu.addItem(updatesItem)
+
         menu.addItem(.separator())
         let quitItem = NSMenuItem(title: L("Quit"), action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
@@ -151,6 +189,28 @@ final class MenuBarManager {
     @objc private func openSettings() { onOpenSettings?() }
 
     @objc private func openSetup() { onOpenSetup?() }
+
+    @objc private func checkForUpdates() { onCheckForUpdates?() }
+
+    @objc private func toggleDemoMode() { onToggleDemoMode?() }
+
+    func updateDemoModeVisibility(_ visible: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.demoRemoteVisible = visible
+            self.rebuildMenu()
+        }
+    }
+
+    func setAvailableUpdate(version: String?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.availableUpdateVersion = version
+            self.statusItem.button?.image = Self.makeWaveIcon(updateAvailable: version != nil)
+            self.statusItem.button?.toolTip = version.map { L("Update %@ Available", $0) }
+            self.rebuildMenu()
+        }
+    }
 
     func updateConnectionStatus(connected: Bool) {
         DispatchQueue.main.async { [weak self] in

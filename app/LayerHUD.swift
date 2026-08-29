@@ -57,21 +57,25 @@ final class LayerHUD {
     /// the authored array order for unnamed custom ids (`EDITING` can still fall back to Layer 3).
     private var configuredLayers: [String: Config.LayerDefinition]
     private var configuredOrdinals: [String: Int]
+    private var configuredIcons: [String: String]
     /// Distinguishes a real in-place state change from a repeated notification. Content transitions
     /// only run when the face actually changes; repeated connection callbacks do not wobble the HUD.
     private var currentPresentationKey: String?
     private var currentSymbolName: String?
 
-    init(layers: [Config.LayerDefinition] = [], holdDuration: TimeInterval = 0.9) {
+    init(layers: [Config.LayerDefinition] = [], icons: [String: String] = [:],
+         holdDuration: TimeInterval = 0.9) {
         (configuredLayers, configuredOrdinals) = Self.normalized(layers)
+        configuredIcons = icons
         self.holdDuration = holdDuration
     }
 
     /// Hot-reload hook. The next layer card uses the new label/colour without rebuilding the app.
-    func configure(layers: [Config.LayerDefinition]) {
+    func configure(layers: [Config.LayerDefinition], icons: [String: String] = [:]) {
         onMain { [weak self] in
             guard let self = self else { return }
             (self.configuredLayers, self.configuredOrdinals) = Self.normalized(layers)
+            self.configuredIcons = icons
         }
     }
 
@@ -85,7 +89,7 @@ final class LayerHUD {
     /// Switched INTO a named layer (sticky).
     func showOn(_ layerName: String) {
         let appearance = appearance(forLayer: layerName)
-        show(symbol: "square.stack.3d.up.fill", title: appearance.label,
+        show(symbol: appearance.icon, title: appearance.label,
              subtitle: L("Layer active"),
              tint: appearance.tint, cue: .layer,
              presentationKey: "layer:\(layerName.uppercased())")
@@ -95,21 +99,23 @@ final class LayerHUD {
     /// would read as "layers are off", which is exactly the wrong idea.
     func showOff(_ layerName: String) {
         let appearance = appearance(forLayer: "BASE")
-        show(symbol: "square.stack.3d.up", title: appearance.label,
+        show(symbol: appearance.icon, title: appearance.label,
              subtitle: L("Layer active"),
              tint: appearance.tint, cue: .layer, presentationKey: "layer:BASE")
     }
 
     /// The remote connected: filled remote, green — matching the green dot in Settings.
     func showRemoteConnected() {
-        show(symbol: "appletvremote.gen4.fill", title: "Siri Remote", subtitle: L("Connected"),
+        show(symbol: configuredIcon("remote.connected", fallback: "appletvremote.gen4.fill"),
+             title: "Siri Remote", subtitle: L("Connected"),
              tint: .systemGreen, cue: .connected, presentationKey: "remote:connected")
     }
 
     /// The remote dropped: same subject in outline form. System orange communicates an interruption
     /// that needs attention without mislabelling it as destructive red.
     func showRemoteDisconnected() {
-        show(symbol: "appletvremote.gen4", title: "Siri Remote", subtitle: L("Disconnected"),
+        show(symbol: configuredIcon("remote.disconnected", fallback: "appletvremote.gen4"),
+             title: "Siri Remote", subtitle: L("Disconnected"),
              tint: .systemOrange, cue: .disconnected, presentationKey: "remote:disconnected")
     }
 
@@ -138,6 +144,9 @@ final class LayerHUD {
                       presentationKey: String) {
         onMain { [weak self] in
             guard let self = self else { return }
+            let symbol = ActionVisual.firstValidSystemSymbol(
+                [symbol, self.configuredIcons["fallback"]], fallback: "command.circle.fill"
+            )
             self.syncSurfaces()
             guard !self.surfaces.isEmpty else { return }
             let wasShowing = self.isShowing
@@ -249,13 +258,23 @@ final class LayerHUD {
         return .systemBlue
     }
 
-    private func appearance(forLayer rawName: String) -> (label: String, tint: NSColor) {
+    private func appearance(forLayer rawName: String) -> (label: String, tint: NSColor, icon: String) {
         let style = configuredLayers[rawName.uppercased()]
         let configuredLabel = style?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = configuredLabel.flatMap { $0.isEmpty ? nil : $0 }
             ?? displayName(forLayer: rawName)
         let tint = style?.color.flatMap(configuredColor(named:)) ?? tint(forLayer: rawName)
-        return (label, tint)
+        let icon = ActionVisual.firstValidSystemSymbol(
+            [style?.icon, configuredIcons["layer.default"], configuredIcons["fallback"]],
+            fallback: "square.stack.3d.up.fill"
+        )
+        return (label, tint, icon)
+    }
+
+    private func configuredIcon(_ key: String, fallback: String) -> String {
+        ActionVisual.firstValidSystemSymbol(
+            [configuredIcons[key], configuredIcons["fallback"]], fallback: fallback
+        )
     }
 
     private static func normalized(_ layers: [Config.LayerDefinition])

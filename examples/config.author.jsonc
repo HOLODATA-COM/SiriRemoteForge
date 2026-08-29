@@ -38,18 +38,38 @@
     // Ordered layer cycle (1–10 entries). `id` is BASE or a mode below; `name` and `color` are
     // what the HUD shows. TV walks this exact order and wraps from the last entry to the first.
     "layers": [
-      { "id": "BASE", "name": "Layer 1", "color": "green" },
-      { "id": "L1",   "name": "Layer 2", "color": "blue" },
-      { "id": "L2",   "name": "Layer 3", "color": "purple" }
+      { "id": "BASE", "name": "Layer 1", "color": "green",  "icon": "square.stack.3d.up.fill" },
+      { "id": "L1",   "name": "Layer 2", "color": "blue",   "icon": "square.stack.3d.up.fill" },
+      { "id": "L2",   "name": "Layer 3", "color": "purple", "icon": "square.stack.3d.up.fill" }
     ],
+    // Non-action UI symbols. Binding-specific icons stay beside their action and inherit normally.
+    "icons": {
+      "layer.default": "square.stack.3d.up.fill",
+      "remote.connected": "appletvremote.gen4.fill",
+      "remote.disconnected": "appletvremote.gen4",
+      "voice.listening": "waveform.circle.fill",
+      "voice.mode.external": "keyboard.badge.ellipsis",
+      "voice.mode.final": "text.badge.checkmark",
+      "voice.mode.streaming": "bolt.horizontal.circle.fill",
+      "voice.transcribing": "waveform.badge.magnifyingglass",
+      "voice.polishing": "wand.and.stars",
+      "voice.inserting": "text.cursor",
+      "voice.inserted": "checkmark.circle.fill",
+      "voice.copied": "doc.on.doc.fill",
+      "voice.error": "exclamationmark.triangle.fill",
+      "fallback": "command.circle.fill"
+    },
     "doubleTapWindow": 0.2,      // seconds from the first RELEASE to the second press. Measured from the release, not the
                                  // press, so holding the first tap longer no longer eats the window.
     "spacesModeWindow": 5.0,     // Spaces Mode: seconds without a left/right switch before it disarms
     "findCursorEnabled": true,   // shake the cursor (rapid back-and-forth) to flash a locate highlight
     "interfaceLanguage": "zh",  // en | zh; all app surfaces update live
     "launchAtLoginEnabled": true,
+    "automaticUpdateChecksEnabled": true,
+    "automaticallyDownloadUpdatesEnabled": true,
     "menuBarIconEnabled": true,
     "statusWidgetEnabled": true, // always show Layer at rest; animate the current app/action briefly
+    "demoRemoteEnabled": false,  // presentation-only floating live remote visualiser
     "layerHUDEnabled": true,      // layer-switch + remote connect/disconnect cards
     "holdHUDEnabled": true,      // larger release-to-select progress HUD
     "dragIndicatorEnabled": true,
@@ -59,6 +79,33 @@
     // display: raising one of those changes nothing you can see, whereas doing this to overlapping
     // windows would reshuffle them as the pointer crossed — and macOS cannot focus without raising.
     "focusFollowsCursor": true,
+    // App-native speech-to-text. API keys stay in macOS Keychain and are never stored here.
+    // One global Voice route is used on every Layer. Hold Mute and tap Side to cycle it.
+    "dictation": {
+      "enabled": false,
+      "activeMode": "final", // external | final | streaming
+      "outputMode": "final", // legacy downgrade compatibility
+      "layerModes": {}, // deprecated compatibility; activeMode is authoritative
+      "finalModel": "gpt-transcribe",
+      "streamingModel": "gpt-live-transcribe",
+      "languageHints": ["zh", "en"],
+      "cleanupProvider": "deepseek",
+      "openAICleanupModel": "gpt-5.6-luna",
+      "deepSeekCleanupModel": "deepseek-v4-flash",
+      "autoInsert": true,
+      "copyOnFailure": true,
+      "restoreClipboardAfterInsert": true,
+      "copyLastOnSideButtonDouble": true,
+      // One mirrored chime when native Voice begins and another after capture has stopped.
+      "feedbackSoundsEnabled": true,
+      "feedbackSoundVolume": 0.55,
+      "pipelineOverlayEnabled": true,
+      "minimumRecordingSeconds": 1, // discard accidental short turns before upload/output
+      "maxRecordingSeconds": 120,
+      "dictionary": [
+        { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] }
+      ]
+    },
     // Circular scroll (iPod wheel): circle a finger on the OUTER ring to scroll.
     "circularScroll": {
       "enabled": true,
@@ -92,10 +139,8 @@
 
   "modes": {
     "global": {
-      // Side voice (Siri) button → PUSH-TO-TALK for dictation (Typeless). Hold >=0.2s and it fires
-      // the hotkey (dictation ON); release fires the SAME hotkey again (OFF). Both edges send the
-      // combo below. A HOLD opens dictation; a single QUICK tap (released < the 0.2s threshold) sends
-      // Enter instead — the activation delay separates the two gestures, so they never collide.
+      // Side voice button. Native transcription intercepts it globally in Final/Streaming;
+      // External leaves this ordinary JSON action untouched on every Layer.
       "button.siri":  { "action": "pushToTalk", "keys": "rctrl+rcmd+ropt" },
       // SHORT-press (a single quick tap) the Siri button → Enter. The base key above is the
       // push-to-talk hold, so the quick-tap action lives on the `.tap` variant (a push-to-talk button
@@ -160,7 +205,8 @@
       //   1.2s → quit the frontmost app (0.7s after Close). AppleScript IS better here — it names the target
       //          explicitly instead of relying on the app having a Quit shortcut. A graceful quit,
       //          so unsaved work still prompts; force-killing would discard it.
-      // Back button, everywhere (Chrome/Safari override the TAP to Cmd+[ back-in-history):
+      // Back button, everywhere (browser keeps the Delete tap and exposes browser Back as the
+      // first tap-then-hold stage below):
       //   • Tap                → Delete
       //   • Plain hold         → auto-repeating Delete (a real held key). No `.hold*` is bound, so
       //     nothing claims the hold and it falls through to hold-to-repeat.
@@ -197,8 +243,10 @@
                          "label": "Space ←", "icon": "rectangle.split.3x1" },
       "L1.ring.right": { "action": "space", "to": "right",
                          "label": "Space →", "icon": "rectangle.split.3x1" },
-      "L1.button.volumeUp":   { "action": "keystroke", "keys": "cmd+=" },            // zoom in
-      "L1.button.volumeDown": { "action": "keystroke", "keys": "cmd+-" },            // zoom out
+      "L1.button.volumeUp":   { "action": "keystroke", "keys": "cmd+=",
+                                "label": "Zoom In", "icon": "plus.magnifyingglass" },
+      "L1.button.volumeDown": { "action": "keystroke", "keys": "cmd+-",
+                                "label": "Zoom Out", "icon": "minus.magnifyingglass" },
       // The two lower-left buttons become copy/paste while L1 is held. Without these they were not
       // "empty" — an unbound layer key falls through to the app's own binding, so Play/Pause in L1
       // still toggled playback.
@@ -215,12 +263,24 @@
       // Long-press ring UP → open Mission Control (single tap still sends ↑ on release):
       "ring.up.hold": { "action": "shell", "command": "open -a 'Mission Control'" }
     },
-    // In Chrome / Safari, the Back button (reports as button.menu on this remote) = Back in history
-    // Chrome / Safari. BASE ring left/right = prev/next tab; L1 inherits desktop switching.
+    // Shared Chrome / Safari navigation, including a deliberate Delete → Back → Close → Quit
+    // Back-button ladder. BASE ring left/right = prev/next tab; L1 inherits desktop switching.
     "browser": {
       "inherits":     "global",
-      // Back button (button.menu) → history Back (Cmd+[).
-      "button.menu":  { "action": "keystroke", "keys": "cmd+[" },
+      // User-facing Layer 1 (BASE):
+      //   • Tap                → Delete.
+      //   • Tap, then hold     → Back from 0.5–1.0s, Close Window from 1.0–1.7s, then Quit App.
+      // The later two stages are the existing Back-button menu shifted by 0.5s, so inserting Back
+      // does not shrink either destructive selection window or make Quit easier to hit accidentally.
+      "button.menu":          { "action": "keystroke", "keys": "delete",
+                                "label": "Delete", "icon": "delete.left" },
+      "button.menu.taphold":  { "action": "keystroke", "keys": "cmd+[", "after": 0.5,
+                                "label": "Back", "icon": "chevron.backward" },
+      "button.menu.taphold2": { "action": "closeWindow", "after": 1.0,
+                                "label": "Close Window", "icon": "xmark.circle.fill" },
+      "button.menu.taphold3": { "action": "applescript", "after": 1.7,
+                                "script": "tell application \"System Events\" to set n to name of first application process whose frontmost is true\nif n is not \"HyperVibe\" then tell application n to quit",
+                                "label": "Quit App", "icon": "power" },
       // BASE (no layer): ring left/right = prev/next TAB (Cmd+Option+←/→).
       "ring.left":     { "action": "keystroke", "keys": "cmd+opt+left" },
       "ring.right":    { "action": "keystroke", "keys": "cmd+opt+right" },
@@ -267,10 +327,14 @@
     // The next layerCycle tap wraps from L2 back to BASE.
     "L2": {
       "inherits": "global",
-      "ring.up":    { "action": "keystroke", "keys": "up" },
-      "ring.down":  { "action": "keystroke", "keys": "down" },
-      "ring.left":  { "action": "keystroke", "keys": "left" },
-      "ring.right": { "action": "keystroke", "keys": "right" },
+      "ring.up":    { "action": "keystroke", "keys": "up",
+                       "label": "Up", "icon": "arrow.up" },
+      "ring.down":  { "action": "keystroke", "keys": "down",
+                       "label": "Down", "icon": "arrow.down" },
+      "ring.left":  { "action": "keystroke", "keys": "left",
+                       "label": "Left", "icon": "arrow.left" },
+      "ring.right": { "action": "keystroke", "keys": "right",
+                       "label": "Right", "icon": "arrow.right" },
       "button.volumeUp":   { "action": "brightnessStep", "to": "up",
                               "label": "Brightness +", "icon": "sun.max.fill" },
       "button.volumeDown": { "action": "brightnessStep", "to": "down",

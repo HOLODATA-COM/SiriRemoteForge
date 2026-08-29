@@ -29,13 +29,17 @@ struct TuneSettings: Codable, Equatable {
     var findCursorEnabled: Bool
     var interfaceLanguage: String
     var launchAtLoginEnabled: Bool
+    var automaticUpdateChecksEnabled: Bool
+    var automaticallyDownloadUpdatesEnabled: Bool
     var menuBarIconEnabled: Bool
     var statusWidgetEnabled: Bool
+    var demoRemoteEnabled: Bool
     var layerHUDEnabled: Bool
     var holdHUDEnabled: Bool
     var dragIndicatorEnabled: Bool
     var showSetupWizardOnFirstLaunch: Bool
     var focusFollowsCursor: Bool
+    var dictation: Config.DictationSettings
     var circularEnabled: Bool
     var circularMinRadius: Double
     var circularStartThreshold: Double
@@ -56,10 +60,14 @@ struct TuneSettings: Codable, Equatable {
         clickRiseThreshold: 0.1, pressMoveMax: 0.025,
         holdThreshold: 0.5, holdThreshold2: 1.0, holdThreshold3: 1.6, holdCancelGrace: 1.0,
         doubleTapWindow: 0.3, spacesModeWindow: 5.0, findCursorEnabled: true,
-        interfaceLanguage: "en", launchAtLoginEnabled: false, menuBarIconEnabled: true,
-        statusWidgetEnabled: true, layerHUDEnabled: true, holdHUDEnabled: true,
+        interfaceLanguage: "en", launchAtLoginEnabled: false,
+        automaticUpdateChecksEnabled: true, automaticallyDownloadUpdatesEnabled: true,
+        menuBarIconEnabled: true,
+        statusWidgetEnabled: true, demoRemoteEnabled: false,
+        layerHUDEnabled: true, holdHUDEnabled: true,
         dragIndicatorEnabled: true, showSetupWizardOnFirstLaunch: true,
         focusFollowsCursor: false,
+        dictation: Config.DictationSettings(),
         circularEnabled: true,
         circularMinRadius: 0.35, circularStartThreshold: 0.35, circularPixelsPerRadian: 75,
         circularScrollEase: 0.3, circularInvert: false,
@@ -91,13 +99,17 @@ struct TuneSettings: Codable, Equatable {
         // explicitly, after which JSON is the only source of truth.
         interfaceLanguage = s.interfaceLanguage ?? Loc.shared.language.rawValue
         launchAtLoginEnabled = s.launchAtLoginEnabled ?? LaunchAtLogin.state.isOn
+        automaticUpdateChecksEnabled = s.automaticUpdateChecksEnabled
+        automaticallyDownloadUpdatesEnabled = s.automaticallyDownloadUpdatesEnabled
         menuBarIconEnabled = s.menuBarIconEnabled
         statusWidgetEnabled = s.statusWidgetEnabled
+        demoRemoteEnabled = s.demoRemoteEnabled
         layerHUDEnabled = s.layerHUDEnabled
         holdHUDEnabled = s.holdHUDEnabled
         dragIndicatorEnabled = s.dragIndicatorEnabled
         showSetupWizardOnFirstLaunch = s.showSetupWizardOnFirstLaunch
         focusFollowsCursor = s.focusFollowsCursor
+        dictation = s.dictation
         circularEnabled = s.circularScroll.enabled
         circularMinRadius = s.circularScroll.minRadius
         circularStartThreshold = s.circularScroll.startThreshold
@@ -118,10 +130,14 @@ struct TuneSettings: Codable, Equatable {
          holdCancelGrace: Double,
          doubleTapWindow: Double,
          spacesModeWindow: Double, findCursorEnabled: Bool,
-         interfaceLanguage: String, launchAtLoginEnabled: Bool, menuBarIconEnabled: Bool,
-         statusWidgetEnabled: Bool, layerHUDEnabled: Bool, holdHUDEnabled: Bool,
+         interfaceLanguage: String, launchAtLoginEnabled: Bool,
+         automaticUpdateChecksEnabled: Bool, automaticallyDownloadUpdatesEnabled: Bool,
+         menuBarIconEnabled: Bool,
+         statusWidgetEnabled: Bool, demoRemoteEnabled: Bool,
+         layerHUDEnabled: Bool, holdHUDEnabled: Bool,
          dragIndicatorEnabled: Bool, showSetupWizardOnFirstLaunch: Bool,
          focusFollowsCursor: Bool,
+         dictation: Config.DictationSettings,
          circularEnabled: Bool,
          circularMinRadius: Double, circularStartThreshold: Double, circularPixelsPerRadian: Double,
          circularScrollEase: Double, circularInvert: Bool,
@@ -147,13 +163,17 @@ struct TuneSettings: Codable, Equatable {
         self.findCursorEnabled = findCursorEnabled
         self.interfaceLanguage = interfaceLanguage
         self.launchAtLoginEnabled = launchAtLoginEnabled
+        self.automaticUpdateChecksEnabled = automaticUpdateChecksEnabled
+        self.automaticallyDownloadUpdatesEnabled = automaticallyDownloadUpdatesEnabled
         self.menuBarIconEnabled = menuBarIconEnabled
         self.statusWidgetEnabled = statusWidgetEnabled
+        self.demoRemoteEnabled = demoRemoteEnabled
         self.layerHUDEnabled = layerHUDEnabled
         self.holdHUDEnabled = holdHUDEnabled
         self.dragIndicatorEnabled = dragIndicatorEnabled
         self.showSetupWizardOnFirstLaunch = showSetupWizardOnFirstLaunch
         self.focusFollowsCursor = focusFollowsCursor
+        self.dictation = dictation
         self.circularEnabled = circularEnabled
         self.circularMinRadius = circularMinRadius
         self.circularStartThreshold = circularStartThreshold

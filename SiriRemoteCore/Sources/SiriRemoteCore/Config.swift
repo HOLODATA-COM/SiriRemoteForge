@@ -31,8 +31,12 @@ public struct Config: Equatable {
         public var appWheel: [String]
         /// Ordered layer cycle. `BASE` represents the ordinary, unlayered bindings; every other id
         /// names a mode in `modes`. The layer key walks this array and wraps at the end. Presentation
-        /// lives beside identity so reordering, renaming, and recolouring a layer is one edit.
+        /// lives beside identity so reordering, renaming, recolouring, and choosing an icon is one edit.
         public var layers: [LayerDefinition]
+        /// JSON-owned symbols for App UI states that are not ordinary action bindings. Binding
+        /// icons still live beside their actions; this small keyed table covers remote connection
+        /// and native Voice phases without hard-coding presentation choices across controllers.
+        public var icons: [String: String]
         public var clickRiseThreshold: Double
         public var pressMoveMax: Double
         // Velocity-based cursor acceleration (layered on top of cursorSpeed).
@@ -58,12 +62,22 @@ public struct Config: Equatable {
         /// Desired SMAppService registration. Optional preserves the existing OS registration for
         /// older config files instead of unexpectedly disabling launch-at-login during migration.
         public var launchAtLoginEnabled: Bool?
+        /// Check the public appcast on a background schedule. This is deliberately stored
+        /// in config.jsonc (rather than a second UserDefaults preference) so every user-facing
+        /// setting has one source of truth and can be provisioned before first launch.
+        public var automaticUpdateChecksEnabled: Bool
+        /// Download a verified Full Setup package after a background check finds one. Installing
+        /// system components still requires the normal one-time macOS administrator approval.
+        public var automaticallyDownloadUpdatesEnabled: Bool
         /// Whether the menu-bar status item is visible. The app remains reachable by reopening the
         /// application bundle, which opens Settings even when this is false.
         public var menuBarIconEnabled: Bool
         /// Always-on desktop widget that shows the active layer while idle and briefly animates
         /// the current app/action. Users can turn it off, but it is part of the default experience.
         public var statusWidgetEnabled: Bool
+        /// Presentation-only floating Siri Remote visualiser. Off by default; when enabled it
+        /// mirrors physical button and touch input without intercepting normal actions.
+        public var demoRemoteEnabled: Bool
         /// Transient layer-switch and remote connection/disconnection cards.
         public var layerHUDEnabled: Bool
         /// The larger release-to-select progress HUD shown while a button is held. Kept separate
@@ -78,6 +92,9 @@ public struct Config: Equatable {
         /// window owns its whole Space, so focusing it raises nothing and disturbs no window
         /// stack. Off by default: it changes which app receives input.
         public var focusFollowsCursor: Bool
+        /// App-owned push-to-talk transcription. API credentials are deliberately NOT represented
+        /// here: this JSON is user-readable and commonly shared, while secrets live in Keychain.
+        public var dictation: DictationSettings
     }
     public struct Mode: Equatable {
         public var inherits: String?
@@ -116,17 +133,280 @@ public struct Config: Equatable {
         }
     }
 
-    /// One entry in the ordered layer cycle. `name` and `color` are presentation-only; `id` is the
+    /// One entry in the ordered layer cycle. `name`, `color`, and `icon` are presentation-only; `id` is the
     /// stable value used for binding resolution (`BASE`, `L1`, ...). The app accepts system colour
     /// names and #RRGGBB/#RRGGBBAA while the core deliberately keeps the value platform-neutral.
     public struct LayerDefinition: Codable, Equatable {
         public var id: String
         public var name: String?
         public var color: String?
-        public init(id: String, name: String? = nil, color: String? = nil) {
+        public var icon: String?
+        public init(id: String, name: String? = nil, color: String? = nil,
+                    icon: String? = nil) {
             self.id = id
             self.name = name
             self.color = color
+            self.icon = icon
+        }
+    }
+
+    public enum DictationOutputMode: String, Codable, CaseIterable, Hashable {
+        /// Record the complete utterance, use the high-accuracy model, then optionally polish it.
+        case final
+        /// Emit low-latency transcript deltas while the user is still speaking; no LLM rewrite.
+        case streaming
+    }
+
+    /// Voice is a global operating mode, independent from the remote's configurable Layers.
+    /// `external` deliberately leaves the side button with the ordinary JSON binding engine;
+    /// the two native modes claim it for HyperVibe's own transcription pipeline.
+    public enum DictationMode: String, Codable, CaseIterable, Hashable {
+        case external
+        case final
+        case streaming
+
+        public var outputMode: DictationOutputMode? {
+            switch self {
+            case .external: return nil
+            case .final: return .final
+            case .streaming: return .streaming
+            }
+        }
+
+        public var next: Self {
+            switch self {
+            case .external: return .final
+            case .final: return .streaming
+            case .streaming: return .external
+            }
+        }
+    }
+
+    /// Per-layer side-button policy. `inherit` keeps the global `outputMode`; `existing` leaves the
+    /// side button entirely with the ordinary JSON binding engine, so enabling native Voice cannot
+    /// silently replace an existing Typeless/shortcut workflow on that layer.
+    public enum DictationLayerMode: String, Codable, CaseIterable, Hashable {
+        case inherit
+        case existing
+        case final
+        case streaming
+    }
+
+    public enum DictationCleanupProvider: String, Codable, CaseIterable {
+        case none
+        case openAI = "openai"
+        case deepSeek = "deepseek"
+    }
+
+    /// A canonical spelling plus common recognition variants. Canonical terms are sent as model
+    /// keyword hints; aliases are also corrected deterministically on-device after transcription.
+    public struct DictationTerm: Codable, Equatable {
+        public var term: String
+        public var aliases: [String]
+
+        public init(term: String, aliases: [String] = []) {
+            self.term = term
+            self.aliases = aliases
+        }
+
+        private enum CodingKeys: String, CodingKey { case term, aliases }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            term = try container.decode(String.self, forKey: .term)
+            aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
+        }
+    }
+
+    /// Complete, shareable voice-input behaviour. Secrets and transcript history stay out of it.
+    public struct DictationSettings: Codable, Equatable {
+        public var enabled: Bool
+        /// The one Voice route used on every Layer. It can be changed from Settings or by holding
+        /// Mute and tapping the side button; unlike the legacy `layerModes`, changing Layer never
+        /// changes this value.
+        public var activeMode: DictationMode
+        /// Decode/encode compatibility for configurations written before `activeMode`. Native
+        /// sessions still freeze their concrete output mode into this field before a turn begins.
+        public var outputMode: DictationOutputMode
+        /// Deprecated compatibility data. It remains Codable so older public configurations round
+        /// trip without data loss, but routing is intentionally global and no longer reads it.
+        public var layerModes: [String: DictationLayerMode]
+        public var finalModel: String
+        public var streamingModel: String
+        public var languageHints: [String]
+        public var cleanupProvider: DictationCleanupProvider
+        public var openAICleanupModel: String
+        public var deepSeekCleanupModel: String
+        public var autoInsert: Bool
+        public var copyOnFailure: Bool
+        public var restoreClipboardAfterInsert: Bool
+        public var copyLastOnSideButtonDouble: Bool
+        /// A short, paired acoustic cue when native Voice actually opens and after capture closes.
+        /// Quick side-button taps never play it because they never promote into dictation.
+        public var feedbackSoundsEnabled: Bool
+        /// Linear playback gain for both halves of the paired cue, in the closed range 0...1.
+        public var feedbackSoundVolume: Double
+        /// Independent temporary Voice capsule. This remains available when the always-on Layer
+        /// status widget is disabled; its machine-local dragged position stays in UserDefaults.
+        public var pipelineOverlayEnabled: Bool
+        /// Audio shorter than this never leaves the local capture buffer and never reaches the
+        /// caret. Keeping this in JSON makes the accidental-speech gate explicit and shareable.
+        public var minimumRecordingSeconds: Double
+        public var maxRecordingSeconds: Double
+        public var dictionary: [DictationTerm]
+
+        public init(
+            enabled: Bool = false,
+            activeMode: DictationMode? = nil,
+            outputMode: DictationOutputMode = .final,
+            layerModes: [String: DictationLayerMode] = [:],
+            finalModel: String = "gpt-transcribe",
+            streamingModel: String = "gpt-live-transcribe",
+            languageHints: [String] = ["zh", "en"],
+            cleanupProvider: DictationCleanupProvider = .deepSeek,
+            openAICleanupModel: String = "gpt-5.6-luna",
+            deepSeekCleanupModel: String = "deepseek-v4-flash",
+            autoInsert: Bool = true,
+            copyOnFailure: Bool = true,
+            restoreClipboardAfterInsert: Bool = true,
+            copyLastOnSideButtonDouble: Bool = true,
+            feedbackSoundsEnabled: Bool = true,
+            feedbackSoundVolume: Double = 0.55,
+            pipelineOverlayEnabled: Bool = true,
+            minimumRecordingSeconds: Double = 1,
+            maxRecordingSeconds: Double = 120,
+            dictionary: [DictationTerm] = []
+        ) {
+            self.enabled = enabled
+            self.activeMode = activeMode ?? (outputMode == .streaming ? .streaming : .final)
+            self.outputMode = outputMode
+            self.layerModes = layerModes
+            self.finalModel = finalModel
+            self.streamingModel = streamingModel
+            self.languageHints = languageHints
+            self.cleanupProvider = cleanupProvider
+            self.openAICleanupModel = openAICleanupModel
+            self.deepSeekCleanupModel = deepSeekCleanupModel
+            self.autoInsert = autoInsert
+            self.copyOnFailure = copyOnFailure
+            self.restoreClipboardAfterInsert = restoreClipboardAfterInsert
+            self.copyLastOnSideButtonDouble = copyLastOnSideButtonDouble
+            self.feedbackSoundsEnabled = feedbackSoundsEnabled
+            self.feedbackSoundVolume = feedbackSoundVolume
+            self.pipelineOverlayEnabled = pipelineOverlayEnabled
+            self.minimumRecordingSeconds = minimumRecordingSeconds
+            self.maxRecordingSeconds = maxRecordingSeconds
+            self.dictionary = dictionary
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case enabled, activeMode, outputMode, layerModes, finalModel, streamingModel, languageHints
+            case cleanupProvider, openAICleanupModel, deepSeekCleanupModel
+            case autoInsert, copyOnFailure, restoreClipboardAfterInsert
+            case copyLastOnSideButtonDouble, feedbackSoundsEnabled, feedbackSoundVolume
+            case pipelineOverlayEnabled, minimumRecordingSeconds, maxRecordingSeconds, dictionary
+        }
+
+        /// New voice options are additive. Decode each field independently so an older or hand-
+        /// written partial JSON block inherits current safe defaults instead of making the entire
+        /// configuration unreadable after an upgrade.
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let defaults = Self.init()
+            enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+                ?? defaults.enabled
+            outputMode = try container.decodeIfPresent(DictationOutputMode.self, forKey: .outputMode)
+                ?? defaults.outputMode
+            // A missing activeMode is an old configuration. Its former global outputMode is the
+            // only deterministic migration target; per-Layer overrides are retained but ignored.
+            activeMode = try container.decodeIfPresent(DictationMode.self, forKey: .activeMode)
+                ?? (outputMode == .streaming ? .streaming : .final)
+            layerModes = try container.decodeIfPresent(
+                [String: DictationLayerMode].self, forKey: .layerModes
+            ) ?? defaults.layerModes
+            finalModel = try container.decodeIfPresent(String.self, forKey: .finalModel)
+                ?? defaults.finalModel
+            streamingModel = try container.decodeIfPresent(String.self, forKey: .streamingModel)
+                ?? defaults.streamingModel
+            languageHints = try container.decodeIfPresent([String].self, forKey: .languageHints)
+                ?? defaults.languageHints
+            cleanupProvider = try container.decodeIfPresent(
+                DictationCleanupProvider.self, forKey: .cleanupProvider
+            ) ?? defaults.cleanupProvider
+            openAICleanupModel = try container.decodeIfPresent(
+                String.self, forKey: .openAICleanupModel
+            ) ?? defaults.openAICleanupModel
+            deepSeekCleanupModel = try container.decodeIfPresent(
+                String.self, forKey: .deepSeekCleanupModel
+            ) ?? defaults.deepSeekCleanupModel
+            autoInsert = try container.decodeIfPresent(Bool.self, forKey: .autoInsert)
+                ?? defaults.autoInsert
+            copyOnFailure = try container.decodeIfPresent(Bool.self, forKey: .copyOnFailure)
+                ?? defaults.copyOnFailure
+            restoreClipboardAfterInsert = try container.decodeIfPresent(
+                Bool.self, forKey: .restoreClipboardAfterInsert
+            ) ?? defaults.restoreClipboardAfterInsert
+            copyLastOnSideButtonDouble = try container.decodeIfPresent(
+                Bool.self, forKey: .copyLastOnSideButtonDouble
+            ) ?? defaults.copyLastOnSideButtonDouble
+            feedbackSoundsEnabled = try container.decodeIfPresent(
+                Bool.self, forKey: .feedbackSoundsEnabled
+            ) ?? defaults.feedbackSoundsEnabled
+            feedbackSoundVolume = try container.decodeIfPresent(
+                Double.self, forKey: .feedbackSoundVolume
+            ) ?? defaults.feedbackSoundVolume
+            pipelineOverlayEnabled = try container.decodeIfPresent(
+                Bool.self, forKey: .pipelineOverlayEnabled
+            ) ?? defaults.pipelineOverlayEnabled
+            maxRecordingSeconds = try container.decodeIfPresent(
+                Double.self, forKey: .maxRecordingSeconds
+            ) ?? defaults.maxRecordingSeconds
+            // An older hand-authored config may have set a one-second maximum before the minimum
+            // gate existed. Preserve its ability to load instead of introducing a migration error;
+            // an explicitly authored minimum is still validated against the maximum below.
+            minimumRecordingSeconds = try container.decodeIfPresent(
+                Double.self, forKey: .minimumRecordingSeconds
+            ) ?? min(defaults.minimumRecordingSeconds, maxRecordingSeconds)
+            dictionary = try container.decodeIfPresent(
+                [DictationTerm].self, forKey: .dictionary
+            ) ?? defaults.dictionary
+        }
+
+        /// Select a global Voice mode and retire any per-Layer overrides from the next JSON save.
+        /// Keeping the legacy outputMode synchronized makes downgrading to an older build behave as
+        /// closely as possible for the two native routes.
+        public mutating func selectMode(_ mode: DictationMode) {
+            activeMode = mode
+            if let nativeMode = mode.outputMode { outputMode = nativeMode }
+            layerModes.removeAll()
+        }
+
+        /// Resolve the global side-button route. The layer argument remains source-compatible for
+        /// callers and third-party integrations, but intentionally has no effect. `nil` means
+        /// "do not claim it": RemoteInputHandler then runs the existing configured action without
+        /// paying any native-dictation work on the physical press path.
+        public func resolvedOutputMode(for layerID: String?) -> DictationOutputMode? {
+            _ = layerID
+            guard enabled else { return nil }
+            return activeMode.outputMode
+        }
+
+        /// Keep both native transports warm even while External is selected. A mode switch is a
+        /// control-plane event and the next side-button hold must not pay a DNS/TLS/WebSocket
+        /// handshake. There are still only two sessions regardless of the number of Layers.
+        public func outputModesToPrewarm(layerIDs: [String]) -> Set<DictationOutputMode> {
+            _ = layerIDs
+            guard enabled else { return [] }
+            return Set(DictationOutputMode.allCases)
+        }
+
+        /// Freeze the selected global choice into a session-local settings value. A mode switch
+        /// while somebody is speaking therefore cannot change that utterance halfway through.
+        public func resolvedSettings(for layerID: String?) -> Self? {
+            guard let mode = resolvedOutputMode(for: layerID) else { return nil }
+            var copy = self
+            copy.outputMode = mode
+            return copy
         }
     }
 
@@ -135,9 +415,11 @@ public struct Config: Equatable {
     public struct LayerHUDStyle: Codable, Equatable {
         public var label: String?
         public var color: String?
-        public init(label: String? = nil, color: String? = nil) {
+        public var icon: String?
+        public init(label: String? = nil, color: String? = nil, icon: String? = nil) {
             self.label = label
             self.color = color
+            self.icon = icon
         }
     }
 }
@@ -182,6 +464,7 @@ public extension Config {
     /// `addMode` for its Layer path so a newly-created layer is immediately selectable and
     /// cycleable. Invalid/reserved/duplicate ids and an 11th entry are safe no-ops.
     func addLayer(id: String, name: String? = nil, color: String? = nil,
+                  icon: String? = nil,
                   inherits: String?) -> Config {
         guard id != "BASE", !id.isEmpty,
               id == id.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -195,7 +478,8 @@ public extension Config {
         if copy.modes[id] == nil {
             copy.modes[id] = Mode(inherits: inherits, bindings: [:])
         }
-        copy.settings.layers.append(LayerDefinition(id: id, name: name, color: color))
+        copy.settings.layers.append(LayerDefinition(id: id, name: name, color: color,
+                                                    icon: icon))
         return copy
     }
 
@@ -209,6 +493,7 @@ public extension Config {
         copy.settings.layers.removeAll {
             $0.id.caseInsensitiveCompare(name) == .orderedSame && $0.id != "BASE"
         }
+        copy.settings.dictation.layerModes.removeValue(forKey: name)
         for (bundle, m) in copy.appProfiles where m == name { copy.appProfiles.removeValue(forKey: bundle) }
         for (other, mode) in copy.modes where mode.inherits == name { copy.modes[other]?.inherits = nil }
         return copy
@@ -298,17 +583,21 @@ extension Config: Decodable {
 extension Config.Settings: Decodable {
     private enum K: String, CodingKey {
         case defaultMode, swipeVelocity, cursorSpeed, cursorDeadzone, circularScroll, holdThreshold
-        case holdThreshold2, holdThreshold3, holdCancelGrace, appWheel, layers, layerHUD
+        case holdThreshold2, holdThreshold3, holdCancelGrace, appWheel, layers, layerHUD, icons
         case clickRiseThreshold, pressMoveMax
         case accelMin, accelMax, accelLowSpeed, accelHighSpeed, accelCurve
         case accelerationCurvesLinked
         case doubleTapWindow
         case spacesModeWindow
         case findCursorEnabled
-        case interfaceLanguage, launchAtLoginEnabled, menuBarIconEnabled
-        case statusWidgetEnabled, layerHUDEnabled, holdHUDEnabled, dragIndicatorEnabled
+        case interfaceLanguage, launchAtLoginEnabled
+        case automaticUpdateChecksEnabled, automaticallyDownloadUpdatesEnabled
+        case menuBarIconEnabled
+        case statusWidgetEnabled, demoRemoteEnabled
+        case layerHUDEnabled, holdHUDEnabled, dragIndicatorEnabled
         case showSetupWizardOnFirstLaunch
         case focusFollowsCursor
+        case dictation
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
@@ -331,6 +620,7 @@ extension Config.Settings: Decodable {
         } else {
             layers = []
         }
+        icons = try c.decodeIfPresent([String: String].self, forKey: .icons) ?? [:]
         clickRiseThreshold = try c.decodeIfPresent(Double.self, forKey: .clickRiseThreshold) ?? 0.1
         pressMoveMax = try c.decodeIfPresent(Double.self, forKey: .pressMoveMax) ?? 0.025
         accelMin = try c.decodeIfPresent(Double.self, forKey: .accelMin) ?? 0.4
@@ -345,8 +635,15 @@ extension Config.Settings: Decodable {
         findCursorEnabled = try c.decodeIfPresent(Bool.self, forKey: .findCursorEnabled) ?? true
         interfaceLanguage = try c.decodeIfPresent(String.self, forKey: .interfaceLanguage)
         launchAtLoginEnabled = try c.decodeIfPresent(Bool.self, forKey: .launchAtLoginEnabled)
+        automaticUpdateChecksEnabled = try c.decodeIfPresent(
+            Bool.self, forKey: .automaticUpdateChecksEnabled
+        ) ?? true
+        automaticallyDownloadUpdatesEnabled = try c.decodeIfPresent(
+            Bool.self, forKey: .automaticallyDownloadUpdatesEnabled
+        ) ?? true
         menuBarIconEnabled = try c.decodeIfPresent(Bool.self, forKey: .menuBarIconEnabled) ?? true
         statusWidgetEnabled = try c.decodeIfPresent(Bool.self, forKey: .statusWidgetEnabled) ?? true
+        demoRemoteEnabled = try c.decodeIfPresent(Bool.self, forKey: .demoRemoteEnabled) ?? false
         layerHUDEnabled = try c.decodeIfPresent(Bool.self, forKey: .layerHUDEnabled) ?? true
         holdHUDEnabled = try c.decodeIfPresent(Bool.self, forKey: .holdHUDEnabled) ?? true
         dragIndicatorEnabled = try c.decodeIfPresent(Bool.self, forKey: .dragIndicatorEnabled) ?? true
@@ -354,6 +651,8 @@ extension Config.Settings: Decodable {
             Bool.self, forKey: .showSetupWizardOnFirstLaunch
         ) ?? true
         focusFollowsCursor = try c.decodeIfPresent(Bool.self, forKey: .focusFollowsCursor) ?? false
+        dictation = try c.decodeIfPresent(Config.DictationSettings.self, forKey: .dictation)
+            ?? Config.DictationSettings()
     }
 
     /// Dictionaries have no user-authored order, so legacy entries receive the only deterministic
@@ -378,7 +677,8 @@ extension Config.Settings: Decodable {
         var migrated = ids.map { rawID in
             let style = legacy[rawID]!
             let id = rawID.caseInsensitiveCompare("BASE") == .orderedSame ? "BASE" : rawID
-            return Config.LayerDefinition(id: id, name: style.label, color: style.color)
+            return Config.LayerDefinition(id: id, name: style.label, color: style.color,
+                                          icon: style.icon)
         }
         if !migrated.isEmpty, migrated[0].id != "BASE" {
             migrated.insert(Config.LayerDefinition(id: "BASE"), at: 0)
@@ -447,6 +747,7 @@ extension Config.Settings: Encodable {
         try c.encode(holdCancelGrace, forKey: .holdCancelGrace)
         try c.encode(appWheel, forKey: .appWheel)
         try c.encode(layers, forKey: .layers)
+        try c.encode(icons, forKey: .icons)
         try c.encode(clickRiseThreshold, forKey: .clickRiseThreshold)
         try c.encode(pressMoveMax, forKey: .pressMoveMax)
         try c.encode(accelMin, forKey: .accelMin)
@@ -460,13 +761,18 @@ extension Config.Settings: Encodable {
         try c.encode(findCursorEnabled, forKey: .findCursorEnabled)
         try c.encodeIfPresent(interfaceLanguage, forKey: .interfaceLanguage)
         try c.encodeIfPresent(launchAtLoginEnabled, forKey: .launchAtLoginEnabled)
+        try c.encode(automaticUpdateChecksEnabled, forKey: .automaticUpdateChecksEnabled)
+        try c.encode(automaticallyDownloadUpdatesEnabled,
+                     forKey: .automaticallyDownloadUpdatesEnabled)
         try c.encode(menuBarIconEnabled, forKey: .menuBarIconEnabled)
         try c.encode(statusWidgetEnabled, forKey: .statusWidgetEnabled)
+        try c.encode(demoRemoteEnabled, forKey: .demoRemoteEnabled)
         try c.encode(layerHUDEnabled, forKey: .layerHUDEnabled)
         try c.encode(holdHUDEnabled, forKey: .holdHUDEnabled)
         try c.encode(dragIndicatorEnabled, forKey: .dragIndicatorEnabled)
         try c.encode(showSetupWizardOnFirstLaunch, forKey: .showSetupWizardOnFirstLaunch)
         try c.encode(focusFollowsCursor, forKey: .focusFollowsCursor)
+        try c.encode(dictation, forKey: .dictation)
     }
 }
 

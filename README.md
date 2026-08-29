@@ -10,9 +10,9 @@
 &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)
 &nbsp;![Swift](https://img.shields.io/badge/Swift-5.9-orange)
 &nbsp;![Frameworks](https://img.shields.io/badge/private-MultitouchSupport%20·%20SkyLight-8A2BE2)
-&nbsp;![App Store](https://img.shields.io/badge/App%20Store-never-critical)
+&nbsp;![Distribution](https://img.shields.io/badge/distribution-direct%20beta-blue)
 
-*The Apple TV remote in your drawer is a 27 mm square of glass and thirteen buttons.*
+*The Apple TV remote in your drawer already has a compact touch surface and thirteen buttons.*
 *This turns it into a Mac controller where **you** decide what each of them means — and where the*
 *meaning changes with whichever app you happen to be looking at. If you're brave, it can even become*
 *a microphone.*
@@ -22,7 +22,7 @@
 ---
 
 > **TL;DR** — Remap every button, the click-ring, the trackpad, and swipes to any action; make one
-> key mean six things; swap the whole remote with layers; drive the cursor from the glass; and
+> key mean six things; swap the whole remote with layers; drive the cursor from the touch surface; and
 > reconfigure the entire device by editing **one hot-reloading file**. No settings screen required.
 
 ```jsonc
@@ -49,13 +49,15 @@ which also means an agent or a script can reconfigure the whole device by editin
   last stage cancels.
 - Per-app profiles that fall through an inheritance chain, plus **layers** that swap the whole
   remote at once (momentary while held, or sticky).
-- The glass drives the cursor with tunable acceleration, iPod-style circular scroll, sticky drag,
+- The touch surface drives the cursor with tunable acceleration, iPod-style circular scroll, sticky drag,
   shake-to-find, and press-to-click.
 - A radial app launcher, animated Space switching, window controls, brightness, and a native
   settings app with a drawn, clickable remote.
 
 > **Scope.** macOS only, and it uses private frameworks (MultitouchSupport, SkyLight) to reach the
-> trackpad and Spaces — so it is not sandboxed and can never ship on the App Store. Build it
+> trackpad and Spaces. The current build is therefore unsandboxed and distributed directly rather
+> than through the Mac App Store; a supported public input API and entitlement path would be needed
+> for a conventional sandboxed distribution. Build it
 > yourself or use a beta GitHub Release when available. Release builds are ad-hoc signed, not
 > Apple-notarized, and need a one-time right-click → Open. This is a power tool, and it asks for the
 > permissions it needs: Accessibility and Input Monitoring.
@@ -67,7 +69,7 @@ which also means an agent or a script can reconfigure the whole device by editin
 - **Everything is remappable.** Buttons (Back/Menu, TV, Siri, Play/Pause, Mute, Volume ±, Power),
   the click-ring (up/down/left/right + center), one-finger swipes, and two-finger tap — each maps
   to any action.
-- **Trackpad → cursor.** The remote's glass trackpad drives the mouse pointer with tunable speed,
+- **Trackpad → cursor.** The remote's touch surface drives the mouse pointer with tunable speed,
   a steadiness dead-zone, velocity-based pointer acceleration, press-to-click freeze, tap-to-click,
   and iPod-style **circular scroll** (circle a finger on the outer ring to scroll).
 - **Per-app profiles.** The frontmost app selects a *mode* (e.g. a browser mode, a terminal mode);
@@ -192,7 +194,20 @@ menu bar and Settings.
 The bundle is signed **without** the hardened runtime on purpose — under the hardened runtime the
 private MultitouchSupport touch callback trips code-signing enforcement and the app is killed the
 instant you touch the trackpad. `create_app_bundle.sh` prefers a stable local self-signed identity
-(`siriRemote Local Signing`) if present, so permissions survive rebuilds; otherwise it ad-hoc signs.
+(`siriRemote Local Signing`) for local builds, so permissions survive rebuilds. It refuses to fall
+back silently; ad-hoc signing is available only when a public Release build requests it explicitly.
+
+### Software updates
+
+HyperVibe checks its release feed daily by default. It can download a newer **app-only** archive in
+the background, or the user can choose **Check for Updates…** from either Settings or the menu bar.
+Sparkle verifies every archive against the Ed25519 public key embedded in the app before extraction.
+The updater replaces only `HyperVibe.app`, so ordinary updates neither restart system audio nor ask
+for an administrator password. Full Setup remains a separate manual download for installing or
+refreshing the virtual microphone stack.
+
+Both behaviours are controlled by `settings.automaticUpdateChecksEnabled` and
+`settings.automaticallyDownloadUpdatesEnabled` in `config.jsonc`, and both default to `true`.
 
 ### Required system setting if you bind the Power button
 
@@ -226,7 +241,7 @@ Sleep all keep working.
 > real lever. Short presses *appeared* to work only because loginwindow debounces them at 350 ms —
 > which is also why long presses failed every time. See `HANDOFF.md` for the full evidence.
 
-Pressing Power also opens a **1-second input guard**: the button sits right next to the glass, so
+Pressing Power also opens a **1-second input guard**: the button sits right next to the touch surface, so
 the press almost always brushes the trackpad, which used to instantly undo the dim it had just
 triggered. During the guard, touches and other buttons are still read but do not fire actions.
 
@@ -275,6 +290,102 @@ dedicated uninstaller. Development setup and component-level details live in
 
 ---
 
+## Native voice-to-text
+
+HyperVibe can also turn a side-button hold directly into text, without asking another dictation app
+to interpret a shortcut. No `pushToTalk` mapping is required: enable **Settings → Voice**, save an
+OpenAI key from the in-App credentials panel, then
+hold the Siri button for 0.2 seconds and speak. Capture and the cloud session begin on the physical
+press edge, underneath that existing tap/hold decision; a quick tap cancels silently. Releasing the
+button immediately closes the live Voice presentation and finishes the current utterance in the
+background.
+
+There are two deliberately different output paths:
+
+- **Streaming** prioritizes responsiveness. Transcript deltas are inserted as they arrive while the
+  button is still held; the first delta bypasses coalescing, later deltas are batched for at most
+  8 ms, and no LLM rewrite is put in the latency path. On a successful release the widget returns
+  directly to the current Layer—there are no redundant Transcribing, Inserting, or Inserted cards.
+  Clipboard fallback and errors remain visible because those outcomes require attention.
+- **Final** records the complete utterance with `gpt-transcribe`, applies the on-device dictionary,
+  and can optionally polish wording with a small OpenAI or DeepSeek model. DeepSeek is the default
+  cleanup provider because it is materially faster in this workflow; choose `none` for the shortest
+  release-to-text path.
+
+The side button can choose a different route on every configured Layer. `existing` leaves that
+Layer's ordinary `button.siri` binding completely untouched, while `final` and `streaming` select
+the two native paths above. HyperVibe keeps at most one warm Realtime session per native path—not
+one per Layer—so even a ten-Layer configuration uses at most two prepared sockets and switching
+Layers does not put a fresh TLS/session handshake on the next press.
+
+The capture path automatically prefers fresh Siri Remote audio when the Full Setup microphone stack
+is available, then falls back to the Mac's built-in microphone. It locks onto the first viable source
+after a short pre-roll so source probing does not continue to consume work during the utterance.
+Audio conversion is allocation-light, HTTP/TLS and the Realtime WebSocket are pre-warmed before the
+next press, and credentials are cached before the input hot path.
+
+Text delivery first targets the control that was focused when the press began. HyperVibe tries a
+direct Accessibility insertion, then a synthetic paste, and finally copies the result if the target
+cannot accept text. It refuses to inject into secure text fields. If a previous result did not land
+where expected, double-clicking the side button copies that previous dictation again. A custom
+dictionary accepts canonical terms plus recognition aliases and works in both modes.
+
+Native Voice gives immediate press/release confirmation with a matched pair of short sound cues.
+The stop sound starts only after microphone capture has ended, so it cannot become part of the
+transcript. Switching Voice mode itself is silent. The persistent widget uses the same real acoustic
+meter in Final and Streaming, with an adaptive per-hold level reference so changing microphone sources does not arbitrarily
+make the waveform huge or tiny. Both the cue and its volume are configurable.
+
+API keys are entered only through HyperVibe Settings and never enter the shareable `config.jsonc`,
+logs, the App bundle, or Git. Certificate-bound builds keep them in the login Keychain through a
+fixed credential helper. Public ad-hoc betas instead keep them as plaintext in a dedicated
+`~/Library/Application Support/HyperVibe/Credentials/credentials.json` file with mode `0600` inside
+a mode-`0700` directory. This protects against accidental sharing, not malware already running as
+the signed-in user. Every non-secret behavior remains JSON-controlled under `settings.dictation`:
+
+```jsonc
+"dictation": {
+  "enabled": true,
+  "activeMode": "final", // external | final | streaming; global on every Layer
+  "outputMode": "final", // legacy downgrade compatibility
+  "layerModes": {},      // deprecated compatibility; activeMode is authoritative
+  "finalModel": "gpt-transcribe",
+  "streamingModel": "gpt-live-transcribe",
+  "languageHints": ["zh", "en"],
+  "cleanupProvider": "deepseek", // none | openai | deepseek; Final mode only
+  "openAICleanupModel": "gpt-5.6-luna",
+  "deepSeekCleanupModel": "deepseek-v4-flash",
+  "autoInsert": true,
+  "copyOnFailure": true,
+  "restoreClipboardAfterInsert": true,
+  "copyLastOnSideButtonDouble": true,
+  "feedbackSoundsEnabled": true,
+  "feedbackSoundVolume": 0.55,
+  "pipelineOverlayEnabled": true, // temporary draggable Voice capsule
+  "minimumRecordingSeconds": 1,   // shorter turns stay local and produce no text
+  "maxRecordingSeconds": 120,
+  "dictionary": [
+    { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] }
+  ]
+}
+```
+
+Voice mode is orthogonal to Layer: changing Layer never changes the selected route. Hold **Mute**
+and tap the side button to cycle **External → Final → Live** without adding any delay to ordinary
+side-button input. Both floating surfaces animate the selection; External leaves the configured
+`button.siri` action untouched and never opens the temporary Voice capsule.
+
+The temporary Voice capsule is independent from the always-on Layer status widget. In Final and
+Live it appears only after the native hold threshold, carries the real acoustic waveform into Final
+mode's Transcribing → Polishing → Inserted pipeline, remembers its display-relative drag position,
+and automatically returns to an available screen if a monitor disappears. Set
+`pipelineOverlayEnabled` to `false` to hide it without changing dictation or the persistent widget.
+
+The Voice settings page exposes the same fields, credential connection tests, and the most recent
+press-to-audio, session-ready, first-delta, release-to-transcript, cleanup, and insertion timings.
+
+---
+
 ## Configuration — `~/.config/siriremote/config.jsonc`
 
 JSONC (JSON + `//` comments). A default is written on first run. **Saving hot-reloads it live.**
@@ -295,8 +406,11 @@ setup — push-to-talk, per-app Music/browser/terminal modes, layers — is in
     ],
     "interfaceLanguage": "en",
     "launchAtLoginEnabled": true,
+    "automaticUpdateChecksEnabled": true,
+    "automaticallyDownloadUpdatesEnabled": true,
     "menuBarIconEnabled": true,
     "statusWidgetEnabled": true,
+    "demoRemoteEnabled": false,
     "layerHUDEnabled": true,
     "holdHUDEnabled": true,
     "dragIndicatorEnabled": true,
@@ -408,7 +522,7 @@ migrated to this ordered form on the next UI save.
 ### Always-on status widget
 
 The status widget is on by default. Turn it off under **Settings → Tuning → On-screen Status**, or
-set `"statusWidgetEnabled": false`. The compact glass card rests on the current layer, then briefly
+set `"statusWidgetEnabled": false`. The compact floating card rests on the current layer, then briefly
 settles on the operation that actually ran. App activation uses the app's real icon; media,
 navigation, mouse, voice, and window actions use an action-specific symbol (or the binding's custom
 `label` / `icon`). It then returns to the current layer automatically.
@@ -510,16 +624,49 @@ hold-progress HUD names the action you'd get by releasing right now.
                        "label": "Sleep", "icon": "moon.fill" },
 ```
 
-`icon` is an SF Symbol name, and is usually unnecessary: an action that **opens** an app shows that
-app's real icon *instead of* a label (`launch`, and `shell` commands written as `open -a "Some App"`),
-and an action **aimed at** an app (`applescript` containing `tell application "X"`) shows that app's
-icon *beside* its label. Otherwise a symbol is picked from the action kind.
+`icon` is an SF Symbol name. For ordinary actions it is the direct source of truth on every HUD and
+in Layout. Invalid or unavailable symbol names safely fall back to the action's built-in symbol, so
+one typo cannot create a blank slot.
+
+There are two intentional exceptions. Volume and brightness use Apple's variable symbols driven by
+the Mac's real measured value, so a static JSON glyph cannot disagree with system state. An action
+that **opens** an app (`launch`, or `shell` written as `open -a "Some App"`) always discovers the
+installed app's real icon automatically. An action **aimed at** an app (`applescript` containing
+`tell application "X"`) still uses a configured `icon` when present; otherwise it can use that app's
+icon beside the action label.
 
 **Presentation inherits down the mode chain on its own, field by field, independently of the
 binding.** A key keeps its identity even where a mode re-binds it, so set `label`/`icon` once in
 `global` and an app mode that overrides only the *action* still shows the same name and icon — no
 duplication to drift out of sync. A mode that genuinely presents a key differently just says so, and
 the nearer mode wins.
+
+Layer and non-binding UI symbols are JSON-owned too:
+
+```jsonc
+"settings": {
+  "layers": [
+    { "id": "BASE", "name": "Navigate", "color": "green", "icon": "location.fill" },
+    { "id": "L1", "name": "Write",    "color": "blue",  "icon": "text.cursor" }
+  ],
+  "icons": {
+    "layer.default": "square.stack.3d.up.fill",
+    "remote.connected": "appletvremote.gen4.fill",
+    "remote.disconnected": "appletvremote.gen4",
+    "voice.listening": "waveform.circle.fill",
+    "voice.transcribing": "waveform.badge.magnifyingglass",
+    "voice.polishing": "wand.and.stars",
+    "voice.inserting": "text.cursor",
+    "voice.inserted": "checkmark.circle.fill",
+    "voice.copied": "doc.on.doc.fill",
+    "voice.error": "exclamationmark.triangle.fill",
+    "fallback": "command.circle.fill"
+  }
+}
+```
+
+Each Layer's own `icon` wins over `layer.default`. These presentation fields hot-reload and survive
+GUI write-back like every other formal setting.
 
 ### Hold timing
 
@@ -588,8 +735,8 @@ dead zone, so summoning it and pressing Select does nothing by accident.
 All live in `settings` and in the app's **Tuning** tab: `cursorSpeed`, `cursorDeadzone`, pointer-accel
 curve (`accelMin`/`accelMax`/`accelLowSpeed`/`accelHighSpeed`), `clickRiseThreshold`, `pressMoveMax`,
 `holdThreshold`/`holdThreshold2`/`holdThreshold3`, `doubleTapWindow`, `spacesModeWindow`,
-`findCursorEnabled`, `interfaceLanguage`, `launchAtLoginEnabled`, `menuBarIconEnabled`,
-`statusWidgetEnabled`, `layerHUDEnabled`, `holdHUDEnabled`, `dragIndicatorEnabled`,
+`findCursorEnabled`, `interfaceLanguage`, `launchAtLoginEnabled`, `menuBarIconEnabled`, `icons`,
+`statusWidgetEnabled`, `demoRemoteEnabled`, `layerHUDEnabled`, `holdHUDEnabled`, `dragIndicatorEnabled`,
 `showSetupWizardOnFirstLaunch`, `focusFollowsCursor`, and `circularScroll { enabled, minRadius,
 startThreshold, pixelsPerRadian, scrollEase, invert }`. Config is the single source of truth — Tuning-tab changes are written
 back to `config.jsonc` after a short debounce. The window header always shows **Saving…**,
@@ -597,9 +744,9 @@ back to `config.jsonc` after a short debounce. The window header always shows **
 same status indicator and save as soon as a picker changes or an editor commits.
 
 All formal presentation choices are JSON-controlled. The menu-bar item, persistent status widget,
-layer/connection HUD, long-press HUD, and sticky-drag badge can each be hidden independently. Only
-machine-local state stays outside the portable config: the dragged widget position (which contains a
-Mac-specific display ID) and the fact that this particular Mac has completed its one-time setup guide.
+floating demo remote, layer/connection HUD, long-press HUD, and sticky-drag badge can each be hidden
+independently. Only machine-local state stays outside the portable config: dragged window positions
+and sizes (which depend on a particular display), and the fact that this Mac completed setup.
 
 ---
 
@@ -723,3 +870,6 @@ cursor, and settings layers were substantially rewritten.
 The MIT License permits relicensing a derivative work under the GPL, but requires that the original
 copyright notice be retained. It is reproduced in full in [`NOTICE`](NOTICE) and continues to apply
 to the portions of this software that originate upstream.
+
+Automatic updates use [Sparkle 2](https://sparkle-project.org/). Its complete license and
+third-party notices ship inside every app bundle as `Sparkle-LICENSE.txt`.

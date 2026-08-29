@@ -6,13 +6,14 @@
 //  HUD, where "what will run if I let go now" has to be readable at a glance.
 //
 //  Order of preference, most specific first:
-//    1. `label` / `icon` written in config.jsonc for that binding
+//    1. measured volume/brightness state (these are variable symbols, not static commands)
 //    2. the REAL application icon, for anything that opens an app — `launch`, and also
 //       `shell` commands of the `open -a "Some App"` form, which is how most app launches are
 //       actually written. Shown alone, without a label.
-//    3. the REAL application icon again for an action AIMED at an app (`tell application "X" …`),
+//    3. `label` / `icon` written in config.jsonc for any ordinary binding
+//    4. the REAL application icon again for an action AIMED at an app (`tell application "X" …`),
 //       this time beside the label — it drives that app, it does not open it
-//    4. an SF Symbol picked from the action kind
+//    5. an SF Symbol picked from the action kind
 //
 
 import AppKit
@@ -53,10 +54,9 @@ enum ActionVisual {
         let controlState = controlStateOverride ?? SystemControlState.snapshot(for: action)
 
         // Volume +/- and brightness +/- are changes to one system state, not four unrelated
-        // commands. Canonicalise the old speaker/sun config symbols onto Apple's variable-value
-        // families while still respecting a genuinely custom icon chosen by the user.
-        if let controlState,
-           permitsStateSymbol(presentation?.icon, for: controlState.kind) {
+        // commands. Their icon is therefore always the measured variable-value family: JSON may
+        // name the action, but a static custom glyph must never contradict the real system state.
+        if let controlState {
             let symbolName = stateSymbolName(for: controlState)
             if let image = symbol(symbolName, size: inlineSize,
                                   variableValue: controlState.isMuted ? nil : controlState.value) {
@@ -68,15 +68,8 @@ enum ActionVisual {
             }
         }
 
-        // A custom SF Symbol always wins, and always keeps its label — it was chosen deliberately.
-        if let iconName = presentation?.icon, !iconName.isEmpty,
-           let sym = symbol(iconName, size: inlineSize) {
-            return Visual(label: named ?? fallbackLabel(action), image: sym,
-                          symbolName: iconName, iconOnly: false,
-                          tint: style.tint, symbolCue: style.cue,
-                          controlState: controlState)
-        }
-
+        // Launching an App is the other deliberate exception to JSON icon selection. The installed
+        // bundle is the source of truth, so every surface automatically follows an App icon update.
         if let app = launchedAppName(action), let icon = appIcon(named: app) {
             if let named = named {
                 icon.size = NSSize(width: inlineSize, height: inlineSize)
@@ -86,6 +79,15 @@ enum ActionVisual {
             }
             icon.size = NSSize(width: soloSize, height: soloSize)
             return Visual(label: app, image: icon, symbolName: nil, iconOnly: true,
+                          tint: style.tint, symbolCue: style.cue,
+                          controlState: controlState)
+        }
+
+        // A custom SF Symbol always wins, and always keeps its label — it was chosen deliberately.
+        if let iconName = presentation?.icon, !iconName.isEmpty,
+           let sym = symbol(iconName, size: inlineSize) {
+            return Visual(label: named ?? fallbackLabel(action), image: sym,
+                          symbolName: iconName, iconOnly: false,
                           tint: style.tint, symbolCue: style.cue,
                           controlState: controlState)
         }
@@ -216,6 +218,22 @@ enum ActionVisual {
 
     // MARK: - SF Symbols
 
+    /// One validation grammar for every JSON-driven symbol surface. SF Symbol availability varies
+    /// by macOS release; walking the complete authored chain before the built-in fallback prevents
+    /// an unsupported Layer override from accidentally skipping `layer.default`.
+    static func firstValidSystemSymbol(_ candidates: [String?],
+                                       fallback: String) -> String {
+        for candidate in candidates.compactMap({ $0 }) where !candidate.isEmpty {
+            if NSImage(systemSymbolName: candidate, accessibilityDescription: nil) != nil {
+                return candidate
+            }
+        }
+        if NSImage(systemSymbolName: fallback, accessibilityDescription: nil) != nil {
+            return fallback
+        }
+        return "command"
+    }
+
     private static func symbol(_ name: String, size: CGFloat,
                                variableValue: Double? = nil) -> NSImage? {
         let cfg = NSImage.SymbolConfiguration(pointSize: size * 0.82, weight: .medium)
@@ -228,16 +246,6 @@ enum ActionVisual {
             image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
         }
         return image?.withSymbolConfiguration(cfg)
-    }
-
-    private static func permitsStateSymbol(_ configuredName: String?,
-                                           for kind: ControlVisualKind) -> Bool {
-        guard let configuredName, !configuredName.isEmpty else { return true }
-        let lower = configuredName.lowercased()
-        switch kind {
-        case .volume: return lower.hasPrefix("speaker")
-        case .brightness: return lower.hasPrefix("sun.")
-        }
     }
 
     private static func stateSymbolName(for state: ControlVisualState) -> String {

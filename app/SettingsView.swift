@@ -7,23 +7,42 @@
 
 import SwiftUI
 
+private struct DictionaryEditorRequest: Identifiable {
+    let id = UUID()
+    let index: Int?
+    let term: String
+    let aliases: [String]
+}
+
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     /// Owned by the model (see `SettingsModel.device`) so the window controller drives its polling.
     @ObservedObject var device: DeviceInfo
+    @ObservedObject var voiceCredentials: VoiceCredentialModel
+    @ObservedObject var voiceRuntime: VoiceRuntimeModel
 
     init(model: SettingsModel) {
         self.model = model
         self.device = model.device
+        self.voiceCredentials = model.voiceCredentials
+        self.voiceRuntime = model.voiceRuntime
     }
 
     @State private var saveErrorDetail: String?
+    @State private var openAIKeyDraft = ""
+    @State private var deepSeekKeyDraft = ""
+    @State private var credentialError: String?
+    @State private var dictionaryEditor: DictionaryEditorRequest?
 
     /// Drives live relocalization: changing the language republishes, re-running this view's body
     /// (so every `L(...)` in the Tuning tab re-evaluates) and re-`.id()`-ing the Layout subview.
     @ObservedObject private var loc = Loc.shared
 
-    private enum Tab: String, CaseIterable { case tuning = "Tuning", layout = "Layout" }
+    private enum Tab: String, CaseIterable {
+        case tuning = "Tuning"
+        case voice = "Voice"
+        case layout = "Layout"
+    }
     @State private var tab: Tab = .tuning
 
     private enum CurveTarget: Equatable { case pointer, circular }
@@ -39,6 +58,8 @@ struct SettingsView: View {
             switch tab {
             case .tuning:
                 tuningWorkspace
+            case .voice:
+                voiceWorkspace
             case .layout:
                 if let config = model.config {
                     LayoutView(config: config, onSave: { newConfig in
@@ -89,6 +110,27 @@ struct SettingsView: View {
         } message: {
             Text(saveErrorDetail ?? "")
         }
+        .alert(L("Credential error"), isPresented: Binding(
+            get: { credentialError != nil },
+            set: { if !$0 { credentialError = nil } }
+        )) {
+            Button("OK", role: .cancel) { credentialError = nil }
+        } message: {
+            Text(credentialError ?? "")
+        }
+        .sheet(item: $dictionaryEditor) { request in
+            DictionaryTermEditor(
+                request: request,
+                existingTerms: model.tune.dictation.dictionary.enumerated().compactMap {
+                    $0.offset == request.index ? nil : $0.element.term
+                },
+                onSave: { term, aliases in
+                    saveDictionaryTerm(request.index, term: term, aliases: aliases)
+                    dictionaryEditor = nil
+                },
+                onCancel: { dictionaryEditor = nil }
+            )
+        }
     }
 
     // MARK: - Desktop workspace
@@ -106,11 +148,463 @@ struct SettingsView: View {
             buttonsSection
             widgetSection
             startupSection
+            updatesSection
             languageSection
             deviceSection
             footerSection
         }
         .formStyle(.grouped)
+    }
+
+    // MARK: - Native Voice Input
+
+    private var voiceWorkspace: some View {
+        Form {
+            Section {
+                HStack(spacing: 16) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(LinearGradient(colors: [.red.opacity(0.92), .pink.opacity(0.72)],
+                                                 startPoint: .topLeading,
+                                                 endPoint: .bottomTrailing))
+                        Image(systemName: "waveform.and.mic")
+                            .font(.system(size: 21, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .frame(width: 52, height: 52)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L("Native Voice Input"))
+                            .font(.system(size: 17, weight: .semibold))
+                        Text(L("Hold the side button to dictate directly into the app you were using."))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $model.tune.dictation.enabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.large)
+                }
+                .padding(.vertical, 5)
+            } footer: {
+                Text(L("Capture and the cloud connection are pre-warmed on the raw press edge. A quick tap cancels silently; Voice appears only after the existing 0.2-second hold threshold."))
+            }
+
+            Section {
+                Picker(L("Voice mode"), selection: voiceModeBinding) {
+                    Text(L("External")).tag(Config.DictationMode.external)
+                    Text(L("Final · polished")).tag(Config.DictationMode.final)
+                    Text(L("Live · fastest")).tag(Config.DictationMode.streaming)
+                }
+                .pickerStyle(.segmented)
+
+                HStack(alignment: .top, spacing: 14) {
+                    voiceModeCard(
+                        selected: model.tune.dictation.activeMode == .external,
+                        icon: "keyboard.badge.ellipsis", tint: .blue,
+                        title: L("External Voice"),
+                        detail: L("Uses your configured side-button action and does not open HyperVibe's Voice capsule."))
+                    voiceModeCard(
+                        selected: model.tune.dictation.activeMode == .final,
+                        icon: "text.badge.checkmark", tint: .purple,
+                        title: L("Final output"),
+                        detail: L("Transcribes the complete turn, applies your dictionary, optionally polishes it, then inserts once."))
+                    voiceModeCard(
+                        selected: model.tune.dictation.activeMode == .streaming,
+                        icon: "bolt.horizontal.circle.fill", tint: .orange,
+                        title: L("Streaming output"),
+                        detail: L("Sends true transcript deltas to the caret immediately. No cleanup-model round trip is added."))
+                }
+
+                if voiceUsesFinalMode {
+                    Picker(L("Transcript cleanup"),
+                           selection: $model.tune.dictation.cleanupProvider) {
+                        Text(L("None · dictionary only"))
+                            .tag(Config.DictationCleanupProvider.none)
+                        Text("OpenAI").tag(Config.DictationCleanupProvider.openAI)
+                        Text("DeepSeek").tag(Config.DictationCleanupProvider.deepSeek)
+                    }
+                    .pickerStyle(.menu)
+                }
+            } header: {
+                Text(L("Global Voice Mode"))
+            } footer: {
+                Text(L("The selected Voice mode is identical on every Layer. Hold Mute and tap the side button to cycle External, Final, and Live without changing Layer."))
+            }
+            .disabled(!model.tune.dictation.enabled)
+
+            Section {
+                credentialCard(
+                    title: "OpenAI", subtitle: L("Required for transcription"),
+                    icon: "waveform.badge.mic", tint: .green,
+                    kind: .openAI, draft: $openAIKeyDraft,
+                    hasKey: voiceCredentials.hasOpenAIKey,
+                    state: voiceCredentials.openAIConnection
+                )
+                Divider()
+                credentialCard(
+                    title: "DeepSeek", subtitle: L("Only needed when DeepSeek cleanup is selected"),
+                    icon: "wand.and.stars", tint: .blue,
+                    kind: .deepSeek, draft: $deepSeekKeyDraft,
+                    hasKey: voiceCredentials.hasDeepSeekKey,
+                    state: voiceCredentials.deepSeekConnection
+                )
+            } header: {
+                Text(L("API Credentials"))
+            } footer: {
+                if VoiceCredentialStore.backend == .keychain {
+                    Text(L("Keys are stored in the macOS Keychain with this-device-only protection. On first save, choose Always Allow once for HyperVibe's fixed credential helper; normal App updates will not ask again. Keys are never written to config.jsonc, logs, the app bundle, or Git."))
+                } else {
+                    Text(L("Keys are saved as plaintext in a current-user-only credentials.json file for this public beta. Only HyperVibe Settings provides a supported way to write it. Keys are never written to config.jsonc, logs, the app bundle, or Git."))
+                }
+            }
+
+            Section {
+                Toggle(isOn: $model.tune.dictation.autoInsert) {
+                    rowLabel(L("Insert at the captured caret"), "text.cursor")
+                }
+                Toggle(isOn: $model.tune.dictation.copyOnFailure) {
+                    rowLabel(L("Copy when insertion is unavailable"), "doc.on.doc")
+                }
+                Toggle(isOn: $model.tune.dictation.restoreClipboardAfterInsert) {
+                    rowLabel(L("Restore clipboard after compatibility paste"), "clipboard")
+                }
+                Toggle(isOn: $model.tune.dictation.copyLastOnSideButtonDouble) {
+                    rowLabel(L("Double-click side button to copy previous dictation"),
+                             "rectangle.on.rectangle.angled")
+                }
+            } header: {
+                Text(L("Delivery"))
+            } footer: {
+                Text(L("HyperVibe captures the frontmost app and focused editor before showing its HUD. If focus changes, it will not type into the new target. Secure fields are never modified."))
+            }
+
+            Section {
+                Toggle(isOn: $model.tune.dictation.pipelineOverlayEnabled) {
+                    rowLabel(L("Voice pipeline floating capsule"),
+                             "waveform.path.ecg.rectangle.fill")
+                }
+            } header: {
+                Text(L("Voice Presentation"))
+            } footer: {
+                Text(L("Final and Live show a temporary draggable capsule for audio and processing. External never opens the Voice capsule. Every native Voice turn begins at the lower centre of the display containing the pointer."))
+            }
+
+            Section {
+                Toggle(isOn: $model.tune.dictation.feedbackSoundsEnabled) {
+                    rowLabel(L("Voice start and stop sounds"), "speaker.wave.2.fill")
+                }
+                if model.tune.dictation.feedbackSoundsEnabled {
+                    slider(icon: "speaker.wave.2.fill", title: L("Feedback volume"),
+                           value: $model.tune.dictation.feedbackSoundVolume,
+                           range: 0...1, minIcon: "speaker.wave.1", maxIcon: "speaker.wave.3",
+                           display: { String(format: "%.0f%%", $0 * 100) })
+                }
+            } header: {
+                Text(L("Voice Feedback"))
+            } footer: {
+                Text(L("The paired cues play only when native Voice actually opens and after audio capture has closed. Mode switching itself is always silent, and External keeps its configured feedback behavior."))
+            }
+
+            Section {
+                if model.tune.dictation.dictionary.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: "text.book.closed")
+                            .foregroundStyle(.secondary)
+                        Text(L("No custom terms yet"))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                } else {
+                    ForEach(model.tune.dictation.dictionary.indices, id: \.self) { index in
+                        HStack(spacing: 13) {
+                            Image(systemName: "text.book.closed.fill")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.tint)
+                                .frame(width: 24, height: 24)
+                                .background(Circle().fill(Color.accentColor.opacity(0.10)))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(model.tune.dictation.dictionary[index].term)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .textSelection(.enabled)
+                                Text(dictionaryAliasSummary(index))
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 18)
+                            Button(L("Edit")) { editDictionaryTerm(index) }
+                                .buttonStyle(.borderless)
+                            Button(role: .destructive) {
+                                removeDictionaryTerm(index)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .help(L("Remove dictionary term"))
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                Button {
+                    dictionaryEditor = .init(index: nil, term: "", aliases: [])
+                } label: {
+                    Label(L("Add dictionary term"), systemImage: "plus")
+                }
+                .disabled(model.tune.dictation.dictionary.count >= 500)
+            } header: {
+                Text(L("Personal Dictionary"))
+            } footer: {
+                Text(L("Canonical spellings are sent as transcription hints. Aliases are also corrected locally in Final mode, longest match first."))
+            }
+
+            Section {
+                TextField(L("Language hints (comma separated)"), text: languageHintsBinding)
+                    .textFieldStyle(.roundedBorder)
+                slider(icon: "timer.circle", title: L("Minimum recording"),
+                       value: $model.tune.dictation.minimumRecordingSeconds,
+                       range: 0...5, minIcon: "xmark.circle", maxIcon: "5.circle",
+                       display: { $0 < 0.05 ? L("Off") : String(format: "%.1fs", $0) })
+                slider(icon: "timer", title: L("Maximum recording"),
+                       value: $model.tune.dictation.maxRecordingSeconds,
+                       range: 15...600, minIcon: "15.circle", maxIcon: "10.circle",
+                       display: { String(format: "%.0fs", $0) })
+
+                DisclosureGroup(L("Model settings")) {
+                    VStack(spacing: 10) {
+                        LabeledContent(L("Final transcription")) {
+                            TextField("gpt-transcribe",
+                                      text: $model.tune.dictation.finalModel)
+                                .textFieldStyle(.roundedBorder).frame(width: 280)
+                        }
+                        LabeledContent(L("Streaming transcription")) {
+                            TextField("gpt-live-transcribe",
+                                      text: $model.tune.dictation.streamingModel)
+                                .textFieldStyle(.roundedBorder).frame(width: 280)
+                        }
+                        LabeledContent(L("OpenAI cleanup")) {
+                            TextField("gpt-5.6-luna",
+                                      text: $model.tune.dictation.openAICleanupModel)
+                                .textFieldStyle(.roundedBorder).frame(width: 280)
+                        }
+                        LabeledContent(L("DeepSeek cleanup")) {
+                            TextField("deepseek-v4-flash",
+                                      text: $model.tune.dictation.deepSeekCleanupModel)
+                                .textFieldStyle(.roundedBorder).frame(width: 280)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+            } header: {
+                Text(L("Advanced"))
+            } footer: {
+                Text(L("Turns shorter than the minimum stay on this Mac, produce no transcript, and close immediately. Live output begins only after the gate is reached."))
+            }
+
+            Section {
+                HStack(spacing: 9) {
+                    Circle()
+                        .fill(voicePhaseColor)
+                        .frame(width: 8, height: 8)
+                    Text(voiceRuntime.lastMessage.isEmpty
+                         ? L("Ready") : voiceRuntime.lastMessage)
+                        .font(.system(size: 12, weight: .medium))
+                    Spacer()
+                    Text(voiceRuntime.phase.rawValue.uppercased())
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+                latencyGrid(voiceRuntime.lastMetrics)
+            } header: {
+                Text(L("Last-run Latency"))
+            } footer: {
+                Text(L("Measurements are kept in memory only and reset when HyperVibe quits. Transcript text is never shown in diagnostics."))
+            }
+        }
+        .formStyle(.grouped)
+        .animation(.easeInOut(duration: 0.18), value: model.tune.dictation.activeMode)
+    }
+
+    private var voiceUsesFinalMode: Bool {
+        model.tune.dictation.activeMode == .final
+    }
+
+    private var voiceModeBinding: Binding<Config.DictationMode> {
+        Binding(
+            get: { model.tune.dictation.activeMode },
+            set: { value in
+                var tune = model.tune
+                tune.dictation.selectMode(value)
+                model.tune = tune
+            }
+        )
+    }
+
+    private func voiceModeCard(selected: Bool, icon: String, tint: Color,
+                               title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 12, weight: .semibold))
+                Text(detail).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(11)
+        .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
+            .fill(selected ? tint.opacity(0.10) : Color.secondary.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
+            .strokeBorder(selected ? tint.opacity(0.30) : Color.clear, lineWidth: 1))
+    }
+
+    private func credentialCard(title: String, subtitle: String, icon: String, tint: Color,
+                                kind: VoiceCredentialKind, draft: Binding<String>,
+                                hasKey: Bool, state: VoiceCredentialConnectionState) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 10) {
+                Image(systemName: icon).foregroundStyle(tint).frame(width: 22)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.system(size: 13, weight: .semibold))
+                    Text(subtitle).font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                credentialStateLabel(hasKey: hasKey, state: state)
+            }
+            HStack(spacing: 8) {
+                SecureField(hasKey ? L("Enter a replacement key") : L("Paste API key"),
+                            text: draft)
+                    .textFieldStyle(.roundedBorder)
+                Button(L("Save")) {
+                    voiceCredentials.save(draft.wrappedValue, kind: kind) { error in
+                        if let error { credentialError = error }
+                        else { draft.wrappedValue = "" }
+                    }
+                }
+                .disabled(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || state == .loading || state == .saving || state == .testing)
+                Button(L("Test")) { voiceCredentials.test(kind) }
+                    .disabled(!hasKey || state == .loading || state == .saving || state == .testing)
+                if hasKey {
+                    Button(role: .destructive) {
+                        voiceCredentials.remove(kind) { error in
+                            if let error { credentialError = error }
+                        }
+                    } label: { Image(systemName: "trash") }
+                    .disabled(state == .loading || state == .saving || state == .testing)
+                }
+            }
+        }
+        .padding(.vertical, 5)
+    }
+
+    private func credentialStateLabel(hasKey: Bool,
+                                      state: VoiceCredentialConnectionState) -> some View {
+        let value: (String, String, Color)
+        switch state {
+        case .loading:
+            value = ("arrow.triangle.2.circlepath", L("Loading…"), .secondary)
+        case .saving:
+            value = ("key.fill", L("Saving…"), .orange)
+        case .idle:
+            value = hasKey ? ("checkmark.seal.fill", L("Saved"), .green)
+                           : ("key.slash", L("Not saved"), .secondary)
+        case .testing:
+            value = ("arrow.triangle.2.circlepath", L("Testing…"), .orange)
+        case .valid:
+            value = ("checkmark.circle.fill", L("Connected"), .green)
+        case .invalid:
+            value = ("exclamationmark.triangle.fill", L("Test failed"), .red)
+        }
+        return Label(value.1, systemImage: value.0)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(value.2)
+    }
+
+    private var voicePhaseColor: Color {
+        switch voiceRuntime.phase {
+        case .idle, .inserted: return .green
+        case .priming, .transcribing, .polishing, .inserting: return .orange
+        case .listening: return .red
+        case .copied: return .blue
+        case .error: return .red
+        }
+    }
+
+    private func latencyGrid(_ metrics: VoiceLatencyMetrics) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 6) {
+            GridRow {
+                latencyCell(L("First audio"), metrics.pressToFirstAudioMilliseconds)
+                latencyCell(L("Session ready"), metrics.pressToSessionReadyMilliseconds)
+                latencyCell(L("First live text"), metrics.pressToFirstDeltaMilliseconds)
+            }
+            GridRow {
+                latencyCell(L("Release → transcript"), metrics.releaseToTranscriptMilliseconds)
+                latencyCell(L("Cleanup"), metrics.cleanupMilliseconds)
+                latencyCell(L("Insertion"), metrics.insertionMilliseconds)
+            }
+        }
+        .padding(.vertical, 5)
+    }
+
+    private func latencyCell(_ title: String, _ milliseconds: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 9)).foregroundStyle(.secondary)
+            Text(milliseconds.map { String(format: "%.0f ms", $0) } ?? "—")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var languageHintsBinding: Binding<String> {
+        Binding(
+            get: { model.tune.dictation.languageHints.joined(separator: ", ") },
+            set: { value in
+                var tune = model.tune
+                var seen = Set<String>()
+                tune.dictation.languageHints = value.split(separator: ",").map {
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                }.filter { !$0.isEmpty && seen.insert($0).inserted }
+                model.tune = tune
+            }
+        )
+    }
+
+    private func dictionaryAliasSummary(_ index: Int) -> String {
+        guard model.tune.dictation.dictionary.indices.contains(index) else { return "" }
+        let aliases = model.tune.dictation.dictionary[index].aliases
+        return aliases.isEmpty ? L("No spoken aliases") : aliases.joined(separator: "  ·  ")
+    }
+
+    private func editDictionaryTerm(_ index: Int) {
+        guard model.tune.dictation.dictionary.indices.contains(index) else { return }
+        let entry = model.tune.dictation.dictionary[index]
+        dictionaryEditor = .init(index: index, term: entry.term, aliases: entry.aliases)
+    }
+
+    private func saveDictionaryTerm(_ index: Int?, term: String, aliases: [String]) {
+        var tune = model.tune
+        let entry = Config.DictationTerm(term: term, aliases: aliases)
+        if let index {
+            guard tune.dictation.dictionary.indices.contains(index) else { return }
+            tune.dictation.dictionary[index] = entry
+        } else {
+            guard tune.dictation.dictionary.count < 500 else { return }
+            tune.dictation.dictionary.append(entry)
+        }
+        model.tune = tune
+    }
+
+    private func removeDictionaryTerm(_ index: Int) {
+        guard model.tune.dictation.dictionary.indices.contains(index) else { return }
+        var tune = model.tune
+        tune.dictation.dictionary.remove(at: index)
+        model.tune = tune
     }
 
     private var curveRelationshipSection: some View {
@@ -360,7 +854,7 @@ struct SettingsView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .frame(width: 220)
+        .frame(width: 330)
     }
 
     // MARK: - Header
@@ -698,6 +1192,9 @@ struct SettingsView: View {
             Toggle(isOn: $model.tune.statusWidgetEnabled) {
                 rowLabel(L("Always-on status widget"), "rectangle.on.rectangle")
             }
+            Toggle(isOn: $model.tune.demoRemoteEnabled) {
+                rowLabel(L("Floating demo remote"), "appletvremote.gen4.fill")
+            }
             Toggle(isOn: $model.tune.layerHUDEnabled) {
                 rowLabel(L("Layer and connection HUD"), "square.stack.3d.up")
             }
@@ -711,6 +1208,41 @@ struct SettingsView: View {
             Text(L("On-screen Status"))
         } footer: {
             Text(L("Every persistent or transient status surface can be enabled independently here or in config.jsonc."))
+        }
+    }
+
+    private var updatesSection: some View {
+        Section {
+            Toggle(isOn: $model.tune.automaticUpdateChecksEnabled) {
+                rowLabel(L("Automatically check for updates"), "arrow.triangle.2.circlepath")
+            }
+            Toggle(isOn: $model.tune.automaticallyDownloadUpdatesEnabled) {
+                rowLabel(L("Automatically download updates"), "arrow.down.circle")
+            }
+            .disabled(!model.tune.automaticUpdateChecksEnabled)
+            Button {
+                model.onCheckForUpdates?()
+            } label: {
+                HStack {
+                    rowLabel(
+                        model.availableUpdateVersion.map { L("Update %@ Available…", $0) }
+                            ?? L("Check for Updates…"),
+                        model.availableUpdateVersion == nil ? "sparkles" : "arrow.down.circle.fill"
+                    )
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .tint(model.availableUpdateVersion == nil ? .accentColor : .green)
+        } header: {
+            Text(L("Software Updates"))
+        } footer: {
+            Text(L("Verified Full Setup updates download in the background. macOS asks for administrator approval only when an update installs system components."))
+                .font(.system(size: 11))
         }
     }
 
@@ -776,5 +1308,117 @@ struct SettingsView: View {
             }
         }
         .padding(.vertical, 3)
+    }
+}
+
+/// A draft-first editor keeps partially typed text out of the live JSON. The previous inline fields
+/// saved on every keystroke, so an empty intermediate value or a duplicated placeholder could make
+/// an otherwise healthy config temporarily invalid. Save now performs one normalized transaction.
+private struct DictionaryTermEditor: View {
+    let request: DictionaryEditorRequest
+    let existingTerms: [String]
+    let onSave: (String, [String]) -> Void
+    let onCancel: () -> Void
+
+    @State private var term: String
+    @State private var aliasesText: String
+    @FocusState private var termFocused: Bool
+
+    init(request: DictionaryEditorRequest, existingTerms: [String],
+         onSave: @escaping (String, [String]) -> Void, onCancel: @escaping () -> Void) {
+        self.request = request
+        self.existingTerms = existingTerms
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _term = State(initialValue: request.term)
+        _aliasesText = State(initialValue: request.aliases.joined(separator: ", "))
+    }
+
+    private var canonicalTerm: String {
+        term.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isDuplicate: Bool {
+        existingTerms.contains { $0.caseInsensitiveCompare(canonicalTerm) == .orderedSame }
+    }
+
+    private var aliases: [String] {
+        var seen = Set<String>()
+        return aliasesText.split(whereSeparator: { character in
+            character == "," || character == "，" || character == ";"
+                || character == "；" || character.isNewline
+        }).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter {
+            !$0.isEmpty
+                && $0.caseInsensitiveCompare(canonicalTerm) != .orderedSame
+                && seen.insert($0.lowercased()).inserted
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "text.book.closed.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill(Color.accentColor.opacity(0.11)))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L(request.index == nil ? "Add dictionary term" : "Edit dictionary term"))
+                        .font(.system(size: 16, weight: .semibold))
+                    Text(L("Teach Voice the exact spelling of names and specialist terms."))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(22)
+
+            Divider()
+
+            Form {
+                LabeledContent(L("Canonical spelling")) {
+                    TextField("SIGMOD", text: $term)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 340)
+                        .focused($termFocused)
+                }
+                LabeledContent(L("Spoken aliases")) {
+                    TextField(L("Optional; separate with commas or new lines"), text: $aliasesText,
+                              axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(2...4)
+                        .frame(width: 340)
+                }
+                if isDuplicate {
+                    Label(L("That canonical spelling is already in your dictionary."),
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                }
+            }
+            .formStyle(.grouped)
+
+            Divider()
+
+            HStack {
+                Text(L("Saved automatically to config.jsonc"))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(L("Cancel"), action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button(L(request.index == nil ? "Add" : "Save")) {
+                    onSave(canonicalTerm, aliases)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(canonicalTerm.isEmpty || canonicalTerm.contains("\n")
+                          || canonicalTerm.contains("\r") || isDuplicate)
+            }
+            .padding(18)
+        }
+        .frame(width: 620, height: 410)
+        .onAppear { termFocused = true }
     }
 }

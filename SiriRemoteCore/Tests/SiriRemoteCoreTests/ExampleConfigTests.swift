@@ -49,6 +49,25 @@ final class ExampleConfigTests: XCTestCase {
         }
     }
 
+    func testAuthorBrowserBackMenuStartsWithDeleteThenBack() throws {
+        let config = try ConfigLoader.load(try String(contentsOf: authorURL, encoding: .utf8))
+        XCTAssertEqual(config.appProfiles["com.google.Chrome"], "browser")
+        XCTAssertEqual(config.appProfiles["com.apple.Safari"], "browser")
+
+        let engine = MappingEngine(config: config)
+        for bundleID in ["com.google.Chrome", "com.apple.Safari"] {
+            engine.applyApp(bundleID: bundleID)
+            XCTAssertEqual(engine.activeMode, "browser")
+            XCTAssertEqual(engine.resolve("button.menu"), .keystroke(keys: "delete"))
+            XCTAssertEqual(engine.resolve("button.menu.taphold"), .keystroke(keys: "cmd+["))
+            XCTAssertEqual(engine.resolveHoldDelay("button.menu.taphold"), 0.5)
+            XCTAssertEqual(engine.resolve("button.menu.taphold2"), .closeWindow)
+            XCTAssertEqual(engine.resolveHoldDelay("button.menu.taphold2"), 1.0)
+            XCTAssertNotNil(engine.resolve("button.menu.taphold3"))
+            XCTAssertEqual(engine.resolveHoldDelay("button.menu.taphold3"), 1.7)
+        }
+    }
+
     func testEveryReferencedModeExists() throws {
         let config = try ConfigLoader.load(try String(contentsOf: exampleURL, encoding: .utf8))
         for (app, mode) in config.appProfiles {

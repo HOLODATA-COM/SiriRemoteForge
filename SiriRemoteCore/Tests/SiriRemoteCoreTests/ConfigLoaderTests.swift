@@ -115,8 +115,11 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(defaults.settings.cursorDeadzone, 0.006)
         XCTAssertNil(defaults.settings.interfaceLanguage)
         XCTAssertNil(defaults.settings.launchAtLoginEnabled)
+        XCTAssertTrue(defaults.settings.automaticUpdateChecksEnabled)
+        XCTAssertTrue(defaults.settings.automaticallyDownloadUpdatesEnabled)
         XCTAssertTrue(defaults.settings.menuBarIconEnabled)
         XCTAssertTrue(defaults.settings.statusWidgetEnabled)
+        XCTAssertFalse(defaults.settings.demoRemoteEnabled)
         XCTAssertTrue(defaults.settings.layerHUDEnabled)
         XCTAssertTrue(defaults.settings.holdHUDEnabled)
         XCTAssertTrue(defaults.settings.dragIndicatorEnabled)
@@ -125,7 +128,10 @@ final class ConfigLoaderTests: XCTestCase {
         let overridden = try ConfigLoader.load("""
         { "settings": { "defaultMode": "g", "cursorSpeed": 0.35, "cursorDeadzone": 0.01,
                          "interfaceLanguage": "zh", "launchAtLoginEnabled": true,
+                         "automaticUpdateChecksEnabled": false,
+                         "automaticallyDownloadUpdatesEnabled": false,
                          "menuBarIconEnabled": false, "statusWidgetEnabled": false,
+                         "demoRemoteEnabled": true,
                          "layerHUDEnabled": false, "holdHUDEnabled": false,
                          "dragIndicatorEnabled": false,
                          "showSetupWizardOnFirstLaunch": false },
@@ -135,8 +141,11 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(overridden.settings.cursorDeadzone, 0.01)
         XCTAssertEqual(overridden.settings.interfaceLanguage, "zh")
         XCTAssertEqual(overridden.settings.launchAtLoginEnabled, true)
+        XCTAssertFalse(overridden.settings.automaticUpdateChecksEnabled)
+        XCTAssertFalse(overridden.settings.automaticallyDownloadUpdatesEnabled)
         XCTAssertFalse(overridden.settings.menuBarIconEnabled)
         XCTAssertFalse(overridden.settings.statusWidgetEnabled)
+        XCTAssertTrue(overridden.settings.demoRemoteEnabled)
         XCTAssertFalse(overridden.settings.layerHUDEnabled)
         XCTAssertFalse(overridden.settings.holdHUDEnabled)
         XCTAssertFalse(overridden.settings.dragIndicatorEnabled)
@@ -153,6 +162,138 @@ final class ConfigLoaderTests: XCTestCase {
         }
     }
 
+    func testDictationDefaultsAndOverrides() throws {
+        let defaults = try ConfigLoader.load(
+            "{ \"settings\": { \"defaultMode\": \"g\" }, \"modes\": { \"g\": {} } }")
+        XCTAssertFalse(defaults.settings.dictation.enabled)
+        XCTAssertEqual(defaults.settings.dictation.activeMode, .final)
+        XCTAssertEqual(defaults.settings.dictation.outputMode, .final)
+        XCTAssertEqual(defaults.settings.dictation.finalModel, "gpt-transcribe")
+        XCTAssertEqual(defaults.settings.dictation.streamingModel, "gpt-live-transcribe")
+        XCTAssertEqual(defaults.settings.dictation.languageHints, ["zh", "en"])
+        XCTAssertEqual(defaults.settings.dictation.cleanupProvider, .deepSeek)
+        XCTAssertTrue(defaults.settings.dictation.copyLastOnSideButtonDouble)
+        XCTAssertTrue(defaults.settings.dictation.feedbackSoundsEnabled)
+        XCTAssertEqual(defaults.settings.dictation.feedbackSoundVolume, 0.55)
+        XCTAssertTrue(defaults.settings.dictation.pipelineOverlayEnabled)
+        XCTAssertEqual(defaults.settings.dictation.minimumRecordingSeconds, 1)
+        XCTAssertTrue(defaults.settings.dictation.layerModes.isEmpty)
+        XCTAssertNil(defaults.settings.dictation.resolvedOutputMode(for: "BASE"))
+
+        let configured = try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "dictation": {
+            "enabled": true, "activeMode": "final", "outputMode": "streaming",
+            "layerModes": { "BASE": "existing", "L1": "final", "L2": "streaming" },
+            "finalModel": "final-x", "streamingModel": "live-x",
+            "languageHints": ["en", "zh"], "cleanupProvider": "deepseek",
+            "openAICleanupModel": "clean-a", "deepSeekCleanupModel": "clean-d",
+            "autoInsert": false, "copyOnFailure": false,
+            "restoreClipboardAfterInsert": false,
+            "copyLastOnSideButtonDouble": false,
+            "feedbackSoundsEnabled": false, "feedbackSoundVolume": 0.32,
+            "pipelineOverlayEnabled": false,
+            "minimumRecordingSeconds": 1.5,
+            "maxRecordingSeconds": 45,
+            "dictionary": [{ "term": "HyperVibe", "aliases": ["hyper vibe"] }]
+          } }, "modes": { "g": {} } }
+        """)
+        let voice = configured.settings.dictation
+        XCTAssertTrue(voice.enabled)
+        XCTAssertEqual(voice.activeMode, .final)
+        XCTAssertEqual(voice.outputMode, .streaming)
+        XCTAssertEqual(voice.streamingModel, "live-x")
+        XCTAssertEqual(voice.cleanupProvider, .deepSeek)
+        XCTAssertFalse(voice.autoInsert)
+        XCTAssertFalse(voice.copyOnFailure)
+        XCTAssertFalse(voice.restoreClipboardAfterInsert)
+        XCTAssertFalse(voice.copyLastOnSideButtonDouble)
+        XCTAssertFalse(voice.feedbackSoundsEnabled)
+        XCTAssertEqual(voice.feedbackSoundVolume, 0.32)
+        XCTAssertFalse(voice.pipelineOverlayEnabled)
+        XCTAssertEqual(voice.minimumRecordingSeconds, 1.5)
+        XCTAssertEqual(voice.maxRecordingSeconds, 45)
+        XCTAssertEqual(voice.dictionary, [.init(term: "HyperVibe", aliases: ["hyper vibe"])])
+        // activeMode is global and authoritative; retained legacy per-Layer values cannot alter it.
+        XCTAssertEqual(voice.resolvedOutputMode(for: nil), .final)
+        XCTAssertEqual(voice.resolvedOutputMode(for: "L1"), .final)
+        XCTAssertEqual(voice.resolvedOutputMode(for: "L2"), .final)
+        XCTAssertEqual(voice.resolvedOutputMode(for: "UNSPECIFIED"), .final)
+        XCTAssertEqual(voice.outputModesToPrewarm(layerIDs: ["BASE", "L1", "L2"]),
+                       Set([.final, .streaming]))
+        XCTAssertEqual(voice.resolvedSettings(for: "L1")?.outputMode, .final)
+
+        var switched = voice
+        switched.selectMode(.external)
+        XCTAssertEqual(switched.activeMode, .external)
+        XCTAssertTrue(switched.layerModes.isEmpty)
+        XCTAssertNil(switched.resolvedOutputMode(for: "L2"))
+    }
+
+    func testPartialDictationBlockMigratesWithCurrentDefaults() throws {
+        let configured = try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "dictation": {
+            "enabled": true, "outputMode": "streaming",
+            "dictionary": [{ "term": "HyperVibe" }]
+          } }, "modes": { "g": {} } }
+        """)
+        let voice = configured.settings.dictation
+        XCTAssertTrue(voice.enabled)
+        XCTAssertEqual(voice.activeMode, .streaming) // migrated from the former outputMode field
+        XCTAssertEqual(voice.outputMode, .streaming)
+        XCTAssertEqual(voice.finalModel, "gpt-transcribe")
+        XCTAssertEqual(voice.streamingModel, "gpt-live-transcribe")
+        XCTAssertEqual(voice.cleanupProvider, .deepSeek)
+        XCTAssertEqual(voice.dictionary, [.init(term: "HyperVibe")])
+        XCTAssertTrue(voice.layerModes.isEmpty)
+        XCTAssertTrue(voice.feedbackSoundsEnabled)
+        XCTAssertEqual(voice.feedbackSoundVolume, 0.55)
+        XCTAssertTrue(voice.pipelineOverlayEnabled)
+        XCTAssertEqual(voice.minimumRecordingSeconds, 1)
+        XCTAssertEqual(voice.resolvedOutputMode(for: "BASE"), .streaming)
+    }
+
+    func testDictationValidationRejectsUnsafeOrAmbiguousValues() {
+        func document(_ dictation: String) -> String {
+            """
+            { "settings": { "defaultMode": "g", "dictation": \(dictation) },
+              "modes": { "g": {} } }
+            """
+        }
+        func expectValidation(_ dictation: String, _ message: String) {
+            XCTAssertThrowsError(try ConfigLoader.load(document(dictation))) { error in
+                XCTAssertEqual(error as? ConfigError, .validation(message))
+            }
+        }
+        expectValidation(
+            #"{"enabled":true,"finalModel":"","streamingModel":"live"}"#,
+            "settings.dictation.finalModel must not be empty"
+        )
+        expectValidation(
+            #"{"maxRecordingSeconds":601}"#,
+            "settings.dictation.maxRecordingSeconds must be between 1 and 600"
+        )
+        expectValidation(
+            #"{"minimumRecordingSeconds":31}"#,
+            "settings.dictation.minimumRecordingSeconds must be between 0 and 30"
+        )
+        expectValidation(
+            #"{"minimumRecordingSeconds":2,"maxRecordingSeconds":1}"#,
+            "settings.dictation.minimumRecordingSeconds must not exceed maxRecordingSeconds"
+        )
+        expectValidation(
+            #"{"feedbackSoundVolume":1.1}"#,
+            "settings.dictation.feedbackSoundVolume must be between 0 and 1"
+        )
+        expectValidation(
+            #"{"dictionary":[{"term":" HyperVibe"}]}"#,
+            "settings.dictation.dictionary contains an empty or padded term"
+        )
+        expectValidation(
+            #"{"dictionary":[{"term":"HyperVibe"},{"term":"hypervibe"}]}"#,
+            "settings.dictation.dictionary contains duplicate term 'hypervibe'"
+        )
+    }
+
     func testOrderedLayersDefaultAndOverrides() throws {
         let defaults = try ConfigLoader.load(
             "{ \"settings\": { \"defaultMode\": \"g\" }, \"modes\": { \"g\": {} } }")
@@ -162,18 +303,44 @@ final class ConfigLoaderTests: XCTestCase {
         { "settings": {
             "defaultMode": "g",
             "layers": [
-              { "id": "BASE", "name": "Daily", "color": "green" },
-              { "id": "L1", "name": "Work", "color": "#FF9500CC" },
+              { "id": "BASE", "name": "Daily", "color": "green", "icon": "house.fill" },
+              { "id": "L1", "name": "Work", "color": "#FF9500CC", "icon": "hammer.fill" },
               { "id": "L2", "color": "purple" }
-            ]
+            ],
+            "icons": {
+              "remote.connected": "appletvremote.gen4.fill",
+              "voice.copied": "doc.on.doc.fill"
+            }
           },
           "modes": { "g": {}, "L1": {}, "L2": {} } }
         """)
         XCTAssertEqual(configured.settings.layers, [
-            Config.LayerDefinition(id: "BASE", name: "Daily", color: "green"),
-            Config.LayerDefinition(id: "L1", name: "Work", color: "#FF9500CC"),
+            Config.LayerDefinition(id: "BASE", name: "Daily", color: "green", icon: "house.fill"),
+            Config.LayerDefinition(id: "L1", name: "Work", color: "#FF9500CC", icon: "hammer.fill"),
             Config.LayerDefinition(id: "L2", name: nil, color: "purple")
         ])
+        XCTAssertEqual(configured.settings.icons, [
+            "remote.connected": "appletvremote.gen4.fill",
+            "voice.copied": "doc.on.doc.fill",
+        ])
+    }
+
+    func testInterfaceIconNamesRejectEmptyOrPaddedValues() {
+        XCTAssertThrowsError(try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "icons": { "voice.copied": " doc.fill" } },
+          "modes": { "g": {} } }
+        """)) { error in
+            XCTAssertEqual(error as? ConfigError,
+                           .validation("settings.icons keys and values must be non-empty, unpadded names"))
+        }
+        XCTAssertThrowsError(try ConfigLoader.load("""
+        { "settings": { "defaultMode": "g", "layers": [
+            { "id": "BASE", "icon": "  " }
+          ] }, "modes": { "g": {} } }
+        """)) { error in
+            XCTAssertEqual(error as? ConfigError,
+                           .validation("settings.layers['BASE'].icon must be a non-empty SF Symbol name"))
+        }
     }
 
     func testLegacyLayerHUDMigratesInDeterministicOrder() throws {

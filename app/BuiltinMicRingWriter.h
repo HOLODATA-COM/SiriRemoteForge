@@ -52,4 +52,15 @@ int srm_remote_meter_snapshot(SRMMeterFeatures *features,
                               uint64_t *write_index,
                               uint32_t *producer_active);
 
+// Non-real-time readers used by App-owned dictation. `*_audio_state` captures a monotonic cursor;
+// `*_audio_read` copies only frames published after that cursor and advances it. A reader that
+// falls more than one ring behind is safely fast-forwarded to the oldest frame still available.
+// These functions never mutate either producer and must not be called from an audio callback.
+int srm_builtin_audio_state(uint64_t *write_index, uint32_t *producer_active);
+int srm_remote_audio_state(uint64_t *write_index, uint32_t *producer_active);
+size_t srm_builtin_audio_read(uint64_t *cursor, float *samples, size_t capacity,
+                              uint32_t *producer_active);
+size_t srm_remote_audio_read(uint64_t *cursor, float *samples, size_t capacity,
+                             uint32_t *producer_active);
+
 #endif /* BUILTIN_MIC_RING_WRITER_H */

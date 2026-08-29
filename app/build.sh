@@ -12,11 +12,22 @@ SWIFT_FILES=(
     "Localization.swift"
     "SiriRemoteApp.swift"
     "MenuBarManager.swift"
+    "UpdateManager.swift"
     "RemoteDetector.swift"
     "RemoteInputHandler.swift"
     "GATTDiagnostics.swift"
     "NativePushToTalk.swift"
     "BuiltinMicFeeder.swift"
+    "VoiceCredentials.swift"
+    "VoiceAudioCapture.swift"
+    "VoiceFeedbackSound.swift"
+    "VoiceTranscriptionClient.swift"
+    "VoiceTextProcessing.swift"
+    "VoiceTextDelivery.swift"
+    "VoiceDictationCoordinator.swift"
+    "VoicePipelinePresentation.swift"
+    "VoicePipelineHUD.swift"
+    "VoiceInputSelfTest.swift"
     "CursorController.swift"
     "FocusFollowsCursor.swift"
     "MediaController.swift"
@@ -46,6 +57,7 @@ SWIFT_FILES=(
     "SystemReadiness.swift"
     "SetupWizard.swift"
     "RemoteView.swift"
+    "DemoMode.swift"
     "ShortcutRecorder.swift"
     "LayoutView.swift"
     # --- Config engine integration (this fork) ---
@@ -83,6 +95,15 @@ fi
 
 echo "Using SDK: $SDK_PATH"
 
+# Keep Clang/Swift module artifacts in the ignored project cache. This also prevents `/tmp` and
+# `/private/tmp` (the same directory on macOS) from being treated as two competing module caches.
+MODULE_CACHE="$PWD/.build/module-cache"
+mkdir -p "$MODULE_CACHE"
+
+# The updater is a pinned binary framework because this project is compiled directly with swiftc
+# rather than an Xcode project. prepare_sparkle.sh verifies the upstream archive before caching it.
+SPARKLE_ROOT="$(./prepare_sparkle.sh)"
+
 # Detect architecture
 ARCH=$(uname -m)
 if [ "$ARCH" == "arm64" ]; then
@@ -93,10 +114,39 @@ fi
 
 echo "Building for: $TARGET"
 
+# Compile the narrow login-keychain compatibility bridge once for both executables. Its source
+# scopes the deprecated declarations precisely; -Werror remains enabled for every other warning.
+clang -c -O2 -Wall -Wextra -Werror \
+    -fmodules-cache-path="$MODULE_CACHE" \
+    -isysroot "$SDK_PATH" \
+    -mmacosx-version-min=13.0 \
+    CredentialKeychainBridge.c \
+    -o CredentialKeychainBridge.o
+
+# Build the credential broker as a deterministic, version-stable executable. Its CDHash owns the
+# login-keychain ACL, so ordinary HyperVibe UI changes must not alter this binary. The fixed output
+# and module names plus fixed XPC Info.plist make ld's Mach-O UUID reproducible across builds.
+swiftc \
+    -O \
+    -whole-module-optimization \
+    -parse-as-library \
+    -module-name HyperVibeCredentialBroker \
+    -module-cache-path "$MODULE_CACHE" \
+    -sdk "$SDK_PATH" \
+    -target "$TARGET" \
+    -o HyperVibeCredentialBroker \
+    CredentialBroker/main.swift \
+    CredentialKeychainBridge.o \
+    -import-objc-header CredentialBroker/BridgingHeader.h \
+    -framework Foundation \
+    -framework LocalAuthentication \
+    -framework Security
+
 # C ring writer for the built-in-mic fallback (Phase 2b). Compiled by clang and linked
 # into the Swift binary: C owns the C11 atomics of the shared-memory ABI (see
 # mic/router/SiriRemoteMicRingWriter.c for the pattern this follows).
 clang -c -O2 -Wall -Wextra -Werror \
+    -fmodules-cache-path="$MODULE_CACHE" \
     -isysroot "$SDK_PATH" \
     -mmacosx-version-min=13.0 \
     BuiltinMicRingWriter.c \
@@ -104,18 +154,26 @@ clang -c -O2 -Wall -Wextra -Werror \
 
 # Build
 swiftc \
+    -O \
+    -whole-module-optimization \
+    -module-cache-path "$MODULE_CACHE" \
     -sdk "$SDK_PATH" \
     -target "$TARGET" \
     -o HyperVibe \
     "${SWIFT_FILES[@]}" \
     BuiltinMicRingWriter.o \
     -import-objc-header SiriRemote-Bridging-Header.h \
+    -F "$SPARKLE_ROOT" \
+    -framework Sparkle \
+    -Xlinker -rpath \
+    -Xlinker '@executable_path/../Frameworks' \
     -F /System/Library/PrivateFrameworks \
     -framework IOKit \
     -framework CoreGraphics \
     -framework AudioToolbox \
     -framework CoreAudio \
     -framework AVFoundation \
+    -framework Security \
     -framework Carbon \
     -framework AppKit \
     -framework CoreBluetooth \
