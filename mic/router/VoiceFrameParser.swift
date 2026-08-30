@@ -13,7 +13,10 @@ struct RemoteVoiceFrame {
 }
 
 enum VoiceFrameParser {
-    private static let signature: [UInt8] = [0x04, 0x00, 0x1B, 0x35, 0x00]
+    private static let notificationSignature: [UInt8] = [0x04, 0x00, 0x1B]
+    /// The voice characteristic's ATT value handle depends on the remote's firmware/GATT layout.
+    /// Both values have been independently observed carrying the same validated Opus format.
+    private static let voiceValueHandles: Set<UInt16> = [0x0035, 0x0036]
 
     static func parse(_ line: String) -> RemoteVoiceFrame? {
         let fields = line.split(whereSeparator: { $0.isWhitespace })
@@ -37,14 +40,19 @@ enum VoiceFrameParser {
     }
 
     /// Core extractor shared by the text path and the binary `.pklg` path. `bytes` must be a
-    /// buffer that contains the ATT signature `04 00 1B 35 00` (L2CAP CID 0x0004, opcode 0x1B,
-    /// handle 0x0035) followed by the notification value. For the text path this is the whole
+    /// buffer that contains the ATT notification signature `04 00 1B`, a known voice value
+    /// handle, and the notification value. For the text path this is the whole
     /// raw ACL packet; for the binary path it is the reassembled L2CAP PDU. The logic beyond the
     /// signature — sequence, Opus length, TOC 0xB8 — is identical, so both paths decode the same
     /// frames (verified: cap_mic.pklg → 804 frames, byte-for-byte with the text capture).
     static func parse(bytes: [UInt8], handle: String) -> RemoteVoiceFrame? {
-        guard let signatureIndex = firstIndex(of: signature, in: bytes) else { return nil }
-        let valueIndex = signatureIndex + signature.count
+        guard let signatureIndex = firstIndex(of: notificationSignature, in: bytes),
+              signatureIndex + notificationSignature.count + 2 <= bytes.count else { return nil }
+        let attributeIndex = signatureIndex + notificationSignature.count
+        let attributeHandle = UInt16(bytes[attributeIndex])
+            | (UInt16(bytes[attributeIndex + 1]) << 8)
+        guard voiceValueHandles.contains(attributeHandle) else { return nil }
+        let valueIndex = attributeIndex + 2
         guard valueIndex + 5 <= bytes.count else { return nil }
 
         let sequence = UInt16(bytes[valueIndex + 2])

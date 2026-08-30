@@ -15,10 +15,17 @@ enum VoiceFrameParserTest {
         guard frame.sequence == 0x1234 else { fail("sequence decoded as \(frame.sequence)") }
         guard Array(frame.opusPayload) == [0xB8, 0xAA, 0xBB] else { fail("payload mismatch") }
 
+        let alternateHandle = valid.replacingOccurrences(of: "1B 35 00", with: "1B 36 00")
+        guard let alternateFrame = VoiceFrameParser.parse(alternateHandle)
+        else { fail("firmware-dependent ATT handle rejected") }
+        guard alternateFrame.sequence == 0x1234 else { fail("alternate-handle sequence mismatch") }
+        guard Array(alternateFrame.opusPayload) == [0xB8, 0xAA, 0xBB]
+        else { fail("alternate-handle payload mismatch") }
+
         guard VoiceFrameParser.parse(valid.replacingOccurrences(of: "RECV", with: "SEND")) == nil
         else { fail("SEND packet accepted") }
-        guard VoiceFrameParser.parse(valid.replacingOccurrences(of: "1B 35 00", with: "1B 36 00")) == nil
-        else { fail("wrong ATT handle accepted") }
+        guard VoiceFrameParser.parse(valid.replacingOccurrences(of: "1B 35 00", with: "1B 37 00")) == nil
+        else { fail("unknown ATT handle accepted") }
         guard VoiceFrameParser.parse(String(valid.dropLast(3))) == nil
         else { fail("truncated packet accepted") }
         guard VoiceFrameParser.parse(valid.replacingOccurrences(of: "B8 AA BB", with: "78 AA BB")) == nil

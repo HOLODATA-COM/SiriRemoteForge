@@ -95,8 +95,8 @@ final class PklgVoiceExtractor {
         assembling[handle] = nil
 
         // Reuse the proven extractor: the reassembled PDU is `[len:2][cid=04 00][ATT…]`, so the
-        // signature `04 00 1B 35 00` sits at offset 2 and the value parse is byte-identical to
-        // the text path.
+        // `04 00 1B <voice-handle-le>` signature sits at offset 2 and the value parse is
+        // byte-identical to the text path.
         let handleString = String(format: "0x%04X", handle)
         return VoiceFrameParser.parse(bytes: state.buffer, handle: handleString)
     }
