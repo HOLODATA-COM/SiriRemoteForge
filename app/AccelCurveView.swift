@@ -104,12 +104,12 @@ struct AccelCurveView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
             )
-            .help("Drag either endpoint to change its speed and gain. Drag the middle point to bend the curve.")
+            .help(L("Drag either endpoint to change its speed and gain. Drag the middle point to bend the curve."))
 
             HStack(spacing: 8) {
                 Label(slowLabel, systemImage: "tortoise.fill")
                 Spacer(minLength: 4)
-                Label(shapeLinked ? "shape linked" : String(format: "curve %.2f", curve),
+                Label(shapeLinked ? L("Shape linked") : L("Curve %.2f", curve),
                       systemImage: shapeLinked ? "link" : "point.topleft.down.curvedto.point.bottomright.up")
                 Spacer(minLength: 4)
                 Label(fastLabel, systemImage: "hare.fill")
@@ -120,7 +120,7 @@ struct AccelCurveView: View {
             HStack {
                 Text(String(format: "%.2f×  @ %@", accelMin, formatSpeed(lowSpeed)))
                 Spacer()
-                Text("drag the three points")
+                Text(L("Drag the three points"))
                     .foregroundStyle(.tertiary)
                 Spacer()
                 Text(String(format: "%.2f×  @ %@", accelMax, formatSpeed(highSpeed)))

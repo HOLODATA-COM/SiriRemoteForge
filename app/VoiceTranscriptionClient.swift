@@ -138,6 +138,7 @@ final class VoiceTranscriptionClient {
     }
 
     static func contextPrompt(_ dictionary: [Config.DictationTerm]) -> String {
+        let canonical = normalizedKeywords(dictionary)
         let aliases = dictionary.compactMap { entry -> String? in
             let clean = entry.aliases.map {
                 $0.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -145,8 +146,16 @@ final class VoiceTranscriptionClient {
             guard !clean.isEmpty else { return nil }
             return "\(clean.joined(separator: ", ")) → \(entry.term)"
         }
-        guard !aliases.isEmpty else { return "" }
-        return "可能出现以下专有词；仅在确实听到时采用标准拼写：" + aliases.joined(separator: "; ")
+        guard !canonical.isEmpty || !aliases.isEmpty else { return "" }
+        var parts: [String] = []
+        if !canonical.isEmpty {
+            parts.append("可能出现的标准词拼写：" + canonical.joined(separator: ", "))
+        }
+        if !aliases.isEmpty {
+            parts.append("常见发音或误听映射：" + aliases.joined(separator: "; "))
+        }
+        let prompt = "仅在确实听到时采用以下上下文。" + parts.joined(separator: "。")
+        return String(prompt.prefix(4_000))
     }
 
     private static func unique(_ values: [String]) -> [String] {

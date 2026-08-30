@@ -234,6 +234,65 @@ struct SettingsView: View {
             .disabled(!model.tune.dictation.enabled)
 
             Section {
+                Toggle(isOn: $model.tune.dictation.selectionEditingEnabled) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(LinearGradient(colors: [.indigo.opacity(0.92),
+                                                              .purple.opacity(0.72)],
+                                                     startPoint: .topLeading,
+                                                     endPoint: .bottomTrailing))
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 34, height: 34)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L("Rewrite selected text with Voice"))
+                                .font(.system(size: 13, weight: .semibold))
+                            Text(L("The selected text stays untouched until a verified replacement is ready."))
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if model.tune.dictation.selectionEditingEnabled {
+                    Picker(L("Selection edit model"),
+                           selection: $model.tune.dictation.selectionEditProvider) {
+                        Text("OpenAI").tag(Config.DictationSelectionEditProvider.openAI)
+                        Text("DeepSeek").tag(Config.DictationSelectionEditProvider.deepSeek)
+                    }
+                    .pickerStyle(.menu)
+
+                    HStack(spacing: 8) {
+                        selectionEditStep("1", icon: "text.cursor",
+                                          title: L("Select text"))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .bold)).foregroundStyle(.tertiary)
+                        selectionEditStep("2", icon: "waveform",
+                                          title: L("Speak instruction"))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .bold)).foregroundStyle(.tertiary)
+                        selectionEditStep("3", icon: "checkmark.seal.fill",
+                                          title: L("Release to replace"))
+                    }
+                    .padding(.vertical, 5)
+
+                    Label(L("Accessibility is checked first. If a custom editor hides its selection, HyperVibe briefly probes Copy and restores your clipboard. Empty selections continue as ordinary dictation; read-only rewrites and failed replacements are copied."),
+                          systemImage: "lock.shield.fill")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } header: {
+                Text(L("Selection Editing"))
+            } footer: {
+                Text(L("Select text, hold the side button, speak only the change you want, then release. Editable selections are replaced; readable read-only selections and failed replacements are copied. This works in Final and Live Voice without inserting the spoken instruction."))
+            }
+            .disabled(!model.tune.dictation.enabled)
+
+            Section {
                 credentialCard(
                     title: "OpenAI", subtitle: L("Required for transcription"),
                     icon: "waveform.badge.mic", tint: .green,
@@ -243,7 +302,7 @@ struct SettingsView: View {
                 )
                 Divider()
                 credentialCard(
-                    title: "DeepSeek", subtitle: L("Only needed when DeepSeek cleanup is selected"),
+                    title: "DeepSeek", subtitle: L("Used by DeepSeek text cleanup and selection editing"),
                     icon: "wand.and.stars", tint: .blue,
                     kind: .deepSeek, draft: $deepSeekKeyDraft,
                     hasKey: voiceCredentials.hasDeepSeekKey,
@@ -252,10 +311,12 @@ struct SettingsView: View {
             } header: {
                 Text(L("API Credentials"))
             } footer: {
-                if VoiceCredentialStore.backend == .keychain {
+                if voiceCredentials.storageBackend == .keychain {
                     Text(L("Keys are stored in the macOS Keychain with this-device-only protection. On first save, choose Always Allow once for HyperVibe's fixed credential helper; normal App updates will not ask again. Keys are never written to config.jsonc, logs, the app bundle, or Git."))
-                } else {
+                } else if voiceCredentials.storageBackend == .localJSON {
                     Text(L("Keys are saved as plaintext in a current-user-only credentials.json file for this public beta. Only HyperVibe Settings provides a supported way to write it. Keys are never written to config.jsonc, logs, the app bundle, or Git."))
+                } else {
+                    Text(L("Checking local credential storage…"))
                 }
             }
 
@@ -263,8 +324,16 @@ struct SettingsView: View {
                 Toggle(isOn: $model.tune.dictation.autoInsert) {
                     rowLabel(L("Insert at the captured caret"), "text.cursor")
                 }
-                Toggle(isOn: $model.tune.dictation.copyOnFailure) {
-                    rowLabel(L("Copy when insertion is unavailable"), "doc.on.doc")
+                HStack(spacing: 10) {
+                    rowLabel(L("Clipboard recovery after failed delivery"),
+                             "doc.on.doc.fill")
+                    Spacer()
+                    Text(L("Always on"))
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(.blue)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(.blue.opacity(0.11), in: Capsule())
                 }
                 Toggle(isOn: $model.tune.dictation.restoreClipboardAfterInsert) {
                     rowLabel(L("Restore clipboard after compatibility paste"), "clipboard")
@@ -276,7 +345,7 @@ struct SettingsView: View {
             } header: {
                 Text(L("Delivery"))
             } footer: {
-                Text(L("HyperVibe captures the frontmost app and focused editor before showing its HUD. If focus changes, it will not type into the new target. Secure fields are never modified."))
+                Text(L("HyperVibe captures the frontmost app and focused editor before showing its HUD. It never types into a changed or secure target. Whenever generated text cannot be inserted or replaced, the complete result is placed on the clipboard."))
             }
 
             Section {
@@ -383,12 +452,12 @@ struct SettingsView: View {
                                       text: $model.tune.dictation.streamingModel)
                                 .textFieldStyle(.roundedBorder).frame(width: 280)
                         }
-                        LabeledContent(L("OpenAI cleanup")) {
+                        LabeledContent(L("OpenAI text processing")) {
                             TextField("gpt-5.6-luna",
                                       text: $model.tune.dictation.openAICleanupModel)
                                 .textFieldStyle(.roundedBorder).frame(width: 280)
                         }
-                        LabeledContent(L("DeepSeek cleanup")) {
+                        LabeledContent(L("DeepSeek text processing")) {
                             TextField("deepseek-v4-flash",
                                       text: $model.tune.dictation.deepSeekCleanupModel)
                                 .textFieldStyle(.roundedBorder).frame(width: 280)
@@ -462,6 +531,28 @@ struct SettingsView: View {
             .strokeBorder(selected ? tint.opacity(0.30) : Color.clear, lineWidth: 1))
     }
 
+    private func selectionEditStep(_ number: String, icon: String,
+                                   title: String) -> some View {
+        HStack(spacing: 7) {
+            Text(number)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(Color.indigo))
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.indigo)
+            Text(title)
+                .font(.system(size: 10.5, weight: .medium))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(Color.indigo.opacity(0.07)))
+    }
+
     private func credentialCard(title: String, subtitle: String, icon: String, tint: Color,
                                 kind: VoiceCredentialKind, draft: Binding<String>,
                                 hasKey: Bool, state: VoiceCredentialConnectionState) -> some View {
@@ -498,6 +589,17 @@ struct SettingsView: View {
                     .disabled(state == .loading || state == .saving || state == .testing)
                 }
             }
+            if case .invalid(let message) = state {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(message)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(.red)
+                .accessibilityElement(children: .combine)
+            }
         }
         .padding(.vertical, 5)
     }
@@ -527,8 +629,8 @@ struct SettingsView: View {
 
     private var voicePhaseColor: Color {
         switch voiceRuntime.phase {
-        case .idle, .inserted: return .green
-        case .priming, .transcribing, .polishing, .inserting: return .orange
+        case .idle, .inserted, .replaced: return .green
+        case .priming, .transcribing, .polishing, .rewriting, .inserting: return .orange
         case .listening: return .red
         case .copied: return .blue
         case .error: return .red

@@ -96,6 +96,15 @@ final class SettingsModel: ObservableObject {
         refreshConfigSaveState()
     }
 
+    /// A file-watcher callback can arrive for an earlier GUI save after the user has already
+    /// selected another Voice mode (External -> Final is the common case). Re-applying that stale
+    /// file would make the selector say Final while the input router silently falls back to
+    /// External. Keep the newer in-memory tune until its debounced save lands; an identical reload
+    /// is harmless and may still be accepted.
+    func shouldAcceptTuneReload(_ reloaded: TuneSettings) -> Bool {
+        !pendingConfigSaves.contains(.tuning) || reloaded == tune
+    }
+
     private func refreshConfigSaveState() {
         if let error = configSaveErrors.values.first {
             configSaveState = .failed(error)

@@ -29,14 +29,35 @@ enum VoiceCredentialStore {
     private static var confirmedMissing = Set<VoiceCredentialKind>()
     private static var loadedAll = false
     private static var mutationGeneration: UInt64 = 0
+    private static var resolvedStorageBackend: Backend?
 
     enum Backend: Equatable {
         case keychain
         case localJSON
     }
 
-    static var backend: Backend {
-        VoiceCredentialBrokerClient.shared.isAvailable ? .keychain : .localJSON
+    /// UI-safe snapshot. Code-signature validation can consult Security.framework and must not be
+    /// performed while SwiftUI is evaluating a view body on the main thread.
+    static var cachedBackend: Backend? {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        return resolvedStorageBackend
+    }
+
+    private static func resolveBackend() -> Backend {
+        cacheLock.lock()
+        if let value = resolvedStorageBackend {
+            cacheLock.unlock()
+            return value
+        }
+        cacheLock.unlock()
+
+        let value: Backend = VoiceCredentialBrokerClient.shared.isAvailable
+            ? .keychain : .localJSON
+        cacheLock.lock()
+        if resolvedStorageBackend == nil { resolvedStorageBackend = value }
+        let resolved = resolvedStorageBackend ?? value
+        cacheLock.unlock()
+        return resolved
     }
 
     /// Hot-path/readiness lookup only. It never launches the helper or touches Keychain.
@@ -49,6 +70,7 @@ enum VoiceCredentialStore {
     /// main queue so ObservableObject state and coordinator prewarming can update safely.
     static func preload(_ completion: @escaping () -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
+            _ = resolveBackend()
             _ = read(.openAI) // one batch request loads both OpenAI and DeepSeek
             DispatchQueue.main.async(execute: completion)
         }
@@ -112,7 +134,7 @@ enum VoiceCredentialStore {
         guard !clean.isEmpty else {
             throw VoiceCredentialError.empty
         }
-        switch backend {
+        switch resolveBackend() {
         case .keychain:
             let status = VoiceCredentialBrokerClient.shared.save(
                 account: kind.rawValue, value: Data(clean.utf8)
@@ -135,7 +157,7 @@ enum VoiceCredentialStore {
     }
 
     static func remove(_ kind: VoiceCredentialKind) throws {
-        if backend == .keychain {
+        if resolveBackend() == .keychain {
             let status = VoiceCredentialBrokerClient.shared.remove(account: kind.rawValue)
             guard status == errSecSuccess || status == errSecItemNotFound else {
                 throw VoiceCredentialError.keychain(status)
@@ -458,6 +480,7 @@ final class VoiceCredentialModel: ObservableObject {
     @Published private(set) var hasDeepSeekKey = false
     @Published private(set) var openAIConnection: VoiceCredentialConnectionState = .loading
     @Published private(set) var deepSeekConnection: VoiceCredentialConnectionState = .loading
+    @Published private(set) var storageBackend: VoiceCredentialStore.Backend?
 
     private let session: URLSession
     var onCredentialsChanged: (() -> Void)?
@@ -469,6 +492,7 @@ final class VoiceCredentialModel: ObservableObject {
     func refresh() {
         hasOpenAIKey = VoiceCredentialStore.cachedContains(.openAI)
         hasDeepSeekKey = VoiceCredentialStore.cachedContains(.deepSeek)
+        storageBackend = VoiceCredentialStore.cachedBackend
     }
 
     func preload() {
@@ -524,7 +548,10 @@ final class VoiceCredentialModel: ObservableObject {
 
     func test(_ kind: VoiceCredentialKind) {
         guard let key = VoiceCredentialStore.read(kind) else {
-            setConnection(.invalid(L("No API key is saved.")), for: kind)
+            let message = kind == .openAI
+                ? VoiceAPIError.missingOpenAIKeyMessage
+                : L("API Key is missing · add it in Settings → Voice")
+            setConnection(.invalid(message), for: kind)
             return
         }
         setConnection(.testing, for: kind)
@@ -544,7 +571,7 @@ final class VoiceCredentialModel: ObservableObject {
         session.dataTask(with: request) { [weak self] data, response, error in
             let result: VoiceCredentialConnectionState
             if let error {
-                result = .invalid(error.localizedDescription)
+                result = .invalid(VoiceAPIError.userFacingMessage(for: error))
             } else if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
                 result = .valid
             } else {
@@ -566,15 +593,98 @@ final class VoiceCredentialModel: ObservableObject {
 }
 
 enum VoiceAPIError {
-    /// Cloud errors often include request IDs and model details but should never echo credentials.
+    static var missingOpenAIKeyMessage: String {
+        L("OpenAI API Key is missing · add and test it in Settings → Voice")
+    }
+
+    /// Convert transport and typed Voice errors into one short, actionable vocabulary shared by
+    /// the Settings connection row, the persistent status widget and the temporary Voice capsule.
+    /// Raw provider strings remain useful for retry classification but never need to fill the UI.
+    static func userFacingMessage(for error: Error) -> String {
+        if let selection = error as? VoiceSelectionEditError,
+           let message = selection.errorDescription {
+            return message
+        }
+        if let voice = error as? VoiceTranscriptionError {
+            switch voice {
+            case .missingCredential:
+                return missingOpenAIKeyMessage
+            case .invalidAudio:
+                return L("No usable speech · speak for at least one second and try again")
+            case .invalidResponse:
+                return L("Voice service returned an invalid result · try again")
+            case .service(let message):
+                return classifiedMessage(raw: message, statusCode: httpStatus(in: message))
+            case .timedOut:
+                return L("Voice service timed out · check the network and try again")
+            case .cancelled:
+                return L("Dictation was cancelled.")
+            }
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost,
+                 .cannotFindHost, .dnsLookupFailed, .internationalRoamingOff:
+                return L("Can't reach the Voice service · check the network")
+            case .timedOut:
+                return L("Voice service timed out · check the network and try again")
+            default:
+                return L("Voice input failed · check Settings → Voice and try again")
+            }
+        }
+        return classifiedMessage(raw: error.localizedDescription, statusCode: nil)
+    }
+
+    /// Cloud errors often include request IDs and model details but should never echo credentials
+    /// or force a user to interpret an HTTP response.
     static func safeMessage(data: Data?, statusCode: Int?) -> String {
+        var raw: String?
         if let data,
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let error = root["error"] as? [String: Any],
            let message = error["message"] as? String,
            !message.isEmpty {
-            return statusCode.map { "HTTP \($0): \(message)" } ?? message
+            raw = message
         }
-        return statusCode.map { "HTTP \($0)" } ?? L("The service returned an invalid response.")
+        return classifiedMessage(raw: raw, statusCode: statusCode)
+    }
+
+    private static func classifiedMessage(raw: String?, statusCode: Int?) -> String {
+        let value = raw?.lowercased() ?? ""
+        if statusCode == 401 || statusCode == 403
+            || value.contains("invalid_api_key") || value.contains("incorrect api key")
+            || value.contains("authentication") || value.contains("unauthorized") {
+            return L("API Key is invalid · replace and test it in Settings → Voice")
+        }
+        if statusCode == 429 || value.contains("insufficient_quota")
+            || value.contains("quota") || value.contains("rate limit")
+            || value.contains("billing") {
+            return L("API quota is unavailable or rate-limited · check the account")
+        }
+        if value.contains("model_not_found") || value.contains("unsupported model")
+            || value.contains("invalid model") || value.contains("model does not exist") {
+            return L("Selected Voice model is unavailable · change it in Settings → Voice")
+        }
+        if let statusCode, (500...599).contains(statusCode) {
+            return L("Voice service is temporarily unavailable · try again shortly")
+        }
+        if statusCode != nil {
+            return L("Voice request was rejected · check Settings → Voice and try again")
+        }
+        if value.contains("network") || value.contains("connection")
+            || value.contains("offline") || value.contains("timed out") {
+            return L("Can't reach the Voice service · check the network")
+        }
+        return L("Voice input failed · check Settings → Voice and try again")
+    }
+
+    private static func httpStatus(in message: String) -> Int? {
+        let pattern = #"(?i)http\s+([1-5][0-9]{2})"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(
+                  in: message, range: NSRange(message.startIndex..., in: message)
+              ),
+              let range = Range(match.range(at: 1), in: message) else { return nil }
+        return Int(message[range])
     }
 }

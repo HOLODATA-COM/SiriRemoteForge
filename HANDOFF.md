@@ -2785,6 +2785,154 @@ feel that evening; if any of these is wrong, this is where to look:
   the deep/strict-valid `/Applications/HyperVibe.app`, Authority `siriRemote Local Signing`, with
   exactly one UI process at the required executable path.
 
+## Voice selector continuity, actionable errors and local.23 (2026-08-29)
+
+- Mute+Side still owns the global, Layer-independent Voice selector. Selector presentation and
+  real-hold presentation are now deliberately separate policies: External, Final and Live all show
+  in both the persistent widget and temporary Voice selector, so the third destination never looks
+  like a disappearing strip. A real Side hold in External still opens no native listening capsule
+  and continues through the configured external action.
+- A missing OpenAI key is now a first-class `misconfigured` admission result. It consumes only after
+  the existing 200 ms Side-button promotion boundary, so quick taps remain ordinary and never flash
+  an error. The promoted failure travels through the coordinator's normal phase channel, keeping the
+  status widget, Voice capsule and Settings Last-run row on the same actionable error state.
+- Provider and transport failures share one safe error vocabulary: missing or invalid key, quota or
+  rate limit, unavailable model, server rejection/outage, network loss and timeout. Raw provider
+  payloads and request IDs are not echoed. The Settings credential card now expands the actual
+  reason below its controls instead of showing only `Test failed`.
+- `--test-voice-mode-hud` and `--test-voice-mode-hud-long` provide isolated selector cycles without
+  remote, microphone, input hooks or network access. The deterministic Voice suite verifies all
+  three selector destinations, External hold suppression, misconfiguration ownership and synthetic
+  credential/quota/model/network classification. Command-line screenshots on this multi-Space
+  desktop did not capture the isolated status-level panel, so do not claim a fresh pixel-level QC
+  recording for this selector; a physical Mute+Side pass remains the final visual check.
+- Verification: SiriRemoteCore **134/134**, native Voice **75/75**, production compilation, bundle
+  creation and deep/strict signature verification all pass. The stable certificate leaf remains
+  SHA-1 `80f746bd1de5a7ceb835a200ce4e43705f01aee6`. The installed App is
+  `/Applications/HyperVibe.app`, release `1.0.0-local.23`, and exactly one no-argument UI process is
+  running at the required executable path (PID 77041 at handoff time). local.22 is recoverable from
+  `/private/tmp/HyperVibe-pre-local23.app`.
+- The Xiaohongshu carousel now has three verified 1086 x 1448 (3:4) images: Voice latency, floating
+  UI/motion plus the External/Final/Live selector, and the complete point/scroll/click/drag input
+  system. Matching copies plus the expanded motion/error copy are in Dropbox; generated project
+  artifacts remain under ignored `output/xiaohongshu/` and are not Git release inputs.
+
+## Xcode 16 CI compatibility (2026-08-29)
+
+- CI runs the App job with Xcode 16.4 / macOS 15.5, while the development Mac currently uses
+  Xcode 26.6. The newer compiler accepted `@MainActor` on an individual protocol conformance in
+  `UpdateManager`; Xcode 16.4 rejected it as an unknown attribute.
+- Commit `6156dea` keeps the manager itself main-actor isolated, makes Sparkle's Objective-C user
+  driver requirements explicitly `nonisolated`, and returns UI callbacks to `MainActor` before
+  touching App state. Only `app/UpdateManager.swift` was committed and pushed; the dirty Voice/HUD
+  work and unrelated untracked files were not included.
+- Clean `origin/main + UpdateManager` compilation passed locally. GitHub Actions run `33238514638`
+  then passed both Core engine and **App (compiles and links)** under the actual Xcode 16.4 runner.
+  The only remaining annotations are GitHub's non-failing Node 20 deprecation notices for
+  `actions/checkout@v4`.
+
+## Strict Accessibility selection editing and local.24 (2026-08-30)
+
+- Native Voice now branches on the exact Accessibility selection captured at the physical Side
+  press. An empty writable selection retains ordinary Final/Live dictation. A non-empty writable
+  selection becomes `selectionEdit`: realtime transcription is used only to preview the spoken edit
+  instruction and never sends that instruction to the editor; release runs one selected provider
+  request and then performs one AX selected-text replacement.
+- The replacement is deliberately strict. Immediately before mutation it rechecks the frontmost
+  PID, secure-input state, focused AX element (allowing only the existing same-editor semantic
+  replacement rule), exact selected text and selected-text writability. This path never simulates
+  Copy to discover a selection and never uses paste or Unicode events to pretend an in-place
+  replacement succeeded. Readable read-only selections (including terminal output) may still be
+  rewritten, but are clipboard-only. If a completed rewrite cannot be replaced because the target
+  became read-only/secure, focus or selection changed, or AX failed, the source remains untouched
+  and the full rewrite is copied with an explicit reason.
+- Selection-edit configuration is additive and JSON-owned:
+  `selectionEditingEnabled` defaults true and `selectionEditProvider` defaults `deepseek` (or may be
+  `openai`). It reuses the provider's configured text-processing model. Old/partial JSON inherits
+  these defaults, GUI write-back preserves them, and validation requires the selected model name.
+  `autoInsert=false` is also a visible hard failure for selection editing rather than a copy fallback.
+- The model prompt separates `selected_text` and `spoken_instruction` in a typed JSON envelope. Only
+  the latter is an instruction channel; selected text is untrusted quoted data. Cloud failure,
+  missing credentials, an empty result or an unexpectedly large result aborts without altering the
+  selection. Normal Final transcript cleanup keeps its existing loss-minimising fallback behavior.
+- Voice Settings now has a dedicated indigo Selection Editing section with an enable switch,
+  provider picker, three-step Select → Speak → Release flow and the strict Accessibility guarantee.
+  Both floating surfaces retain the real continuous waveform while morphing from red `LIVE` to
+  indigo `EDIT`; post-release states are Transcribing → Rewriting Selection → Selection Updated,
+  with configurable SF Symbols under `voice.selection.*`. The Settings page was inspected from an
+  actual installed-build screenshot after moving its existing multi-display window onto the current
+  screen; the new section is aligned, readable and does not force a phone-width layout.
+- Verification: SiriRemoteCore **134/134**, native Voice **79/79**, production compilation, default
+  and author JSON examples, icon audit, typed-envelope isolation, editable/read-only/unavailable AX
+  routing, clipboard-nonmutation on strict failure, bundle construction and deep/strict signature
+  verification all pass. The installed App is `/Applications/HyperVibe.app`, release
+  `1.0.0-local.24`, certificate leaf remains
+  `80f746bd1de5a7ceb835a200ce4e43705f01aee6`, and exactly one UI process is running from the required
+  path (PID 15741 at handoff time). local.23 is recoverable at
+  `/private/tmp/HyperVibe-before-local24-20260830.app`. Nothing from this feature was pushed.
+- Final installed-build QA found that the Voice credentials footer was synchronously revalidating
+  the signed Keychain helper whenever SwiftUI recomputed the page. Security.framework reported a
+  main-thread performance fault on the 60-second Settings refresh. Backend validation now runs once
+  on the existing background credential preload, publishes its cached result through
+  `VoiceCredentialModel`, and the view only reads that in-memory state. A real installed Voice page
+  was kept open across a full device-refresh interval with zero `com.apple.runtime-issues` entries.
+  The rebuilt App remains build 24 / `1.0.0-local.24`, passes **134/134** Core and **79/79** native
+  Voice checks plus deep/strict signing, and runs as one process from the required Applications path
+  (PID 26460 at final QA). The immediately previous local.24 bundle is recoverable at
+  `/private/tmp/HyperVibe-before-security-ui-fix-local24.app`; nothing was pushed.
+- local.25 makes clipboard recovery a non-optional loss-prevention invariant for every native Voice
+  route. Final, Live reconciliation, automatic-insertion-off, missing targets, secure/changed targets
+  and failed AX selection replacement all copy the complete generated result instead of discarding
+  it. A readable read-only AX selection now continues through transcription and rewrite, then copies
+  the result; an unreadable/secure selection still fails before cloud work because no source text
+  exists. The legacy `copyOnFailure` JSON field remains Codable for compatibility but every false
+  value is validated then normalised true, and Settings presents a polished non-interactive
+  **Always on** recovery row instead of a misleading toggle. Verification: Core **134/134**, native
+  Voice **80/80** including a forced failed-delivery clipboard/restore regression, optimized build,
+  deep/strict signing and installed Voice-page screenshot. The installed App is build 25 /
+  `1.0.0-local.25` with the same certificate leaf. local.24 is recoverable at
+  `/private/tmp/HyperVibe-before-local25-clipboard-recovery.app`; nothing was pushed.
+- local.27 completes a real installed-build UI/localization audit instead of treating English-only
+  screenshots as sufficient. A source-wide audit now finds **442/442** `L(...)` literals with a
+  Chinese mapping; the missing credential, read-only-selection, generic App, Off/Test and realtime
+  error strings were added. Pixel inspection of the installed Chinese Tuning page additionally
+  caught two unwrapped graph labels (`curve` and `drag the three points`), which are now localized
+  along with the curve help and linked-shape label. The installed Chinese Voice top/selection-edit
+  layout, English Delivery section, and isolated Copied/Error Voice capsules were captured and
+  inspected with no clipping, overlap, missing symbol or overflow. Hidden, production-inert QC
+  flags provide a non-persistent language override and fixed Copied/Error panel dwell; they open no
+  microphone, remote, input hook, network or text target. Verification: Core **134/134**, native
+  Voice **80/80**, warning-free optimized compile, `git diff --check`, deep/strict codesigning,
+  stable certificate leaf `80f746bd1de5a7ceb835a200ce4e43705f01aee6`, candidate/installed
+  binary equality and an empty `com.apple.runtime-issues` log after normal launch. The live App is
+  `/Applications/HyperVibe.app`, build 27 / `1.0.0-local.27`, with exactly one no-argument process
+  (PID 49691 at handoff time). local.26 and local.25 are recoverable at
+  `/private/tmp/HyperVibe-before-local27-ui-complete.app` and
+  `/private/tmp/HyperVibe-before-local26-ui-completeness.app`. Nothing was pushed.
+- local.30 fixes the paired "External -> Final still behaves like External" and lost selection-edit
+  reports. The actual root state divergence was a config-watcher echo from an earlier debounced GUI
+  save: it could overwrite a newer in-memory Voice choice after the selector had already confirmed
+  Final. `SettingsModel` now rejects a stale tuning reload while a newer tuning save is pending, and
+  an isolated regression proves the pending Final choice wins over the older External file. The
+  temporary Voice capsule also owns an explicitly cancellable selector-hide task and retargets the
+  NSWindow alpha animator, so beginning Final during the selector card's CRT exit cannot leave an
+  internally-listening but transparent panel. Selection discovery is positive-evidence based:
+  empty/unavailable AX selection metadata no longer labels every editor read-only, while WeChat and
+  other custom editors get a bounded, reversible Command-C compatibility probe only when AX exposes
+  no non-empty selection. A custom editable role verifies the exact original selection immediately
+  before guarded paste replacement; read-only targets and every failed replacement still copy the
+  complete generated rewrite. Missing target metadata likewise continues through transcription to
+  the existing no-target clipboard delivery instead of discarding the utterance. Verification:
+  Core **134/134**, native Voice **83/83**, optimized build, `git diff --check`, deep/strict stable
+  signing, candidate/installed binary SHA-256 equality, and the deterministic
+  `--test-voice-mode-return-to-final` compositor race (**PASS**). The installed App is build 30 /
+  `1.0.0-local.30`, signed by `siriRemote Local Signing`, with one no-argument process from
+  `/Applications/HyperVibe.app` (PID 45187 at handoff time). The prior local.27 is recoverable at
+  `/private/tmp/HyperVibe-before-local30-selection-and-voice-cycle.app`; local.28/local.29 were
+  candidates only and never installed. The user's on-disk Voice mode was preserved as `external`
+  (pipeline overlay remains enabled), so the next physical validation must explicitly select Final
+  once before holding Side. Nothing was pushed.
+
 ## Maintenance rules
 
 - Preserve user changes and the active config; do not reset or replace mappings without explicit

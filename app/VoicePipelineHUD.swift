@@ -51,7 +51,7 @@ enum VoicePipelineApertureMotion {
     static let exitKeyTimes: [NSNumber] = [0, 0.52, 0.82, 1]
 }
 
-final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
+final class LegacyVoicePipelineHUDController: NSObject, NSWindowDelegate {
     private final class PipelinePanel: NSPanel {
         override var canBecomeKey: Bool { false }
         override var canBecomeMain: Bool { false }
@@ -110,11 +110,17 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
     private var enabled = true
     private var visible = false
     private var listening = false
+    private var selectionEditingContext: (characterCount: Int, applicationName: String)?
     private var awaitingReleasePhase = false
     private var currentStage: VoicePipelineVisualStage?
     /// Non-nil only while the hardware mode-switch confirmation owns this temporary capsule.
-    /// External never sets it: that route intentionally has no Voice floating window.
+    /// External may own this selector preview, but still never opens a real listening capsule.
     private var currentModePreview: Config.DictationMode?
+    /// Explicitly cancellable because a real Final/Live hold may begin while the preceding mode
+    /// confirmation is inside its delayed CRT exit. A generation guard protects state, but it
+    /// cannot by itself stop an already-running NSWindow alpha animator from making the new turn
+    /// visually disappear.
+    private var modePreviewHideWork: DispatchWorkItem?
     private var currentSymbolName: String?
     private var appearanceGeneration = 0
     private var transitionGeneration = 0
@@ -158,6 +164,7 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
     }
 
     deinit {
+        modePreviewHideWork?.cancel()
         cursorScreenTimer?.invalidate()
         observers.forEach {
             NotificationCenter.default.removeObserver($0)
@@ -187,10 +194,13 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
     func beginListening() {
         onMain { [weak self] in
             guard let self, self.enabled else { return }
+            self.modePreviewHideWork?.cancel()
+            self.modePreviewHideWork = nil
             self.transitionGeneration += 1
             self.clearTransientLayers()
             self.cancelInFlightExitForNewPresentation()
             self.listening = true
+            self.selectionEditingContext = nil
             self.awaitingReleasePhase = false
             self.currentStage = nil
             self.currentModePreview = nil
@@ -210,6 +220,25 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             self.prepareListeningEntrance()
             self.showIfNeeded(animateAlpha: false)
             self.animateListeningEntrance()
+        }
+    }
+
+    /// Keep the acoustic console intact while its semantic identity changes from dictation to an
+    /// Accessibility selection edit. Only internal layers morph; the capsule never resizes.
+    func showSelectionEditing(characterCount: Int, applicationName: String) {
+        onMain { [weak self] in
+            guard let self, self.enabled, self.visible, self.listening else { return }
+            self.selectionEditingContext = (max(0, characterCount), applicationName)
+            self.transitionGeneration += 1
+            let generation = self.transitionGeneration
+            let symbol = self.configuredSymbol(
+                key: "voice.selection.listening", fallback: "text.cursor"
+            )
+            self.setIcon(symbol, tint: .systemIndigo, cue: .voice, animated: true)
+            self.animateText(self.surface.mode, to: "● EDIT", delay: 0,
+                             direction: 1, generation: generation)
+            self.applyPalette(.systemIndigo, animated: true)
+            self.animateArc(to: 0.24, tint: .systemIndigo)
         }
     }
 
@@ -242,19 +271,12 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Confirm a global mode selected with Mute+Side. Final and Live briefly use this independent
-    /// Voice capsule as well as the compact status widget; External only dismisses an existing mode
-    /// preview and otherwise stays absent by design.
+    /// Confirm every global mode selected with Mute+Side. External still never opens this capsule
+    /// for a real Side-button hold; it is visible here only as the truthful third selector state.
     func showVoiceModeSwitch(_ mode: Config.DictationMode) {
         onMain { [weak self] in
-            guard let self, self.enabled else { return }
-
-            if !VoiceModePresentationPolicy.showsFloatingCapsule(for: mode) {
-                if self.currentModePreview != nil {
-                    self.hide(animated: true)
-                }
-                return
-            }
+            guard let self, self.enabled,
+                  VoiceModePresentationPolicy.showsModeSwitchCapsule(for: mode) else { return }
 
             // Never overwrite a real capture or a post-capture delivery state. A turn freezes its
             // own mode, and its truthful progress is more important than a selector confirmation.
@@ -265,6 +287,8 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             self.transitionGeneration += 1
             let generation = self.transitionGeneration
             let replacingPreview = self.visible && self.currentModePreview != nil
+            self.modePreviewHideWork?.cancel()
+            self.modePreviewHideWork = nil
             self.clearTransientLayers()
             self.cancelInFlightExitForNewPresentation()
             self.currentModePreview = mode
@@ -273,12 +297,15 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             self.showIfNeeded()
             self.animateModeSwitch(mode, replacing: replacingPreview)
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.86) { [weak self] in
+            let hideWork = DispatchWorkItem { [weak self] in
                 guard let self, self.transitionGeneration == generation,
                       self.currentModePreview == mode,
                       !self.listening, self.currentStage == nil else { return }
+                self.modePreviewHideWork = nil
                 self.hide(animated: true)
             }
+            self.modePreviewHideWork = hideWork
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.86, execute: hideWork)
         }
     }
 
@@ -293,7 +320,8 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
                 self.awaitingReleasePhase = false
                 self.hide(animated: true,
                           exitStyle: releasedFromStreaming ? .streamingRelease : .standard)
-            case .transcribing, .polishing, .inserting, .inserted, .copied, .error:
+            case .transcribing, .polishing, .rewriting, .inserting, .inserted, .replaced,
+                 .copied, .error:
                 guard let stage = VoicePipelineVisualStage(phase) else { return }
                 self.transition(to: stage, message: message)
             }
@@ -379,8 +407,11 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             animateText(surface.detail, to: message, delay: 0.044,
                         direction: -1, generation: generation)
         }
+        let stageBadge = stage.isTerminal
+            ? (stage == .error ? "ATTENTION" : "DONE")
+            : (selectionEditingContext == nil ? "FINAL" : "EDIT")
         animateText(surface.mode,
-                    to: stage.isTerminal ? (stage == .error ? "ATTENTION" : "DONE") : "FINAL",
+                    to: stageBadge,
                     delay: wasListening ? 0.078 : 0.030,
                     direction: 1, generation: generation)
         animateArc(to: stage.progress, tint: stage.tint)
@@ -891,6 +922,8 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
 
     private func hide(animated: Bool, exitStyle: ExitStyle = .standard) {
         guard visible || surface.panel.isVisible else { return }
+        modePreviewHideWork?.cancel()
+        modePreviewHideWork = nil
         appearanceGeneration += 1
         let generation = appearanceGeneration
         transitionGeneration += 1
@@ -957,6 +990,15 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
     /// Every touched value is rewritten later in the same main-run-loop turn, so this cannot expose
     /// a reset frame; it only prevents two animations for the same transform from fighting.
     private func cancelInFlightExitForNewPresentation() {
+        // Retarget the NSWindow animator itself. Resetting only the Core Animation children leaves
+        // an interrupted `panel.animator().alphaValue = 0` alive, which can turn a newly started
+        // Final capture transparent even though its internal state correctly says `listening`.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            surface.panel.animator().alphaValue = 1
+        }
+        surface.panel.alphaValue = 1
         let permanent = [surface.iconView.layer, surface.title, surface.detail, surface.mode,
                          surface.waveform, surface.arcTrack, surface.arcProgress,
                          surface.border, surface.apertureMask].compactMap { $0 }
@@ -970,6 +1012,11 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
         surface.bars.forEach { $0.removeAllAnimations() }
         surface.highlights.forEach { $0.removeAllAnimations() }
         CATransaction.commit()
+    }
+
+    /// Production-inert state probe used by the isolated External -> Final lifecycle regression.
+    func listeningPresentationIsVisibleForTesting() -> Bool {
+        listening && visible && surface.panel.isVisible && surface.panel.alphaValue >= 0.98
     }
 
     // MARK: - Palette / material
@@ -1033,8 +1080,16 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             setText(surface.detail, mode.presentationDetail)
             setText(surface.mode, mode.presentationBadge)
         } else if listening {
-            setText(surface.title, L("Listening"))
-            setText(surface.detail, L("Release to finish"))
+            if let selection = selectionEditingContext {
+                setText(surface.title, L("Edit Selection"))
+                setText(surface.detail, L("%d characters · %@",
+                                          selection.characterCount,
+                                          selection.applicationName))
+                setText(surface.mode, "● EDIT")
+            } else {
+                setText(surface.title, L("Listening"))
+                setText(surface.detail, L("Release to finish"))
+            }
         }
     }
 

@@ -140,6 +140,8 @@ final class ConfigWriterTests: XCTestCase {
           "streamingModel": "gpt-live-transcribe",
           "languageHints": ["zh", "en"],
           "cleanupProvider": "deepseek",
+          "selectionEditingEnabled": true,
+          "selectionEditProvider": "deepseek",
           "openAICleanupModel": "gpt-5.6-luna",
           "deepSeekCleanupModel": "deepseek-v4-flash",
           "autoInsert": true,

@@ -262,6 +262,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     }
     private var isHoldProgressActive = false
     private var isVoiceWaveformActive = false
+    private var voiceSelectionEditingContext: (characterCount: Int, applicationName: String)?
     private var voiceHistory = [VoiceVisualSample](repeating: .silence, count: 25)
     private var voicePitchBaselineLog2: CGFloat?
     private var voiceSmoothedPitchLog2: CGFloat?
@@ -755,6 +756,21 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Re-label the existing real-audio console as an edit instruction without navigating to a new
+    /// card. The waveform remains continuous, while the small typographic readouts flip in 0.2 s.
+    func showSelectionEditing(characterCount: Int, applicationName: String) {
+        onMain { [weak self] in
+            guard let self, self.enabled, self.isVoiceWaveformActive else { return }
+            self.voiceSelectionEditingContext = (max(0, characterCount), applicationName)
+            self.animateVoiceReadoutChange(self.surface.voiceHeaderLabel, to: "EDIT")
+            self.animateVoiceReadoutChange(
+                self.surface.voiceBrightnessLabel,
+                to: "\(max(0, characterCount)) CHARS"
+            )
+            self.updateVoiceReadouts(with: self.voiceHistory.last ?? .silence, force: true)
+        }
+    }
+
     func endContinuousAction(key: String) {
         endContinuousAction(key: key, awaitsNativePhase: false)
     }
@@ -859,7 +875,8 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                 self.present(self.idleFace(), animated: true, returningToIdle: true,
                              iconMotion: .settleToLayer)
                 return
-            case .transcribing, .polishing, .inserting, .inserted, .copied, .error:
+            case .transcribing, .polishing, .rewriting, .inserting, .inserted, .replaced,
+                 .copied, .error:
                 break
             }
             guard let stage = VoicePipelineVisualStage(phase) else { return }
@@ -2359,7 +2376,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                                 control2: CGPoint(x: right - 8, y: midY - 9 - offset))
                 }
             }
-        case .polishing:
+        case .polishing, .rewriting:
             return [-1.0, 1.0].map { direction in
                 path {
                     $0.move(to: CGPoint(x: left + 1, y: midY))
@@ -2380,7 +2397,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                                 control2: CGPoint(x: right - 4, y: midY + directionFor(offset) * 5))
                 }
             }
-        case .inserted:
+        case .inserted, .replaced:
             return [0.0, 2.2].map { offset in
                 path {
                     $0.move(to: CGPoint(x: left + 2, y: midY + offset))
@@ -4394,6 +4411,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         guard active != isVoiceWaveformActive else { return }
         isVoiceWaveformActive = active
         if active || immediate {
+            voiceSelectionEditingContext = nil
             voiceHistory = [VoiceVisualSample](repeating: .silence,
                                                count: surface.voiceBarLayers.count)
             voiceLevelNormalizer.reset()
@@ -4658,17 +4676,18 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         updateVoiceReadouts(with: newest)
     }
 
-    private func updateVoiceReadouts(with sample: VoiceVisualSample) {
+    private func updateVoiceReadouts(with sample: VoiceVisualSample, force: Bool = false) {
         guard isVoiceWaveformActive else { return }
         let elapsed = max(0, CACurrentMediaTime() - voiceStartedAt)
         let tick = Int(elapsed * 10)
-        guard tick != voiceLastReadoutTick else { return }
+        guard force || tick != voiceLastReadoutTick else { return }
         voiceLastReadoutTick = tick
 
-        surface.voiceHeaderLabel.stringValue = "VOICE"
+        surface.voiceHeaderLabel.stringValue = voiceSelectionEditingContext == nil ? "VOICE" : "EDIT"
         let minutes = Int(elapsed) / 60
         let seconds = elapsed - Double(minutes * 60)
-        let liveText = String(format: "● LIVE  %02d:%04.1f", minutes, seconds)
+        let livePrefix = voiceSelectionEditingContext == nil ? "● LIVE" : "● EDIT"
+        let liveText = String(format: "%@  %02d:%04.1f", livePrefix, minutes, seconds)
         surface.voiceLiveLabel.attributedStringValue = Self.voiceLiveAttributedText(
             liveText, font: surface.voiceLiveLabel.font,
             foregroundColor: .secondaryLabelColor
@@ -4682,9 +4701,26 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         } else {
             surface.voicePitchLabel.stringValue = "PITCH  ···"
         }
-        surface.voiceBrightnessLabel.stringValue = String(
-            format: "BRIGHT  %02d%%", Int((sample.brightness * 100).rounded())
-        )
+        if let selection = voiceSelectionEditingContext {
+            surface.voiceBrightnessLabel.stringValue = "\(selection.characterCount) CHARS"
+        } else {
+            surface.voiceBrightnessLabel.stringValue = String(
+                format: "BRIGHT  %02d%%", Int((sample.brightness * 100).rounded())
+            )
+        }
+    }
+
+    private func animateVoiceReadoutChange(_ label: NSTextField, to text: String) {
+        guard label.stringValue != text else { return }
+        label.stringValue = text
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let layer = label.layer else { return }
+        let flip = CAKeyframeAnimation(keyPath: "transform.rotation.x")
+        flip.values = [CGFloat.pi * 0.48, -CGFloat.pi * 0.025, 0]
+        flip.keyTimes = [0, 0.82, 1]
+        flip.duration = 0.20
+        flip.timingFunction = CAMediaTimingFunction(controlPoints: 0.18, 0.82, 0.16, 1)
+        layer.add(flip, forKey: "voiceSemanticFlip")
     }
 
     private func updateVoiceAmbient(with sample: VoiceVisualSample, animated: Bool) {

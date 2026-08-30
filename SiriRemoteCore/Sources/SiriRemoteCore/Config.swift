@@ -198,6 +198,13 @@ public struct Config: Equatable {
         case deepSeek = "deepseek"
     }
 
+    /// Selection editing always needs an instruction-following model. It is intentionally separate
+    /// from transcript cleanup: Live Voice may skip cleanup while still rewriting selected text.
+    public enum DictationSelectionEditProvider: String, Codable, CaseIterable {
+        case openAI = "openai"
+        case deepSeek = "deepseek"
+    }
+
     /// A canonical spelling plus common recognition variants. Canonical terms are sent as model
     /// keyword hints; aliases are also corrected deterministically on-device after transcription.
     public struct DictationTerm: Codable, Equatable {
@@ -235,9 +242,18 @@ public struct Config: Equatable {
         public var streamingModel: String
         public var languageHints: [String]
         public var cleanupProvider: DictationCleanupProvider
+        /// When enabled, a non-empty Accessibility selection changes Voice from insertion into a
+        /// strict select → speak instruction → replace transaction. Accessibility is authoritative;
+        /// custom editors that expose no AX selection may use a reversible Copy probe. A readable
+        /// but read-only selection can still be rewritten, with the completed result copied rather
+        /// than silently discarded.
+        public var selectionEditingEnabled: Bool
+        public var selectionEditProvider: DictationSelectionEditProvider
         public var openAICleanupModel: String
         public var deepSeekCleanupModel: String
         public var autoInsert: Bool
+        /// Deprecated compatibility field. Generated text is now always copied when direct
+        /// delivery fails, so decoded/constructed false values are intentionally normalised true.
         public var copyOnFailure: Bool
         public var restoreClipboardAfterInsert: Bool
         public var copyLastOnSideButtonDouble: Bool
@@ -264,6 +280,8 @@ public struct Config: Equatable {
             streamingModel: String = "gpt-live-transcribe",
             languageHints: [String] = ["zh", "en"],
             cleanupProvider: DictationCleanupProvider = .deepSeek,
+            selectionEditingEnabled: Bool = true,
+            selectionEditProvider: DictationSelectionEditProvider = .deepSeek,
             openAICleanupModel: String = "gpt-5.6-luna",
             deepSeekCleanupModel: String = "deepseek-v4-flash",
             autoInsert: Bool = true,
@@ -285,10 +303,13 @@ public struct Config: Equatable {
             self.streamingModel = streamingModel
             self.languageHints = languageHints
             self.cleanupProvider = cleanupProvider
+            self.selectionEditingEnabled = selectionEditingEnabled
+            self.selectionEditProvider = selectionEditProvider
             self.openAICleanupModel = openAICleanupModel
             self.deepSeekCleanupModel = deepSeekCleanupModel
             self.autoInsert = autoInsert
-            self.copyOnFailure = copyOnFailure
+            _ = copyOnFailure
+            self.copyOnFailure = true
             self.restoreClipboardAfterInsert = restoreClipboardAfterInsert
             self.copyLastOnSideButtonDouble = copyLastOnSideButtonDouble
             self.feedbackSoundsEnabled = feedbackSoundsEnabled
@@ -301,7 +322,8 @@ public struct Config: Equatable {
 
         private enum CodingKeys: String, CodingKey {
             case enabled, activeMode, outputMode, layerModes, finalModel, streamingModel, languageHints
-            case cleanupProvider, openAICleanupModel, deepSeekCleanupModel
+            case cleanupProvider, selectionEditingEnabled, selectionEditProvider
+            case openAICleanupModel, deepSeekCleanupModel
             case autoInsert, copyOnFailure, restoreClipboardAfterInsert
             case copyLastOnSideButtonDouble, feedbackSoundsEnabled, feedbackSoundVolume
             case pipelineOverlayEnabled, minimumRecordingSeconds, maxRecordingSeconds, dictionary
@@ -333,6 +355,12 @@ public struct Config: Equatable {
             cleanupProvider = try container.decodeIfPresent(
                 DictationCleanupProvider.self, forKey: .cleanupProvider
             ) ?? defaults.cleanupProvider
+            selectionEditingEnabled = try container.decodeIfPresent(
+                Bool.self, forKey: .selectionEditingEnabled
+            ) ?? defaults.selectionEditingEnabled
+            selectionEditProvider = try container.decodeIfPresent(
+                DictationSelectionEditProvider.self, forKey: .selectionEditProvider
+            ) ?? defaults.selectionEditProvider
             openAICleanupModel = try container.decodeIfPresent(
                 String.self, forKey: .openAICleanupModel
             ) ?? defaults.openAICleanupModel
@@ -341,8 +369,10 @@ public struct Config: Equatable {
             ) ?? defaults.deepSeekCleanupModel
             autoInsert = try container.decodeIfPresent(Bool.self, forKey: .autoInsert)
                 ?? defaults.autoInsert
-            copyOnFailure = try container.decodeIfPresent(Bool.self, forKey: .copyOnFailure)
-                ?? defaults.copyOnFailure
+            // Decode the legacy value to preserve schema/type validation, but clipboard recovery is
+            // now a non-optional loss-prevention invariant.
+            _ = try container.decodeIfPresent(Bool.self, forKey: .copyOnFailure)
+            copyOnFailure = true
             restoreClipboardAfterInsert = try container.decodeIfPresent(
                 Bool.self, forKey: .restoreClipboardAfterInsert
             ) ?? defaults.restoreClipboardAfterInsert

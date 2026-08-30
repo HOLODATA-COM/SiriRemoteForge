@@ -172,6 +172,8 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(defaults.settings.dictation.streamingModel, "gpt-live-transcribe")
         XCTAssertEqual(defaults.settings.dictation.languageHints, ["zh", "en"])
         XCTAssertEqual(defaults.settings.dictation.cleanupProvider, .deepSeek)
+        XCTAssertTrue(defaults.settings.dictation.selectionEditingEnabled)
+        XCTAssertEqual(defaults.settings.dictation.selectionEditProvider, .deepSeek)
         XCTAssertTrue(defaults.settings.dictation.copyLastOnSideButtonDouble)
         XCTAssertTrue(defaults.settings.dictation.feedbackSoundsEnabled)
         XCTAssertEqual(defaults.settings.dictation.feedbackSoundVolume, 0.55)
@@ -186,6 +188,7 @@ final class ConfigLoaderTests: XCTestCase {
             "layerModes": { "BASE": "existing", "L1": "final", "L2": "streaming" },
             "finalModel": "final-x", "streamingModel": "live-x",
             "languageHints": ["en", "zh"], "cleanupProvider": "deepseek",
+            "selectionEditingEnabled": false, "selectionEditProvider": "openai",
             "openAICleanupModel": "clean-a", "deepSeekCleanupModel": "clean-d",
             "autoInsert": false, "copyOnFailure": false,
             "restoreClipboardAfterInsert": false,
@@ -203,8 +206,10 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(voice.outputMode, .streaming)
         XCTAssertEqual(voice.streamingModel, "live-x")
         XCTAssertEqual(voice.cleanupProvider, .deepSeek)
+        XCTAssertFalse(voice.selectionEditingEnabled)
+        XCTAssertEqual(voice.selectionEditProvider, .openAI)
         XCTAssertFalse(voice.autoInsert)
-        XCTAssertFalse(voice.copyOnFailure)
+        XCTAssertTrue(voice.copyOnFailure, "failed delivery is always recovered to the clipboard")
         XCTAssertFalse(voice.restoreClipboardAfterInsert)
         XCTAssertFalse(voice.copyLastOnSideButtonDouble)
         XCTAssertFalse(voice.feedbackSoundsEnabled)
@@ -243,6 +248,8 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(voice.finalModel, "gpt-transcribe")
         XCTAssertEqual(voice.streamingModel, "gpt-live-transcribe")
         XCTAssertEqual(voice.cleanupProvider, .deepSeek)
+        XCTAssertTrue(voice.selectionEditingEnabled)
+        XCTAssertEqual(voice.selectionEditProvider, .deepSeek)
         XCTAssertEqual(voice.dictionary, [.init(term: "HyperVibe")])
         XCTAssertTrue(voice.layerModes.isEmpty)
         XCTAssertTrue(voice.feedbackSoundsEnabled)

@@ -53,6 +53,24 @@ public enum ConfigLoader {
                     )
                 }
             }
+            if dictation.selectionEditingEnabled {
+                switch dictation.selectionEditProvider {
+                case .openAI:
+                    guard !dictation.openAICleanupModel
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw ConfigError.validation(
+                            "settings.dictation.openAICleanupModel must not be empty"
+                        )
+                    }
+                case .deepSeek:
+                    guard !dictation.deepSeekCleanupModel
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw ConfigError.validation(
+                            "settings.dictation.deepSeekCleanupModel must not be empty"
+                        )
+                    }
+                }
+            }
         }
         guard (1...600).contains(dictation.maxRecordingSeconds) else {
             throw ConfigError.validation(

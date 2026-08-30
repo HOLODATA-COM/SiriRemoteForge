@@ -167,6 +167,133 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Deterministic lifecycle regression for the reported External -> Final failure. Begin a
+        // real listening presentation while Final's selector card is already inside its delayed
+        // CRT fade; the new waveform must cancel that exit and remain fully visible.
+        if CommandLine.arguments.contains("--test-voice-mode-return-to-final") {
+            NSApp.setActivationPolicy(.accessory)
+            let config = ConfigStore.loadConfig()
+            let hud = VoicePipelineHUDController(layers: config.settings.layers,
+                                                 icons: config.settings.icons, enabled: true)
+            voicePipelineHUD = hud
+            hud.showVoiceModeSwitch(.external)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                hud.showVoiceModeSwitch(.final)
+            }
+            // Final preview starts its fade at roughly 1.291 s. This intentionally lands inside
+            // the 52 ms window-alpha animation rather than testing only an easy idle transition.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.31) {
+                hud.beginListening()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.56) {
+                let passed = hud.listeningPresentationIsVisibleForTesting()
+                print("VOICE_MODE_RETURN_TO_FINAL_TEST \(passed ? "PASS" : "FAIL")")
+                exit(passed ? 0 : 1)
+            }
+            return
+        }
+
+        // Isolated visual QC for the global Mute+Side selector. It deliberately visits External
+        // twice so a missing third-state preview or an interrupted return animation is obvious.
+        // No remote, microphone, input hook or network resource is opened.
+        if CommandLine.arguments.contains("--test-voice-mode-hud")
+            || CommandLine.arguments.contains("--test-voice-mode-hud-long") {
+            NSApp.setActivationPolicy(.accessory)
+            let config = ConfigStore.loadConfig()
+            let hud = VoicePipelineHUDController(layers: config.settings.layers,
+                                                 icons: config.settings.icons, enabled: true)
+            voicePipelineHUD = hud
+            let modes: [Config.DictationMode] = [.external, .final, .streaming, .external]
+            let long = CommandLine.arguments.contains("--test-voice-mode-hud-long")
+            let count = long ? 24 : modes.count
+            let interval: TimeInterval = long ? 0.72 : 0.54
+            for index in 0..<count {
+                let mode = modes[index % modes.count]
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22 + Double(index) * interval) {
+                    hud.showVoiceModeSwitch(mode)
+                }
+            }
+            let exitAfter = 0.22 + Double(count) * interval + 1.1
+            DispatchQueue.main.asyncAfter(deadline: .now() + exitAfter) { exit(0) }
+            return
+        }
+
+        // Exact production rendering snapshots for the three Mute+Side selector destinations.
+        // This opens only the temporary HUD and writes its transparent 112×98 surface to PNG.
+        if let index = CommandLine.arguments.firstIndex(of: "--snapshot-voice-mode-hud"),
+           index + 2 < CommandLine.arguments.count {
+            NSApp.setActivationPolicy(.prohibited)
+            let config = ConfigStore.loadConfig()
+            let hud = VoicePipelineHUDController(layers: config.settings.layers,
+                                                 icons: config.settings.icons, enabled: true)
+            voicePipelineHUD = hud
+            let rawMode = CommandLine.arguments[index + 1]
+            let mode: Config.DictationMode
+            switch rawMode.lowercased() {
+            case "external": mode = .external
+            case "final": mode = .final
+            case "streaming", "live": mode = .streaming
+            default:
+                print("VOICE_MODE_SNAPSHOT FAIL expected external|final|streaming")
+                exit(2)
+            }
+            let destination = URL(fileURLWithPath: CommandLine.arguments[index + 2])
+            hud.showVoiceModeSwitch(mode)
+            // An optional fourth argument selects an exact animation time for visual QC. The
+            // default captures the settled symbol inside the production 980 ms dwell.
+            let captureAfter = index + 3 < CommandLine.arguments.count
+                ? (Double(CommandLine.arguments[index + 3]) ?? 0.68) : 0.68
+            DispatchQueue.main.asyncAfter(deadline: .now() + captureAfter) {
+                let passed = hud.writeSnapshotForTesting(to: destination)
+                print("VOICE_MODE_SNAPSHOT \(passed ? "PASS" : "FAIL") \(rawMode)")
+                exit(passed ? 0 : 1)
+            }
+            return
+        }
+
+        // Sample the real panel in the middle of its 160 ms exit. The same particle pose must
+        // remain a mode symbol until orderOut; snapping it back to a sphere makes this fail.
+        if CommandLine.arguments.contains("--test-voice-mode-icon-exit") {
+            NSApp.setActivationPolicy(.prohibited)
+            let config = ConfigStore.loadConfig()
+            let hud = VoicePipelineHUDController(layers: config.settings.layers,
+                                                 icons: config.settings.icons, enabled: true)
+            voicePipelineHUD = hud
+            hud.showVoiceModeSwitch(.final)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.04) {
+                let passed = hud.modePreviewExitIsCleanForTesting()
+                print("VOICE_MODE_ICON_EXIT_TEST \(passed ? "PASS" : "FAIL")")
+                exit(passed ? 0 : 1)
+            }
+            return
+        }
+
+        // Isolated terminal-state visual QC. Keeping Copied/Error on screen long enough for a
+        // pixel-level screenshot avoids relying on the production sub-second dwell, while still
+        // rendering the exact same controller and presentation vocabulary. No remote, microphone,
+        // network, or text-delivery target is opened.
+        if let stateIndex = CommandLine.arguments.firstIndex(of: "--test-voice-pipeline-hud-state"),
+           stateIndex + 1 < CommandLine.arguments.count {
+            NSApp.setActivationPolicy(.accessory)
+            let config = ConfigStore.loadConfig()
+            let hud = VoicePipelineHUDController(layers: config.settings.layers,
+                                                 icons: config.settings.icons, enabled: true)
+            voicePipelineHUD = hud
+            switch CommandLine.arguments[stateIndex + 1].lowercased() {
+            case "copied":
+                hud.showNativeDictationPhase(
+                    .copied, message: L("Insertion was unavailable · copied instead")
+                )
+            case "error":
+                hud.showNativeDictationPhase(.error, message: L("Text could not be delivered"))
+            default:
+                print("VOICE_PIPELINE_HUD_STATE_TEST FAIL expected copied|error")
+                exit(2)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12.0) { exit(0) }
+            return
+        }
+
         // Isolated visual QC for the temporary native-Voice capsule. It uses deterministic
         // acoustic features and every Final stage, but opens no microphone/HID/network resource.
         if CommandLine.arguments.contains("--test-voice-pipeline-hud")
@@ -175,7 +302,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             || CommandLine.arguments.contains("--test-voice-pipeline-hud-interrupt-long") {
             NSApp.setActivationPolicy(.accessory)
             let config = ConfigStore.loadConfig()
-            let hud = VoicePipelineHUDController(icons: config.settings.icons, enabled: true)
+            let hud = VoicePipelineHUDController(layers: config.settings.layers,
+                                                 icons: config.settings.icons, enabled: true)
             voicePipelineHUD = hud
             let long = CommandLine.arguments.contains("--test-voice-pipeline-hud-long")
             let interruptLong = CommandLine.arguments.contains(
@@ -1123,6 +1251,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         statusWidget = persistentStatus
         let pipelineHUD = VoicePipelineHUDController(
+            layers: config.settings.layers,
             icons: config.settings.icons,
             enabled: config.settings.dictation.pipelineOverlayEnabled
         )
@@ -1136,6 +1265,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let voiceFeedback = VoiceFeedbackSound()
         voiceFeedbackSound = voiceFeedback
         prepareVoiceDictionary(config.settings.dictation.dictionary)
+        dictation.configureHistoryProfiles(config.appProfiles)
         dictation.configure(
             config.settings.dictation,
             prewarmModes: config.settings.dictation.outputModesToPrewarm(
@@ -1259,17 +1389,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                           icons: reloaded.settings.icons,
                                           enabled: reloaded.settings.statusWidgetEnabled)
             self?.voicePipelineHUD?.configure(
+                layers: reloaded.settings.layers,
                 icons: reloaded.settings.icons,
                 enabled: reloaded.settings.dictation.pipelineOverlayEnabled
             )
-            // Live-tune: re-seed tuning from the config's `settings` so editing config.jsonc updates
-            // cursor feel / thresholds immediately. The @Published didSet applies it (→ applyTune)
-            // only when the values actually changed, so mapping-only edits don't churn.
-            self?.settingsModel?.tune = TuneSettings(seed: reloaded.settings)
-            self?.configureVoiceImmediately(
-                reloaded.settings.dictation,
-                layerIDs: reloaded.settings.layers.map(\.id)
-            )
+            self?.voiceDictation?.configureHistoryProfiles(reloaded.appProfiles)
+            // Live-tune: re-seed from genuine external edits, but never let the watcher for an
+            // earlier GUI save overwrite a newer debounced choice. Without this arbitration a
+            // quick External -> Final switch could show the Final confirmation, then route the
+            // next Side hold through External and open no Voice capsule at all.
+            let reloadedTune = TuneSettings(seed: reloaded.settings)
+            if self?.settingsModel?.shouldAcceptTuneReload(reloadedTune) != false {
+                self?.settingsModel?.tune = reloadedTune
+                self?.configureVoiceImmediately(
+                    reloaded.settings.dictation,
+                    layerIDs: reloaded.settings.layers.map(\.id)
+                )
+            } else {
+                print("♻️ ignored stale tuning reload while a newer GUI save is pending")
+            }
             print("♻️ siriRemote config reloaded")
         }
         print("🧩 siriRemote config engine active — \(ConfigStore.path.path)")
@@ -1280,9 +1418,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         touch.scrollScale = menuBarManager.scrollSpeed.scale
         // The outer-ring gesture is vertical in the base layer and horizontal in Layer 1. Listen to
         // Controller rather than only the sticky-layer HUD callback so momentary L1 holds work too.
-        engineController.onLayerChanged = { [weak touch, weak persistentStatus] layer in
+        engineController.onLayerChanged = {
+            [weak touch, weak persistentStatus, weak pipelineHUD] layer in
             touch?.circularScrollAxis = layer == "L1" ? .horizontal : .vertical
             persistentStatus?.setLayer(layer)
+            pipelineHUD?.setLayer(layer)
         }
         touch.onSwipe = { [weak self] direction in
             // Swipes are config-driven only. An unbound swipe does nothing — no native fallback,
@@ -1369,6 +1509,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         remoteInputHandler?.onNativeDictationEnded = { [weak dictation] in
             dictation?.finishListening()
         }
+        remoteInputHandler?.onNativeDictationMisconfigured = { [weak dictation] in
+            dictation?.reportConfigurationError(VoiceAPIError.missingOpenAIKeyMessage)
+        }
         remoteInputHandler?.shouldCopyLastNativeDictationOnDouble = { [weak model] in
             guard let settings = model?.tune.dictation else { return false }
             return settings.copyLastOnSideButtonDouble
@@ -1412,9 +1555,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             pipelineHUD?.suppressMeter(for: VoiceFeedbackSound.acousticExclusionDuration)
             voiceFeedback?.play(.began, volume: settings.feedbackSoundVolume)
         }
+        dictation.onSelectionEditingBegan = { [weak persistentStatus, weak pipelineHUD]
+            characterCount, applicationName in
+            persistentStatus?.showSelectionEditing(characterCount: characterCount,
+                                                   applicationName: applicationName)
+            pipelineHUD?.showSelectionEditing(characterCount: characterCount,
+                                              applicationName: applicationName)
+        }
         dictation.onListeningEnded = { [weak persistentStatus, weak pipelineHUD] key in
             persistentStatus?.endNativeContinuousAction(key: key)
             pipelineHUD?.endListening()
+        }
+        dictation.onShortCaptureDiscarded = { [weak pipelineHUD] in
+            pipelineHUD?.dismissShortCapture()
         }
         dictation.onCaptureStopped = { [weak model, weak voiceFeedback] in
             guard let settings = model?.tune.dictation,
@@ -1608,6 +1761,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         remoteInputHandler?.spacesModeWindow = t.spacesModeWindow
         findCursorEnabled = t.findCursorEnabled
         Loc.shared.apply(configValue: t.interfaceLanguage)
+        // Visual-QC only: render the installed App in another supported language without writing
+        // the user's config.jsonc or legacy defaults. Production launches never pass this flag.
+        if let languageIndex = CommandLine.arguments.firstIndex(of: "--test-interface-language"),
+           languageIndex + 1 < CommandLine.arguments.count,
+           let language = AppLanguage(rawValue: CommandLine.arguments[languageIndex + 1]) {
+            Loc.shared.choose(language)
+        }
         let automaticUpdateChecks = t.automaticUpdateChecksEnabled
         let automaticUpdateDownloads = t.automaticallyDownloadUpdatesEnabled
         Task { @MainActor [weak updateManager] in

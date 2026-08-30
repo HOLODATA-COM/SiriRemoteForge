@@ -117,6 +117,9 @@ enum ConfigStore {
           "voice.mode.streaming": "bolt.horizontal.circle.fill",
           "voice.transcribing": "waveform.badge.magnifyingglass",
           "voice.polishing": "wand.and.stars",
+          "voice.selection.listening": "text.cursor",
+          "voice.selection.rewriting": "square.and.pencil",
+          "voice.selection.replaced": "checkmark.seal.fill",
           "voice.inserting": "text.cursor",
           "voice.inserted": "checkmark.circle.fill",
           "voice.copied": "doc.on.doc.fill",
@@ -157,10 +160,12 @@ enum ConfigStore {
           "streamingModel": "gpt-live-transcribe",
           "languageHints": ["zh", "en"],
           "cleanupProvider": "deepseek", // none | openai | deepseek; Final mode only
+          "selectionEditingEnabled": true, // AX-first selection rewrite; guarded Copy probe for custom editors
+          "selectionEditProvider": "deepseek", // openai | deepseek
           "openAICleanupModel": "gpt-5.6-luna",
           "deepSeekCleanupModel": "deepseek-v4-flash",
           "autoInsert": true,
-          "copyOnFailure": true,
+          "copyOnFailure": true, // compatibility field; failed delivery is always copied
           "restoreClipboardAfterInsert": true,
           "copyLastOnSideButtonDouble": true,
           "feedbackSoundsEnabled": true,
@@ -169,7 +174,9 @@ enum ConfigStore {
           "minimumRecordingSeconds": 1,
           "maxRecordingSeconds": 120,
           "dictionary": [
-            { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] }
+            { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] },
+            { "term": "layer", "aliases": [] },
+            { "term": "core", "aliases": [] }
           ]
         },
         "holdThreshold": 0.5,        // seconds held → stage 1 (".hold"). Fires on RELEASE (release-to-select).

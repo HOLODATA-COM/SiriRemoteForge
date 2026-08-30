@@ -207,6 +207,9 @@ class RemoteInputHandler {
     var onNativeDictationBegan: (() -> Void)?
     var onNativeDictationCancelled: (() -> Void)?
     var onNativeDictationEnded: (() -> Void)?
+    /// Fired only after a misconfigured native hold crosses the normal 200 ms promotion boundary.
+    /// Quick Side taps remain ordinary taps and never flash an error surface.
+    var onNativeDictationMisconfigured: (() -> Void)?
     var shouldCopyLastNativeDictationOnDouble: (() -> Bool)?
     var onCopyLastNativeDictation: (() -> Bool)?
     /// Hold Mute and tap the side button to advance the global Voice mode. The App owns the actual
@@ -1001,6 +1004,7 @@ class RemoteInputHandler {
         )
         let useNative = nativeRoute == .native
         let suppressExternalForBusyNative = nativeRoute == .busyConsumed
+        let showNativeConfigurationError = admission == .misconfigured
         let usesNativeRoute = useNative || suppressExternalForBusyNative
         if pressed, nativeRoute != .ordinary {
             let keys = configuredPushToTalkKeys ?? ""
@@ -1040,6 +1044,9 @@ class RemoteInputHandler {
                 } else if suppressExternalForBusyNative {
                     self.nativeBusyHoldPending.remove(buttonName)
                     self.nativeBusyHoldOpen.insert(buttonName)
+                    if showNativeConfigurationError {
+                        self.onNativeDictationMisconfigured?()
+                    }
                 } else {
                     self.pushToTalkOpen[buttonName] = keys
                     Keys.synthesize(keys)
@@ -1780,7 +1787,7 @@ class RemoteInputHandler {
     ) -> NativeDictationPressRoute {
         switch admission {
         case .accepted: return .native
-        case .busy: return .busyConsumed
+        case .busy, .misconfigured: return .busyConsumed
         case .unavailable: return configuredPushToTalk ? .external : .ordinary
         }
     }

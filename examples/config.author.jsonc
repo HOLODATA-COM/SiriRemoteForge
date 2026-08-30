@@ -53,6 +53,9 @@
       "voice.mode.streaming": "bolt.horizontal.circle.fill",
       "voice.transcribing": "waveform.badge.magnifyingglass",
       "voice.polishing": "wand.and.stars",
+      "voice.selection.listening": "text.cursor",
+      "voice.selection.rewriting": "square.and.pencil",
+      "voice.selection.replaced": "checkmark.seal.fill",
       "voice.inserting": "text.cursor",
       "voice.inserted": "checkmark.circle.fill",
       "voice.copied": "doc.on.doc.fill",
@@ -90,10 +93,12 @@
       "streamingModel": "gpt-live-transcribe",
       "languageHints": ["zh", "en"],
       "cleanupProvider": "deepseek",
+      "selectionEditingEnabled": true,
+      "selectionEditProvider": "deepseek",
       "openAICleanupModel": "gpt-5.6-luna",
       "deepSeekCleanupModel": "deepseek-v4-flash",
       "autoInsert": true,
-      "copyOnFailure": true,
+      "copyOnFailure": true, // compatibility field; failed delivery is always copied
       "restoreClipboardAfterInsert": true,
       "copyLastOnSideButtonDouble": true,
       // One mirrored chime when native Voice begins and another after capture has stopped.
@@ -105,7 +110,9 @@
       "dictionary": [
         { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] },
         { "term": "hypergraph", "aliases": ["hyper graph"] },
-        { "term": "skill", "aliases": [] }
+        { "term": "skill", "aliases": [] },
+        { "term": "layer", "aliases": [] },
+        { "term": "core", "aliases": [] }
       ]
     },
     // Circular scroll (iPod wheel): circle a finger on the OUTER ring to scroll.

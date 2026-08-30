@@ -324,11 +324,19 @@ after a short pre-roll so source probing does not continue to consume work durin
 Audio conversion is allocation-light, HTTP/TLS and the Realtime WebSocket are pre-warmed before the
 next press, and credentials are cached before the input hot path.
 
-Text delivery first targets the control that was focused when the press began. HyperVibe tries a
-direct Accessibility insertion, then a synthetic paste, and finally copies the result if the target
-cannot accept text. It refuses to inject into secure text fields. If a previous result did not land
+Text delivery first targets the control that was focused when the press began. Ordinary Final Voice
+uses a guarded compatibility paste, then direct Accessibility and Unicode paths, and finally copies
+the result if the target cannot accept text. It refuses to inject into secure text fields. If a previous result did not land
 where expected, double-clicking the side button copies that previous dictation again. A custom
 dictionary accepts canonical terms plus recognition aliases and works in both modes.
+
+When editable text is already selected, Voice becomes a selection editor: hold Side, speak the
+transformation, and release to replace the selection once. This route is deliberately Accessibility-
+only. HyperVibe never simulates Copy to discover the selection and never inserts the spoken
+instruction. Editable selections are replaced in place. Readable terminal/scrollback selections can
+still be rewritten, but their result is clipboard-only; any failed replacement likewise copies the
+completed rewrite while leaving the source untouched. It works with both Final and Live
+transcription; the edit model is configured independently from transcript cleanup.
 
 Native Voice gives immediate press/release confirmation with a matched pair of short sound cues.
 The stop sound starts only after microphone capture has ended, so it cannot become part of the
@@ -353,10 +361,12 @@ the signed-in user. Every non-secret behavior remains JSON-controlled under `set
   "streamingModel": "gpt-live-transcribe",
   "languageHints": ["zh", "en"],
   "cleanupProvider": "deepseek", // none | openai | deepseek; Final mode only
+  "selectionEditingEnabled": true, // selected text + spoken instruction → strict AX replacement
+  "selectionEditProvider": "deepseek", // openai | deepseek
   "openAICleanupModel": "gpt-5.6-luna",
   "deepSeekCleanupModel": "deepseek-v4-flash",
   "autoInsert": true,
-  "copyOnFailure": true,
+  "copyOnFailure": true, // compatibility field; failed delivery is always copied
   "restoreClipboardAfterInsert": true,
   "copyLastOnSideButtonDouble": true,
   "feedbackSoundsEnabled": true,
@@ -376,9 +386,10 @@ side-button input. Both floating surfaces animate the selection; External leaves
 `button.siri` action untouched and never opens the temporary Voice capsule.
 
 The temporary Voice capsule is independent from the always-on Layer status widget. In Final and
-Live it appears only after the native hold threshold, carries the real acoustic waveform into Final
-mode's Transcribing → Polishing → Inserted pipeline, remembers its display-relative drag position,
-and automatically returns to an available screen if a monitor disappears. Set
+Live it appears only after the native hold threshold and carries the real acoustic waveform into
+Final mode's Transcribing → Polishing → Inserted pipeline, or an edit's Transcribing → Rewriting
+Selection → Selection Updated pipeline. It remembers its display-relative drag position and automatically
+returns to an available screen if a monitor disappears. Set
 `pipelineOverlayEnabled` to `false` to hide it without changing dictation or the persistent widget.
 
 The Voice settings page exposes the same fields, credential connection tests, and the most recent
@@ -656,6 +667,9 @@ Layer and non-binding UI symbols are JSON-owned too:
     "voice.listening": "waveform.circle.fill",
     "voice.transcribing": "waveform.badge.magnifyingglass",
     "voice.polishing": "wand.and.stars",
+    "voice.selection.listening": "text.cursor",
+    "voice.selection.rewriting": "square.and.pencil",
+    "voice.selection.replaced": "checkmark.seal.fill",
     "voice.inserting": "text.cursor",
     "voice.inserted": "checkmark.circle.fill",
     "voice.copied": "doc.on.doc.fill",

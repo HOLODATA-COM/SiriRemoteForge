@@ -25,18 +25,22 @@ enum VoiceDictationPhase: String, Equatable {
     case listening
     case transcribing
     case polishing
+    case rewriting
     case inserting
     case inserted
+    case replaced
     case copied
     case error
 }
 
-/// Admission must distinguish a temporarily occupied native pipeline from a disabled/unavailable
-/// one. Falling through to an external push-to-talk binding while native Voice is merely finishing
-/// would launch two dictation systems for the same physical hold.
+/// Admission must distinguish a temporarily occupied native pipeline, a user-fixable
+/// misconfiguration, and a disabled/unavailable route. Busy and misconfigured native Voice both
+/// consume the promoted hold; only the latter presents an actionable error after the existing
+/// accidental-touch threshold.
 enum VoiceDictationAdmission: Equatable {
     case accepted
     case busy
+    case misconfigured
     case unavailable
 }
 
@@ -174,11 +178,33 @@ final class VoiceDictationCoordinator {
     }
 
     private final class Session {
+        enum Purpose {
+            case resolvingSelection
+            case dictation
+            /// `canReplace` is frozen at the press edge. A readable terminal/scrollback selection
+            /// is still useful input to the edit model, but its result is clipboard-only.
+            case selectionEdit(original: String, canReplace: Bool)
+            case unsupportedSelection(message: String)
+
+            var isSelectionEdit: Bool {
+                if case .selectionEdit = self { return true }
+                return false
+            }
+
+            var isDictation: Bool {
+                if case .dictation = self { return true }
+                return false
+            }
+        }
+
         let id: UUID
         let handled: Controller.HandledAction
         let settings: Config.DictationSettings
+        let promptContext: VoicePromptContext?
         var target: VoiceTextTarget?
         var targetTask: Task<VoiceTextTarget, Never>?
+        var purpose: Purpose
+        var purposeApplied = false
         let pressNanoseconds: UInt64
         let capture: VoiceAudioCaptureSession
 
@@ -193,18 +219,21 @@ final class VoiceDictationCoordinator {
         var deltaFlushWork: DispatchWorkItem?
         var streamingDeliveryTask: Task<Void, Never>?
         var streamingInsertionBlocked = false
-        var streamingBlockedOutcome: VoiceTextDeliveryOutcome?
         var realtimeEventsDrained = false
         var realtimeDrainContinuation: CheckedContinuation<Void, Never>?
         var metrics = VoiceLatencyMetrics.empty
 
         init(id: UUID, handled: Controller.HandledAction,
              settings: Config.DictationSettings, target: VoiceTextTarget?,
-             pressNanoseconds: UInt64, capture: VoiceAudioCaptureSession) {
+             promptContext: VoicePromptContext?, pressNanoseconds: UInt64,
+             capture: VoiceAudioCaptureSession) {
             self.id = id
             self.handled = handled
             self.settings = settings
             self.target = target
+            self.promptContext = promptContext
+            self.purpose = settings.selectionEditingEnabled
+                ? .resolvingSelection : .dictation
             self.pressNanoseconds = pressNanoseconds
             self.capture = capture
         }
@@ -214,7 +243,12 @@ final class VoiceDictationCoordinator {
 
     var onMeteringChanged: ((Bool) -> Void)?
     var onListeningBegan: ((Controller.HandledAction) -> Void)?
+    var onSelectionEditingBegan: ((_ characterCount: Int, _ applicationName: String) -> Void)?
     var onListeningEnded: ((String) -> Void)?
+    /// Fires only after the stopped PCM buffer proves the turn was shorter than its configured
+    /// minimum. Visual clients use this distinction to reverse the listening entrance rather than
+    /// presenting a processing or failure state.
+    var onShortCaptureDiscarded: (() -> Void)?
     /// Runs after the capture queue has accepted the physical release and closed the PCM stream.
     /// The paired stop sound is deliberately attached here so laptop-speaker feedback cannot be
     /// appended to the utterance it acknowledges.
@@ -224,6 +258,7 @@ final class VoiceDictationCoordinator {
     private let transcription = VoiceTranscriptionClient()
     private let processor = VoiceTextProcessor()
     private let deliverer = VoiceTextDeliverer()
+    private let correctionMonitor = VoiceCorrectionMonitor()
     private var active: Session?
     private var lastTranscript = ""
     /// Keep one prepared socket for each route the configured layers can actually select. There
@@ -234,12 +269,19 @@ final class VoiceDictationCoordinator {
     private var prewarmFailureCounts: [Config.DictationOutputMode: Int] = [:]
     private var blockedPrewarmModes = Set<Config.DictationOutputMode>()
     private var prewarmRetryWork: [Config.DictationOutputMode: DispatchWorkItem] = [:]
+    private var historyAppProfiles: [String: String] = [:]
 
     init(runtime: VoiceRuntimeModel) {
         self.runtime = runtime
     }
 
     var isActive: Bool { active != nil }
+
+    /// Uses only explicit bundle mappings. The config's "default" mode is routing fallback, not a
+    /// shared writing-style group: otherwise every unmapped app would contaminate one history.
+    func configureHistoryProfiles(_ appProfiles: [String: String]) {
+        historyAppProfiles = appProfiles.filter { $0.key != "default" }
+    }
 
     /// Keeps one no-audio transcription socket warm for every selectable output mode. This removes
     /// DNS/TLS/session setup from the physical press path even immediately after a Layer switch;
@@ -272,6 +314,14 @@ final class VoiceDictationCoordinator {
                 await processor.prewarm(finalSettings, force: forceReconnect)
             }
         }
+        if let selectionSettings = desired.values.first,
+           selectionSettings.selectionEditingEnabled,
+           Self.selectionCredentialIsCached(selectionSettings) {
+            Task { [processor] in
+                await processor.prewarmSelectionEditing(selectionSettings,
+                                                         force: forceReconnect)
+            }
+        }
         guard active == nil else { return }
         if configuredPrewarmSettings.isEmpty {
             discardAllPreparedRealtime()
@@ -296,10 +346,18 @@ final class VoiceDictationCoordinator {
         // before opening audio when Voice cannot possibly establish its mandatory transcription
         // session, so a missing key never creates a phantom hold or microphone flash.
         guard active == nil else { return .busy }
-        guard VoiceCredentialStore.cachedContains(.openAI) else { return .unavailable }
+        guard VoiceCredentialStore.cachedContains(.openAI) else { return .misconfigured }
+        correctionMonitor.cancel()
 
         let pressedAt = DispatchTime.now().uptimeNanoseconds
         let targetSeed = deliverer.captureTargetSeed()
+        let promptContext = targetSeed.map {
+            VoicePromptContext.resolve(
+                bundleIdentifier: $0.bundleIdentifier,
+                applicationName: $0.applicationName,
+                appProfiles: historyAppProfiles
+            )
+        }
         let id = UUID()
         let capture = VoiceAudioCaptureSession(
             minimumDuration: settings.minimumRecordingSeconds,
@@ -316,7 +374,12 @@ final class VoiceDictationCoordinator {
             }
         )
         let session = Session(id: id, handled: handled, settings: settings,
-                              target: nil, pressNanoseconds: pressedAt, capture: capture)
+                              target: nil, promptContext: promptContext,
+                              pressNanoseconds: pressedAt, capture: capture)
+        // A temporarily unavailable frontmost target is not a reason to discard a whole Voice
+        // turn. Final delivery already has a lossless no-target route: generate the text and copy
+        // it. Selection detection, when possible, is resolved asynchronously below.
+        if targetSeed == nil { session.purpose = .dictation }
         active = session
         // Start the pinned microphone demand and ring reader immediately. The feeder callback is
         // asynchronous, so CoreAudio wakes in parallel with target resolution and networking.
@@ -324,22 +387,31 @@ final class VoiceDictationCoordinator {
         onMeteringChanged?(true)
         capture.start()
         if let targetSeed {
-            let targetTask = Task.detached(priority: .userInitiated) {
-                VoiceTextDeliverer.resolveTarget(targetSeed)
+            let detectSelection = settings.selectionEditingEnabled
+            let targetTask = Task { [deliverer] in
+                await deliverer.resolveTargetForVoice(
+                    targetSeed, detectSelection: detectSelection
+                )
             }
             session.targetTask = targetTask
             Task { [weak self, weak session] in
                 let target = await targetTask.value
                 guard let self, let session, self.active?.id == session.id else { return }
-                session.target = target
-                if session.promoted, session.settings.outputMode == .streaming,
-                   !session.pendingStreamingDelta.isEmpty {
-                    self.flushStreamingDelta(session)
-                }
+                self.targetDidResolve(target, for: session)
             }
         }
         transition(.priming, message: L("Preparing voice input…"))
         return .accepted
+    }
+
+    /// Surface a configuration failure that prevented a Voice turn from being admitted. Keeping
+    /// this on the coordinator's normal phase channel means the floating surfaces and the
+    /// Settings "Last-run" row always report the same actionable message.
+    func reportConfigurationError(_ message: String) {
+        guard active == nil else { return }
+        runtime.livePreview = ""
+        transition(.error, message: message)
+        scheduleIdle(after: 2.2)
     }
 
     /// Called at +200 ms only if the physical button is still down.
@@ -349,11 +421,6 @@ final class VoiceDictationCoordinator {
         // Quick taps and accidental sub-minimum holds stay entirely inside the local capture ring.
         // Once enough real PCM exists, checkout remains constant-time and the unbounded stream
         // drains its buffered prefix into the already warm socket without losing the first word.
-        if session.minimumDurationReached { activateRealtime(session) }
-        if session.settings.outputMode == .final,
-           session.settings.cleanupProvider != .none {
-            Task { [processor] in await processor.prewarm(session.settings) }
-        }
         if session.settings.feedbackSoundsEnabled {
             session.capture.excludeAcousticFeedback(
                 for: VoiceFeedbackSound.acousticExclusionDuration
@@ -361,10 +428,108 @@ final class VoiceDictationCoordinator {
         }
         transition(.listening, message: L("Listening · speak now"))
         onListeningBegan?(session.handled)
-        if session.settings.outputMode == .streaming,
-           !session.pendingStreamingDelta.isEmpty {
-            flushStreamingDelta(session)
+        applyResolvedPurpose(session)
+    }
+
+    private func targetDidResolve(_ target: VoiceTextTarget, for session: Session) {
+        guard active?.id == session.id else { return }
+        session.target = target
+        guard session.settings.selectionEditingEnabled else {
+            session.purpose = .dictation
+            if session.promoted { applyResolvedPurpose(session) }
+            return
         }
+        switch target.selectionState {
+        case .none:
+            session.purpose = .dictation
+        case .editable(let text):
+            session.purpose = .selectionEdit(original: text, canReplace: true)
+        case .readOnly(let text):
+            if let text, !text.isEmpty {
+                session.purpose = .selectionEdit(original: text, canReplace: false)
+            } else {
+                session.purpose = .unsupportedSelection(
+                    message: L("This read-only editor does not expose selected text through Accessibility")
+                )
+            }
+        case .secure:
+            session.purpose = .unsupportedSelection(
+                message: L("Secure fields cannot be read or changed")
+            )
+        }
+        if session.promoted { applyResolvedPurpose(session) }
+    }
+
+    private func applyResolvedPurpose(_ session: Session) {
+        guard active?.id == session.id, session.promoted else { return }
+        if case .resolvingSelection = session.purpose { return }
+        if session.purposeApplied {
+            if session.minimumDurationReached { activateRealtime(session) }
+            if session.purpose.isDictation, session.settings.outputMode == .streaming,
+               !session.pendingStreamingDelta.isEmpty {
+                flushStreamingDelta(session)
+            }
+            return
+        }
+        session.purposeApplied = true
+        switch session.purpose {
+        case .resolvingSelection:
+            assertionFailure("resolved purpose cannot return to pending")
+        case .unsupportedSelection(let message):
+            rejectVisibleSession(session, message: message)
+        case .dictation:
+            if session.settings.outputMode == .final,
+               session.settings.cleanupProvider != .none {
+                Task { [processor] in await processor.prewarm(session.settings) }
+            }
+            if session.minimumDurationReached { activateRealtime(session) }
+            if session.settings.outputMode == .streaming,
+               !session.pendingStreamingDelta.isEmpty {
+                flushStreamingDelta(session)
+            }
+        case .selectionEdit(let original, let canReplace):
+            guard Self.selectionCredentialIsCached(session.settings) else {
+                let message = session.settings.selectionEditProvider == .deepSeek
+                    ? L("DeepSeek API Key is missing · add and test it in Settings → Voice")
+                    : VoiceAPIError.missingOpenAIKeyMessage
+                rejectVisibleSession(session, message: message)
+                return
+            }
+            onSelectionEditingBegan?(original.count,
+                                     session.target?.applicationName ?? L("Current App"))
+            transition(
+                .listening,
+                message: canReplace && session.settings.autoInsert
+                    ? L("Editing selection · speak an instruction")
+                    : L("Read-only selection · the rewrite will be copied")
+            )
+            Task { [processor] in await processor.prewarmSelectionEditing(session.settings) }
+            if session.minimumDurationReached { activateRealtime(session) }
+        }
+    }
+
+    /// A promoted turn has already opened both Voice surfaces and played the start cue. Close that
+    /// same turn as a paired failure, but never wait for key-up and never reinterpret it as dictation.
+    private func rejectVisibleSession(_ session: Session, message: String) {
+        guard active?.id == session.id else { return }
+        active = nil
+        releaseRealtimeDrainWaiter(session)
+        session.deltaFlushWork?.cancel()
+        session.targetTask?.cancel()
+        session.streamingDeliveryTask?.cancel()
+        session.realtimeTask?.cancel()
+        session.pumpTask?.cancel()
+        onMeteringChanged?(false)
+        onListeningEnded?(session.handled.key)
+        runtime.livePreview = ""
+        transition(.error, message: message)
+        scheduleIdle(after: 2.2)
+        Task { [weak self] in
+            _ = await session.capture.stop()
+            if let live = try? await session.realtimeTask?.value { await live.cancel() }
+            await MainActor.run { self?.onCaptureStopped?() }
+        }
+        startPrewarmIfNeeded()
     }
 
     private func activateRealtime(_ session: Session) {
@@ -388,8 +553,9 @@ final class VoiceDictationCoordinator {
             onDelta: { [weak self] delta in
                 await MainActor.run { self?.receiveDelta(delta, id: id) }
             },
-            onPreview: { [weak self] preview in
-                guard settings.outputMode == .streaming else { return }
+            onPreview: { [weak self, weak session] preview in
+                guard settings.outputMode == .streaming || session?.purpose.isSelectionEdit == true
+                else { return }
                 await MainActor.run { self?.receivePreview(preview, id: id) }
             },
             onDrained: { [weak self] in
@@ -397,7 +563,7 @@ final class VoiceDictationCoordinator {
             },
             // Final mode needs the first delta only for latency diagnostics; it does not stream text
             // to the editor, so skipping later UI hops leaves the receive loop maximally responsive.
-            forwardAllDeltas: settings.outputMode == .streaming
+            forwardAllDeltas: settings.outputMode == .streaming || session.purpose.isSelectionEdit
         )
         if realtimeAlreadyDrained { markRealtimeEventsDrained(id: id) }
         session.realtimeTask = realtimeTask
@@ -443,14 +609,18 @@ final class VoiceDictationCoordinator {
         guard let session = active, session.promoted, session.releasedNanoseconds == nil else { return }
         session.releasedNanoseconds = DispatchTime.now().uptimeNanoseconds
         session.deltaFlushWork?.cancel()
-        if session.settings.outputMode == .streaming { flushStreamingDelta(session) }
+        if session.settings.outputMode == .streaming, session.purpose.isDictation,
+           session.minimumDurationReached {
+            flushStreamingDelta(session)
+        }
         onMeteringChanged?(false)
         onListeningEnded?(session.handled.key)
-        if session.settings.outputMode == .streaming {
+        if session.settings.outputMode == .streaming, session.purpose.isDictation,
+           session.minimumDurationReached {
             // The editor already contains the live result. Return the compact widget straight to
             // its Layer while the authoritative suffix is reconciled invisibly in the background.
-            // Below the configured minimum-duration gate no text has reached the editor; the same
-            // immediate idle transition gives the short turn its requested clean close.
+            // A sub-minimum turn stays visible for the distinct reverse-particle dismissal once
+            // the stopped PCM buffer has confirmed that it is actually short.
             transition(.idle, message: "")
         }
 
@@ -488,8 +658,20 @@ final class VoiceDictationCoordinator {
             return
         }
         session.minimumDurationReached = true
+        if case .resolvingSelection = session.purpose,
+           let targetTask = session.targetTask {
+            targetDidResolve(await targetTask.value, for: session)
+        }
+        guard active?.id == session.id else { return }
         activateRealtime(session)
-        if let phase = VoiceDictationPresentationPolicy.releasePhase(
+        if session.purpose.isSelectionEdit {
+            transition(.transcribing, message: L("Understanding edit instruction…"))
+        } else if session.settings.outputMode == .streaming {
+            // A boundary release can stop the PCM queue just before its minimum-duration callback
+            // reaches the main actor. Once the captured duration confirms validity, preserve the
+            // normal Streaming behavior and close without showing a processing state.
+            transition(.idle, message: "")
+        } else if let phase = VoiceDictationPresentationPolicy.releasePhase(
             for: session.settings.outputMode
         ) {
             transition(phase, message: L("Finishing transcript…"))
@@ -517,13 +699,21 @@ final class VoiceDictationCoordinator {
             return
         }
 
+        if case .selectionEdit(let original, let canReplace) = session.purpose {
+            await completeSelectionEdit(session, selectedText: original,
+                                        instruction: transcript, canReplace: canReplace)
+            return
+        }
+
         let finalText: String
         var warning: String?
         if session.settings.outputMode == .final {
             transition(.polishing, message: session.settings.cleanupProvider == .none
                        ? L("Applying dictionary…") : L("Polishing transcript…"))
             let cleanupStart = DispatchTime.now().uptimeNanoseconds
-            let result = await processor.processFinal(transcript, settings: session.settings)
+            let result = await processor.processFinal(
+                transcript, settings: session.settings, context: session.promptContext
+            )
             let cleanupEnd = DispatchTime.now().uptimeNanoseconds
             session.metrics.cleanupMilliseconds = Self.milliseconds(cleanupStart, cleanupEnd)
             finalText = result.text
@@ -560,6 +750,19 @@ final class VoiceDictationCoordinator {
         }
         let insertionEnd = DispatchTime.now().uptimeNanoseconds
         session.metrics.insertionMilliseconds = Self.milliseconds(insertionStart, insertionEnd)
+        if outcome.wasDelivered {
+            let recordID = processor.remember(
+                sourceTranscript: transcript, finalText: historyText,
+                context: session.promptContext
+            )
+            if outcome == .inserted, let recordID,
+               let target = session.target, let context = session.promptContext {
+                correctionMonitor.observe(target: target, insertedText: historyText) {
+                    [processor] correctedText in
+                    processor.learnCorrection(correctedText, recordID: recordID, context: context)
+                }
+            }
+        }
         runtime.lastMetrics = session.metrics
         runtime.livePreview = ""
         active = nil
@@ -578,6 +781,79 @@ final class VoiceDictationCoordinator {
             let message = warning.map { "\(baseMessage) · \($0)" } ?? baseMessage
             transition(phase, message: message)
             scheduleIdle(after: outcome.wasDelivered ? 1.0 : 2.2)
+        }
+        startPrewarmIfNeeded()
+    }
+
+    private func completeSelectionEdit(_ session: Session, selectedText: String,
+                                       instruction: String, canReplace: Bool) async {
+        guard active?.id == session.id, let target = session.target else { return }
+        transition(.rewriting, message: L("Applying your instruction to the selection…"))
+        let processingStart = DispatchTime.now().uptimeNanoseconds
+        let replacement: String
+        do {
+            replacement = try await processor.rewriteSelection(
+                selectedText, instruction: instruction, settings: session.settings
+            )
+        } catch {
+            session.metrics.cleanupMilliseconds = Self.milliseconds(
+                processingStart, DispatchTime.now().uptimeNanoseconds
+            )
+            await fail(session, error: error)
+            return
+        }
+        session.metrics.cleanupMilliseconds = Self.milliseconds(
+            processingStart, DispatchTime.now().uptimeNanoseconds
+        )
+        guard active?.id == session.id else { return }
+
+        let insertionStart = DispatchTime.now().uptimeNanoseconds
+        let outcome: VoiceSelectionReplacementOutcome?
+        if session.settings.autoInsert, canReplace {
+            outcome = await deliverer.replaceSelection(
+                replacement, in: target,
+                restoreClipboardAfterPaste: session.settings.restoreClipboardAfterInsert
+            )
+        } else {
+            outcome = nil
+        }
+        session.metrics.insertionMilliseconds = Self.milliseconds(
+            insertionStart, DispatchTime.now().uptimeNanoseconds
+        )
+        runtime.lastMetrics = session.metrics
+        runtime.livePreview = ""
+        active = nil
+
+        let clean = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        lastTranscript = clean
+        runtime.hasLastTranscript = !clean.isEmpty
+
+        if outcome == .replaced {
+            transition(.replaced, message: L("Selected text updated"))
+            scheduleIdle(after: 1.0)
+        } else {
+            let reason: String
+            if !session.settings.autoInsert {
+                reason = L("Automatic insertion is off")
+            } else if !canReplace {
+                reason = L("The selected text is read-only")
+            } else {
+                switch outcome {
+                case .focusChanged?: reason = L("Focus changed before replacement")
+                case .selectionChanged?: reason = L("Selection changed while editing")
+                case .readOnly?: reason = L("The selected text became read-only")
+                case .secureField?: reason = L("The target became a secure field")
+                case .accessibilityUnavailable?: reason = L("Accessibility replacement failed")
+                case .replaced?, nil: reason = L("Selection replacement was unavailable")
+                }
+            }
+            if deliverer.copy(replacement) == .copied {
+                transition(.copied, message: L("%@ · rewrite copied", reason))
+                scheduleIdle(after: 1.4)
+            } else {
+                transition(.error, message: L("%@ · clipboard copy failed", reason))
+                scheduleIdle(after: 2.2)
+            }
         }
         startPrewarmIfNeeded()
     }
@@ -635,13 +911,11 @@ final class VoiceDictationCoordinator {
         if let delivery = session.streamingDeliveryTask { await delivery.value }
         guard session.settings.autoInsert, let target = session.target else {
             let clean = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
-            return session.settings.copyOnFailure ? deliverer.copy(clean) : .unavailable
+            return deliverer.copy(clean)
         }
         guard !session.streamingInsertionBlocked else {
-            let blocked = session.streamingBlockedOutcome ?? .unavailable
-            if blocked == .secureField { return .secureField }
             let clean = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
-            return session.settings.copyOnFailure ? deliverer.copy(clean) : blocked
+            return deliverer.copy(clean)
         }
         let alreadyInserted = session.insertedStreamingText
         if let suffix = VoiceStreamingReconciliation.missingSuffix(
@@ -650,18 +924,13 @@ final class VoiceDictationCoordinator {
             if suffix.isEmpty { return .inserted }
             let outcome = await deliverer.insertStreamingDelta(suffix, into: target)
             if outcome == .inserted { session.insertedStreamingText += suffix }
-            if outcome == .secureField { return .secureField }
             return outcome == .inserted ? .inserted
-                : (session.settings.copyOnFailure
-                   ? deliverer.copy(finalText.trimmingCharacters(in: .whitespacesAndNewlines))
-                   : outcome)
+                : deliverer.copy(finalText.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         // A service-side revision cannot be safely patched over text that is already in the user's
         // editor. Put the authoritative committed turn on the clipboard instead of duplicating it.
-        if await deliverer.targetRejection(target) == .secureField { return .secureField }
-        return session.settings.copyOnFailure
-            ? deliverer.copy(finalText.trimmingCharacters(in: .whitespacesAndNewlines))
-            : .unavailable
+        _ = await deliverer.targetRejection(target)
+        return deliverer.copy(finalText.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private func receiveDelta(_ delta: String, id: UUID) {
@@ -672,7 +941,8 @@ final class VoiceDictationCoordinator {
             )
         }
         runtime.livePreview += delta
-        guard session.settings.outputMode == .streaming,
+        guard session.purpose.isDictation,
+              session.settings.outputMode == .streaming,
               session.settings.autoInsert, !session.streamingInsertionBlocked else { return }
         session.pendingStreamingDelta += delta
         guard session.promoted, session.deltaFlushWork == nil else { return }
@@ -725,6 +995,7 @@ final class VoiceDictationCoordinator {
     private func flushStreamingDelta(_ session: Session) {
         guard active?.id == session.id, session.promoted,
               session.minimumDurationReached,
+              session.purpose.isDictation,
               !session.pendingStreamingDelta.isEmpty,
               session.settings.autoInsert,
               !session.streamingInsertionBlocked,
@@ -743,7 +1014,6 @@ final class VoiceDictationCoordinator {
                 session.insertedStreamingText += delta
             } else {
                 session.streamingInsertionBlocked = true
-                session.streamingBlockedOutcome = outcome
             }
         }
     }
@@ -761,11 +1031,7 @@ final class VoiceDictationCoordinator {
               !session.minimumDurationReached else { return }
         session.minimumDurationReached = true
         guard session.promoted else { return }
-        activateRealtime(session)
-        if session.settings.outputMode == .streaming,
-           !session.pendingStreamingDelta.isEmpty {
-            flushStreamingDelta(session)
-        }
+        applyResolvedPurpose(session)
     }
 
     private func markSessionReady(id: UUID, timestamp: UInt64) {
@@ -794,7 +1060,7 @@ final class VoiceDictationCoordinator {
         runtime.livePreview = ""
         active = nil
         onMeteringChanged?(false)
-        transition(.error, message: error.localizedDescription)
+        transition(.error, message: VoiceAPIError.userFacingMessage(for: error))
         scheduleIdle(after: 2.2)
         startPrewarmIfNeeded()
     }
@@ -812,6 +1078,7 @@ final class VoiceDictationCoordinator {
         runtime.livePreview = ""
         active = nil
         onMeteringChanged?(false)
+        onShortCaptureDiscarded?()
         transition(.idle, message: "")
         startPrewarmIfNeeded()
     }
@@ -958,7 +1225,7 @@ final class VoiceDictationCoordinator {
         guard case .service(let message) = voiceError else { return false }
         let value = message.lowercased()
         return ["http 401", "http 403", "invalid_api_key", "incorrect api key",
-                "authentication", "unauthorized", "forbidden", "model_not_found",
+                "api key is invalid", "authentication", "unauthorized", "forbidden", "model_not_found",
                 "unsupported model", "invalid model", "does not exist", "permission denied"]
             .contains { value.contains($0) }
     }
@@ -975,6 +1242,13 @@ final class VoiceDictationCoordinator {
     private static func cleanupCredentialIsCached(_ settings: Config.DictationSettings) -> Bool {
         switch settings.cleanupProvider {
         case .none: return true
+        case .openAI: return VoiceCredentialStore.cachedContains(.openAI)
+        case .deepSeek: return VoiceCredentialStore.cachedContains(.deepSeek)
+        }
+    }
+
+    private static func selectionCredentialIsCached(_ settings: Config.DictationSettings) -> Bool {
+        switch settings.selectionEditProvider {
         case .openAI: return VoiceCredentialStore.cachedContains(.openAI)
         case .deepSeek: return VoiceCredentialStore.cachedContains(.deepSeek)
         }
