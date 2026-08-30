@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f4ef">
+  <meta name="description" content="HyperVibe is a working public macOS control layer built around Siri Remote: pointer, accelerated ring scrolling, staged gestures, App x Layer context, visible state, voice, and agent-editable configuration.">
+  <meta property="og:title" content="HyperVibe - complete one-handed control for macOS">
+  <meta property="og:description" content="A public proof of concept for pointing, scrolling, clicking, dragging, contextual commands, and voice from one compact controller.">
+  <title>HyperVibe - complete one-handed control for macOS</title>
+  <link rel="icon" type="image/png" href="../media/hypervibe-icon.png">
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body class="apple-review-page">
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="#top" aria-label="HyperVibe home">
+        <img src="../media/hypervibe-icon.png" alt="" width="256" height="256">
+        <span>HyperVibe</span>
+      </a>
+      <nav aria-label="Page sections">
+        <a href="#control">Control</a>
+        <a href="#gestures">Gestures</a>
+        <a href="#layers">Context</a>
+        <a href="#voice">Voice</a>
+        <a href="#config">Agents</a>
+        <a href="#request">API request</a>
+      </nav>
+      <a class="header-download" href="https://github.com/HOLODATA-COM/SiriRemoteForge" target="_blank" rel="noreferrer">View project <span>↗</span></a>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero section-pad">
+      <div class="shell hero-grid">
+        <div class="hero-copy">
+          <p class="overline"><i></i> PUBLIC macOS PROOF OF CONCEPT</p>
+          <h1>HyperVibe</h1>
+          <p class="hero-title">Complete one-handed Mac control, <span class="nowrap">built around Siri Remote.</span></p>
+          <p class="hero-summary">Voice no longer ends at the prompt. Point, scroll, click, drag, switch context, and see exactly what happened without returning to a mouse or trackpad.</p>
+
+          <ol class="hero-signals" aria-label="Core input capabilities">
+            <li class="is-active" data-hero-signal><b>01</b><span>Touch pointer</span><em>VELOCITY</em></li>
+            <li data-hero-signal><b>02</b><span>Ring scrolling</span><em>ACCELERATED</em></li>
+            <li data-hero-signal><b>03</b><span>App x Layer</span><em>CONTEXTUAL</em></li>
+            <li data-hero-signal><b>04</b><span>Remote voice</span><em>LIVE AUDIO</em></li>
+          </ol>
+
+          <div class="hero-actions">
+            <a class="button button-dark" href="#control">Explore the input system</a>
+            <a class="button button-light" href="https://github.com/HOLODATA-COM/SiriRemoteForge" target="_blank" rel="noreferrer">Source and evidence ↗</a>
+          </div>
+        </div>
+
+        <div class="hero-product" data-loop-root>
+          <figure class="app-window app-window-layout">
+            <img src="../media/current-layout.png" alt="Current HyperVibe Layout view with the remote, app profiles, layers, and input mappings" width="2424" height="1848">
+          </figure>
+          <figure class="hero-widget native-video-card">
+            <video muted loop playsinline autoplay preload="auto" data-native-loop aria-label="Current HyperVibe status widget action loop">
+              <source src="../media/current-status-semantic.mp4" type="video/mp4">
+            </video>
+          </figure>
+          <div class="hero-live-tag"><i></i><span>NATIVE APP CAPTURE</span><b>NO WEB REBUILD</b></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="gap section-pad" id="agents">
+      <div class="shell">
+        <header class="section-heading narrow-heading">
+          <p class="overline">THE MISSING HALF</p>
+          <h2>Voice can start the work.<br>It cannot finish the interaction.</h2>
+          <p>Voice-first coding and remote presentation tools still break when the user needs to navigate, scroll, select, drag, change apps, or verify a result. The workflow falls back to the laptop.</p>
+        </header>
+
+        <div class="input-comparison">
+          <article class="comparison-side comparison-muted">
+            <div class="comparison-label"><i></i>VOICE-ONLY</div>
+            <h3>The input chain stops after speech.</h3>
+            <ul>
+              <li><span>Voice</span><b>YES</b></li>
+              <li><span>Pointer</span><b>—</b></li>
+              <li><span>Scrolling</span><b>—</b></li>
+              <li><span>Click / drag</span><b>—</b></li>
+              <li><span>App context</span><b>—</b></li>
+            </ul>
+          </article>
+          <div class="comparison-bridge" aria-hidden="true"><span>＋</span></div>
+          <article class="comparison-side comparison-live">
+            <div class="comparison-label"><i></i>HYPERVIBE</div>
+            <h3>Voice becomes one part of complete input.</h3>
+            <ul>
+              <li><span>Voice</span><b>LIVE</b></li>
+              <li><span>Pointer</span><b>XY</b></li>
+              <li><span>Scrolling</span><b>2 AXES</b></li>
+              <li><span>Click / drag</span><b>DIRECT</b></li>
+              <li><span>App x Layer</span><b>CONTEXT</b></li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="scenario-pair">
+          <article>
+            <p>VOICE-ASSISTED CODING</p>
+            <h3>Go from prompt to review without reaching for another device.</h3>
+            <div class="scenario-flow"><span>Speak</span><i>→</i><span>Scroll</span><i>→</i><span>Select</span><i>→</i><span>Refine</span></div>
+          </article>
+          <article>
+            <p>STANDING PRESENTATION</p>
+            <h3>Stay in the room as a speaker, not behind the laptop.</h3>
+            <div class="scenario-flow"><span>Present</span><i>→</i><span>Switch context</span><i>→</i><span>Drive the demo</span><i>→</i><span>Continue</span></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="control section-pad" id="control">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">TOUCH + RING</p><h2>One surface.<br>Two motion languages.</h2></div>
+          <p>The inner surface drives the pointer. The outer ring scrolls according to rotation speed. Pointer and ring use independent acceleration curves that can also share a locked shape.</p>
+        </header>
+
+        <div class="control-lab" data-loop-root data-control-mode="pointer">
+          <div class="remote-column">
+            <div class="remote-visual">
+              <img src="../media/current-remote.png" alt="Current Siri Remote view used by HyperVibe" width="390" height="1000">
+              <span class="remote-ring" aria-hidden="true"><i></i></span>
+              <span class="remote-touch" aria-hidden="true"></span>
+              <span class="remote-press" aria-hidden="true"></span>
+            </div>
+            <div class="mode-controls" role="tablist" aria-label="Choose an input demonstration">
+              <button class="is-active" type="button" data-control-button="pointer">Pointer</button>
+              <button type="button" data-control-button="ring">Ring</button>
+              <button type="button" data-control-button="drag">Drag</button>
+            </div>
+          </div>
+
+          <div class="signal-monitor" aria-label="Animated input signal demonstration">
+            <div class="monitor-head"><span><i></i>INPUT TRACE</span><b data-control-label>POINTER · XY</b></div>
+            <div class="monitor-canvas">
+              <div class="monitor-grid" aria-hidden="true"></div>
+              <div class="pointer-trace" aria-hidden="true"><i></i><b></b><span></span></div>
+              <div class="scroll-trace" aria-hidden="true">
+                <span>01&nbsp;&nbsp;Build completed</span><span>02&nbsp;&nbsp;Review changes</span><span>03&nbsp;&nbsp;Open preview</span><span>04&nbsp;&nbsp;Inspect result</span><span>05&nbsp;&nbsp;Continue prompt</span><span>06&nbsp;&nbsp;Ship iteration</span>
+              </div>
+              <div class="drag-trace" aria-hidden="true"><span>SELECT</span><i></i><b>DRAG</b></div>
+            </div>
+            <footer><span data-monitor-primary>FINGER VELOCITY</span><i></i><span data-monitor-secondary>POINTER GAIN</span></footer>
+          </div>
+        </div>
+
+        <div class="control-facts">
+          <article><span>01</span><h3>Pointer movement</h3><p>Speed, steadiness dead zone, and pointer acceleration are tuned independently. Slow motion stays precise; a fast flick crosses distance.</p></article>
+          <article><span>02</span><h3>Outer-ring scroll</h3><p>Rotate like an iPod click wheel. Context can switch the same motion between vertical and horizontal scrolling without losing the speed model.</p></article>
+          <article><span>03</span><h3>Press-and-drag</h3><p>Hold the center for 0.50 seconds to enter sticky drag. Visual progress begins at 0.18 seconds and release resolves immediately.</p></article>
+          <article><span>04</span><h3>Stable clicks</h3><p>Contact rise, movement cancellation, freeze, and deduplication prevent cursor drift and repeated execution around a physical click.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="gestures section-pad dark-section" id="gestures">
+      <div class="shell">
+        <header class="section-heading split-heading dark-heading">
+          <div><p class="overline">GESTURE GRAMMAR</p><h2>One control.<br>More than one intent.</h2></div>
+          <p>Tap, Double, Triple, and up to three Hold stages share one resolver. A common action is delayed only when that specific input actually needs multi-tap disambiguation.</p>
+        </header>
+
+        <div class="gesture-layout">
+          <figure class="semantic-film native-video-card">
+            <video muted loop playsinline autoplay preload="auto" data-native-loop aria-label="Current status widget animation for app recognition, tap, double tap, triple tap, and hold">
+              <source src="../media/current-status-semantic.mp4" type="video/mp4">
+            </video>
+            <figcaption><b>PRODUCTION COMPONENT</b><span>App → Tap → Double → Triple → Hold</span></figcaption>
+          </figure>
+          <div class="gesture-map">
+            <div class="gesture-head"><span>PHYSICAL INPUT</span><b>RESOLVED ACTION</b></div>
+            <div><span><i>1×</i> Tap</span><b>Base action without unnecessary delay</b></div>
+            <div><span><i>2×</i> Double tap</span><b>Confirmed on the second press</b></div>
+            <div><span><i>3×</i> Triple tap</span><b>Only the deepest count executes</b></div>
+            <div><span><i>H1</i> Hold stage one</span><b>Release selects the visible stage</b></div>
+            <div><span><i>H2</i> Hold stage two</span><b>Continue holding to advance</b></div>
+            <div><span><i>H3</i> Hold stage three</span><b>Grace after the final stage can cancel</b></div>
+          </div>
+        </div>
+
+        <div class="gesture-example">
+          <p>BROWSER BACK · TAP THEN HOLD</p>
+          <ol><li><b>0.00 s</b><span>Delete</span></li><li><b>0.18 s</b><span>Progress visible</span></li><li><b>0.50 s</b><span>Back</span></li><li><b>1.00 s</b><span>Close Window</span></li><li><b>1.70 s</b><span>Quit App</span></li></ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="layers section-pad" id="layers">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">APP x LAYER</p><h2>The current app and current layer<br>resolve the action together.</h2></div>
+          <p>Browser, terminal, and Music can each carry distinct mappings. Every app can also compose with as many as ten named and colored layers; only the configured layers enter the loop.</p>
+        </header>
+
+        <div class="layers-showcase">
+          <figure class="app-window layout-full">
+            <img src="../media/current-layout.png" alt="Current HyperVibe Layout page showing the App hub, Layer selector, and complete mapping list" width="2424" height="1848">
+          </figure>
+          <aside class="layer-side">
+            <figure class="native-video-card layer-status-film">
+              <video muted loop playsinline autoplay preload="auto" data-native-loop aria-label="Current Layer 1, Layer 2, and Layer 3 transition">
+                <source src="../media/current-status-layers.mp4" type="video/mp4">
+              </video>
+            </figure>
+            <div class="layer-cycle-list"><span><i class="green"></i>Layer 1</span><b>↓</b><span><i class="blue"></i>Layer 2</span><b>↓</b><span><i class="purple"></i>Layer 3</span><b>↺</b></div>
+            <ul>
+              <li>Custom name and color per layer</li>
+              <li>Layer x App resolution</li>
+              <li>Unbound actions inherit safely</li>
+              <li>JSONC changes apply live</li>
+            </ul>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section class="feedback section-pad soft-section" id="feedback">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">VISIBLE STATE</p><h2>Every action receives an accurate visual echo.</h2></div>
+          <p>Every clip below comes from the current installed app, not a web reconstruction. Each one loops independently and preserves the native timing and state transition.</p>
+        </header>
+
+        <div class="feedback-grid">
+          <article class="feedback-card feedback-wide">
+            <div><p>SYSTEM CONTROL</p><h3>Symbols follow real volume and brightness</h3><span>One continuous symbol family updates with measured state instead of replaying an entrance for every step.</span></div>
+            <figure class="native-video-card"><video muted loop playsinline autoplay preload="auto" data-native-loop><source src="../media/current-status-controls.mp4" type="video/mp4"></video></figure>
+          </article>
+          <article class="feedback-card">
+            <div><p>MUTE STATE</p><h3>Mute and Unmute are measured outcomes</h3><span>The slash enters or leaves through native symbol semantics, with one presentation per physical action.</span></div>
+            <figure class="native-video-card"><video muted loop playsinline autoplay preload="auto" data-native-loop><source src="../media/current-status-mute.mp4" type="video/mp4"></video></figure>
+          </article>
+          <article class="feedback-card">
+            <div><p>APP WHEEL</p><h3>Hold progress becomes the destination</h3><span>Feedback begins at 0.18 seconds; the configured App Wheel stage resolves at 0.50 seconds.</span></div>
+            <figure class="native-video-card"><video muted loop playsinline autoplay preload="auto" data-native-loop><source src="../media/current-status-app-wheel.mp4" type="video/mp4"></video></figure>
+          </article>
+          <article class="feedback-card square-feedback">
+            <div><p>HOLD HUD</p><h3>Large release-to-select HUD</h3><span>The liquid surface, stage face, and final action use the same monotonic clock.</span></div>
+            <figure class="native-video-card square-film"><video muted loop playsinline autoplay preload="auto" data-native-loop><source src="../media/current-back-hud.mp4" type="video/mp4"></video></figure>
+          </article>
+          <article class="feedback-card square-feedback">
+            <div><p>LAYER HUD</p><h3>Layer state across every display</h3><span>Each screen owns its window, and saved placement migrates safely when a display disappears.</span></div>
+            <figure class="native-video-card square-film"><video muted loop playsinline autoplay preload="auto" data-native-loop><source src="../media/current-layer-hud.mp4" type="video/mp4"></video></figure>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="voice section-pad dark-section" id="voice">
+      <div class="shell voice-grid">
+        <div class="voice-copy">
+          <p class="overline">EXPERIMENTAL REMOTE VOICE</p>
+          <h2>Hold the side button and sound becomes the interface.</h2>
+          <p>Twenty-five live bars retain loudness history. Color simultaneously carries relative pitch, confidence, and spectral brightness. Release folds the console directly back into the current Layer.</p>
+          <div class="voice-source-flow">
+            <span><i>01</i>Siri Remote voice</span><b>PRIORITY</b><span><i>02</i>Mac built-in mic</span><b>FALLBACK</b><span><i>03</i>Any input client</span>
+          </div>
+          <p class="voice-note">The remote path is a research/interop feature. It uses an undocumented Bluetooth voice path and separately obtained Apple diagnostics tooling; it is not a supported CoreAudio accessory.</p>
+        </div>
+        <figure class="voice-film native-video-card">
+          <video muted loop playsinline autoplay preload="auto" data-native-loop aria-label="Current live voice level, pitch, confidence, and spectral brightness animation">
+            <source src="../media/current-status-voice.mp4" type="video/mp4">
+          </video>
+          <figcaption><span><i></i>LIVE PCM FEATURES</span><b>PITCH · LEVEL · BRIGHTNESS</b></figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="curves section-pad" id="curves">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">TUNING</p><h2>Two curves.<br>Two distinct forms of control.</h2></div>
+          <p>Drag three points directly in the native GUI. Pointer and ring can remain independent or lock their curve shape. Every adjustment auto-saves to the same JSONC source of truth.</p>
+        </header>
+
+        <div class="curve-showcase">
+          <figure class="app-window tuning-window"><img src="../media/current-tuning.png" alt="Current HyperVibe Tuning view showing independent pointer and ring acceleration curves" width="2304" height="1848"></figure>
+          <div class="curve-specs" data-loop-root>
+            <article class="curve-spec curve-blue">
+              <header><span>POINTER</span><b>curve 1.00</b></header>
+              <svg viewBox="0 0 360 150" role="img" aria-label="Pointer acceleration curve">
+                <path class="curve-grid" d="M10 125H350M10 85H350M10 45H350M70 15V135M180 15V135M290 15V135"></path>
+                <path class="curve-line" d="M18 124 C84 124 112 78 180 54 C214 42 244 42 342 42"></path>
+                <circle class="curve-dot" cx="18" cy="124" r="6"></circle><circle class="curve-dot" cx="180" cy="54" r="6"></circle><circle class="curve-dot" cx="342" cy="42" r="6"></circle>
+                <circle class="curve-runner" cx="18" cy="124" r="5"></circle>
+              </svg>
+              <footer><span>0.14× @ 0.007</span><b>→</b><span>6.00× @ 0.060</span></footer>
+            </article>
+            <article class="curve-spec curve-orange">
+              <header><span>RING SCROLL</span><b>curve 0.81</b></header>
+              <svg viewBox="0 0 360 150" role="img" aria-label="Ring-scroll acceleration curve">
+                <path class="curve-grid" d="M10 125H350M10 85H350M10 45H350M70 15V135M180 15V135M290 15V135"></path>
+                <path class="curve-line" d="M18 122 C76 122 108 82 178 60 C222 46 250 46 342 46"></path>
+                <circle class="curve-dot" cx="18" cy="122" r="6"></circle><circle class="curve-dot" cx="178" cy="60" r="6"></circle><circle class="curve-dot" cx="342" cy="46" r="6"></circle>
+                <circle class="curve-runner" cx="18" cy="122" r="5"></circle>
+              </svg>
+              <footer><span>1.12× @ 0.010</span><b>→</b><span>5.00× @ 0.070</span></footer>
+            </article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="config section-pad soft-section" id="config">
+      <div class="shell config-grid">
+        <div class="config-copy">
+          <p class="overline">ONE SOURCE OF TRUTH</p>
+          <h2>The GUI can save it.<br>An agent can edit it.</h2>
+          <p>The native interface and <code>~/.config/siriremote/config.jsonc</code> write the same model. GUI changes auto-save; file changes hot-reload without restarting the app or reconnecting the remote.</p>
+          <ul>
+            <li><i></i>App profiles and inheritance</li>
+            <li><i></i>1-10 named, colored Layers</li>
+            <li><i></i>Tap / Double / Triple / Hold 1-3</li>
+            <li><i></i>Every HUD and visibility switch</li>
+            <li><i></i>Complete pointer and scroll curves</li>
+            <li><i></i>One interface for GUI, script, and agent</li>
+          </ul>
+        </div>
+        <div class="code-panel">
+          <header><span><i></i><i></i><i></i></span><b>config.jsonc</b><em>HOT RELOAD</em></header>
+          <pre><code><span class="comment">// Browser: Delete -> Back -> Close -> Quit</span>
+<span class="key">"button.menu"</span>: {
+  <span class="key">"action"</span>: <span class="string">"keystroke"</span>, <span class="key">"keys"</span>: <span class="string">"delete"</span>
+},
+<span class="key">"button.menu.taphold"</span>: {
+  <span class="key">"action"</span>: <span class="string">"keystroke"</span>, <span class="key">"keys"</span>: <span class="string">"cmd+["</span>,
+  <span class="key">"after"</span>: <span class="number">0.5</span>
+},
+<span class="key">"button.menu.taphold2"</span>: {
+  <span class="key">"action"</span>: <span class="string">"closeWindow"</span>, <span class="key">"after"</span>: <span class="number">1.0</span>
+},
+<span class="key">"button.menu.taphold3"</span>: {
+  <span class="key">"action"</span>: <span class="string">"applescript"</span>, <span class="key">"after"</span>: <span class="number">1.7</span>
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="engineering section-pad">
+      <div class="shell">
+        <header class="section-heading narrow-heading"><p class="overline">SYSTEM BEHAVIOR</p><h2>A long-running input system, not a staged mockup.</h2></header>
+        <div class="engineering-grid">
+          <article><span>01</span><h3>Multi-display state</h3><p>Each display receives an independent HUD; saved widget placement moves safely when a screen disappears.</p></article>
+          <article><span>02</span><h3>One hold clock</h3><p>Progress, stage artwork, and key-up selection share one monotonic sample so the picture cannot drift from the action.</p></article>
+          <article><span>03</span><h3>Input deduplication</h3><p>Mirrored callbacks from the remote's multiple HID interfaces collapse into one physical state transition.</p></article>
+          <article><span>04</span><h3>Safe focus following</h3><p>Focus follows the pointer only for windows that substantially fill a display, avoiding accidental reordering across overlaps.</p></article>
+          <article><span>05</span><h3>Physical shortcut recording</h3><p>Layout records real keys, including left/right modifiers, Fn, F1-F20, and modifier-only chords.</p></article>
+          <article><span>06</span><h3>Install and recovery</h3><p>A native installer, one live System Check, and visible permission health make the direct-distribution path recoverable.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="feedback section-pad soft-section api-request-section" id="request">
+      <div class="shell">
+        <header class="section-heading split-heading">
+          <div><p class="overline">THE PLATFORM REQUEST</p><h2>The interaction works.<br>The complete supported macOS path is still missing.</h2></div>
+          <p>Apple already documents Siri Remote game input for Apple TV. HyperVibe is public, non-confidential evidence for two narrower macOS enhancement requests, filed separately so input and audio can reach the right framework owners.</p>
+        </header>
+        <div class="feedback-grid">
+          <article class="feedback-card api-request-card">
+            <div><p>01 · INPUT</p><h3>Public Siri Remote input profile</h3><span>Documented, timestamped button, ring, and touch-surface data with connection state and a clear foreground/background routing model.</span></div>
+            <div class="gesture-map"><div><span><i>XY</i> Touch surface</span><b>SUPPORTED</b></div><div><span><i>↻</i> Click ring</span><b>SUPPORTED</b></div><div><span><i>↓</i> Button edges</span><b>SUPPORTED</b></div></div>
+          </article>
+          <article class="feedback-card api-request-card">
+            <div><p>02 · AUDIO</p><h3>Permissioned remote microphone route</h3><span>A standard CoreAudio input or documented accessory stream with push-to-talk lifecycle, route changes, interruptions, and recording indication.</span></div>
+            <div class="gesture-map"><div><span><i>●</i> User permission</span><b>EXPLICIT</b></div><div><span><i>≈</i> Audio stream</span><b>DOCUMENTED</b></div><div><span><i>↔</i> Fallback state</span><b>RELIABLE</b></div></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="download-section section-pad">
+      <div class="shell download-panel">
+        <div><p class="overline">OPEN SOURCE · macOS 13+</p><h2>Review the working proof of concept.</h2><p>Source, beta releases, native installer, release notes, and technical limitations are public.</p></div>
+        <div class="download-actions"><a class="button button-white" href="https://github.com/HOLODATA-COM/SiriRemoteForge/releases" target="_blank" rel="noreferrer">Releases ↗</a><a class="button button-outline" href="https://github.com/HOLODATA-COM/SiriRemoteForge" target="_blank" rel="noreferrer">GitHub ↗</a></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell">
+      <a class="brand" href="#top"><img src="../media/hypervibe-icon.png" alt="" width="256" height="256"><span>HyperVibe</span></a>
+      <p>Independent public research project · Not affiliated with Apple</p>
+      <div><a href="../">中文</a><a href="https://github.com/HOLODATA-COM/SiriRemoteForge" target="_blank" rel="noreferrer">Source ↗</a><a href="https://github.com/HOLODATA-COM/SiriRemoteForge/releases" target="_blank" rel="noreferrer">Releases ↗</a></div>
+    </div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
+  <script src="../app.js"></script>
+</body>
+</html>
