@@ -226,9 +226,10 @@ enum ThinkingOrbEntranceMath {
 }
 
 final class ThinkingOrbCanvasView: NSView {
-    private static let orbSize = 74.0
-    // Keep the enlarged sphere on the exact previous visual centre (x: 56, y: 59) and inside the
-    // existing compact window. Only its diameter changes; the status word and window do not move.
+    private static let orbSize = 84.0
+    private static let particleRadiusScale = 1.28
+    // Leave a stable gap above the status word while giving a voiced outer-ring hit enough room
+    // to travel beyond the authored sphere without clipping against the expanded window.
     private static let orbOriginY = 22.0
     private static let orbCenter = orbSize / 2
     private static let transitionDuration = 0.54
@@ -769,7 +770,7 @@ final class ThinkingOrbCanvasView: NSView {
             context.setStrokeColor(inkColor(tint: resolvedTint, white: white,
                                             dark: dark,
                                             alpha: min(1, max(0, line.alpha))).cgColor)
-            context.setLineWidth(line.width)
+            context.setLineWidth(line.width * 1.08)
             context.beginPath()
             context.move(to: CGPoint(x: line.x1, y: line.y1))
             context.addLine(to: CGPoint(x: line.x2, y: line.y2))
@@ -780,8 +781,9 @@ final class ThinkingOrbCanvasView: NSView {
             context.setFillColor(inkColor(tint: resolvedTint, white: white,
                                           dark: dark,
                                           alpha: min(1, max(0, dot.alpha))).cgColor)
-            context.fillEllipse(in: CGRect(x: dot.x - dot.r, y: dot.y - dot.r,
-                                           width: dot.r * 2, height: dot.r * 2))
+            let radius = dot.r * Self.particleRadiusScale
+            context.fillEllipse(in: CGRect(x: dot.x - radius, y: dot.y - radius,
+                                           width: radius * 2, height: radius * 2))
         }
         context.restoreGState()
     }

@@ -2932,6 +2932,19 @@ feel that evening; if any of these is wrong, this is where to look:
   candidates only and never installed. The user's on-disk Voice mode was preserved as `external`
   (pipeline overlay remains enabled), so the next physical validation must explicitly select Final
   once before holding Side. Nothing was pushed.
+- local.45 improves the particle orb's legibility without adding a boundary or changing its motion
+  vocabulary. The authored sphere grows from 74 to 84 points, each rendered particle receives an
+  additional 1.28 radius multiplier (about 38% larger than the previous 74-point rendering after
+  the engine's size scaling), connective strokes are 1.08x thicker, and the transparent HUD surface
+  grows from 112x98 to 120x112 so energetic outer-ring hits are not clipped. Verification: Core
+  **134/134**, native Voice **112/112**, optimized App compilation, `git diff --check`, candidate and
+  installed executable SHA-256 equality
+  (`dfff85add1a6f35b7b6f07a687cc55f596ac887358c66f3fb184874f090e978b`), and deep/strict
+  codesigning all pass. The installed App is build 45 / `1.0.0`, signed by
+  `siriRemote Local Signing`, with one no-argument process from `/Applications/HyperVibe.app`
+  (PID 95221 at handoff time). local.44 is recoverable at
+  `/private/tmp/hypervibe-before-local45.6hSr1y/HyperVibe.app`; the public beta.7 release was not
+  replaced and these local readability changes were not pushed.
 
 ## Maintenance rules
 

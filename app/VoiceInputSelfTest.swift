@@ -501,9 +501,9 @@ enum VoiceInputSelfTest {
                },
                "orb interruption blend is bounded and monotonic")
         let orbOrigin = VoicePipelineScreenPlacement.defaultOrigin(
-            windowSize: CGSize(width: 112, height: 98), visibleFrame: displayFrames[0]
+            windowSize: CGSize(width: 120, height: 112), visibleFrame: displayFrames[0]
         )
-        expect(abs(orbOrigin.x - 664) < 0.001 && abs(orbOrigin.y - 48) < 0.001,
+        expect(abs(orbOrigin.x - 660) < 0.001 && abs(orbOrigin.y - 48) < 0.001,
                "orb-only window remains lower-centred without inheriting legacy card width")
 
         let startCue = VoiceFeedbackSound.bundledAudioData(for: .began)

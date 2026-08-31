@@ -598,7 +598,7 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
         override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
     }
 
-    private let windowSize = NSSize(width: 112, height: 98)
+    private let windowSize = NSSize(width: 120, height: 112)
     private let panel: OrbPanel
     private let orbView: ThinkingOrbCanvasView
     private var enabled: Bool
