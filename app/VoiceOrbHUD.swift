@@ -598,8 +598,46 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
         override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
     }
 
+    /// A real behind-window material with a radial alpha mask. The mask keeps the centre legible
+    /// over busy content, then feathers the blur all the way to zero instead of drawing a glass
+    /// disc or any other visible boundary around the particles.
+    private final class FrostedOrbBackdropView: NSVisualEffectView {
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            wantsLayer = true
+            material = .hudWindow
+            blendingMode = .behindWindow
+            state = .active
+            isEmphasized = false
+            alphaValue = 0
+
+            // `NSVisualEffectView` samples outside the regular Core Animation subtree, so its
+            // dedicated maskImage API is required here. A layer mask looks correct in isolation
+            // but leaves the live backdrop itself rectangular.
+            maskImage = NSImage(size: frameRect.size, flipped: false) { rect in
+                guard let gradient = NSGradient(colors: [
+                    NSColor.white.withAlphaComponent(0.72),
+                    NSColor.white.withAlphaComponent(0.66),
+                    NSColor.white.withAlphaComponent(0.24),
+                    NSColor.clear,
+                ]) else { return false }
+                let centre = NSPoint(x: rect.midX, y: rect.midY)
+                gradient.draw(fromCenter: centre, radius: 0,
+                              toCenter: centre, radius: min(rect.width, rect.height) / 2,
+                              options: [])
+                return true
+            }
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
     private let windowSize = NSSize(width: 120, height: 112)
     private let panel: OrbPanel
+    private let backdropView: FrostedOrbBackdropView
     private let orbView: ThinkingOrbCanvasView
     private var enabled: Bool
     private var configuredIcons: [String: String]
@@ -643,12 +681,19 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
         let root = DragSurface(frame: NSRect(origin: .zero, size: windowSize))
         root.wantsLayer = true
         root.layer?.backgroundColor = NSColor.clear.cgColor
+        // The 96-point material is centred exactly behind the 84-point orb. Its six-point feather
+        // beyond each side of the authored sphere disappears before reaching the panel edge.
+        let backdropView = FrostedOrbBackdropView(
+            frame: NSRect(x: 12, y: 16, width: 96, height: 96)
+        )
+        root.addSubview(backdropView)
         let orbView = ThinkingOrbCanvasView(frame: root.bounds)
         orbView.autoresizingMask = [.width, .height]
         root.addSubview(orbView)
         panel.contentView = root
 
         self.panel = panel
+        self.backdropView = backdropView
         self.orbView = orbView
         super.init()
         orbView.setTint(VoiceLayerPalette.tint(for: nil, layers: layers), animated: false)
@@ -773,6 +818,7 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             self.cancelWindowAlphaAnimation()
             self.layerIdentity()
             let duration = self.orbView.prepareReverseEntranceExit()
+            self.setBackdropVisible(false, duration: duration)
             DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
                 guard let self, self.appearanceGeneration == generation,
                       self.shortCaptureExitInFlight else { return }
@@ -782,6 +828,7 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
                 self.orbView.stopAnimating()
                 self.panel.alphaValue = 0
                 self.panel.orderOut(nil)
+                self.setBackdropVisible(false, duration: 0)
                 self.orbView.cancelReverseEntranceExit()
                 self.layerIdentity()
             }
@@ -927,6 +974,9 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
         startCursorScreenTracking()
         orbView.startAnimating()
         cancelWindowAlphaAnimation()
+        let backdropDuration: TimeInterval = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            ? 0 : (wasVisible ? 0.14 : 0.22)
+        setBackdropVisible(true, duration: backdropDuration)
         guard entrance, !wasVisible,
               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
             layerIdentity()
@@ -955,6 +1005,7 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             orbView.stopAnimating()
             panel.alphaValue = 0
             panel.orderOut(nil)
+            setBackdropVisible(false, duration: 0)
             layerIdentity()
             return
         }
@@ -977,6 +1028,7 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             self.stopCursorScreenTracking()
             self.orbView.stopAnimating()
             self.panel.orderOut(nil)
+            self.setBackdropVisible(false, duration: 0)
             self.layerIdentity()
         })
     }
@@ -1000,6 +1052,29 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             panel.animator().alphaValue = 1
         }
         panel.alphaValue = 1
+    }
+
+    private func setBackdropVisible(_ shown: Bool, duration: TimeInterval) {
+        guard let layer = backdropView.layer else {
+            backdropView.alphaValue = shown ? 1 : 0
+            return
+        }
+        let target: Float = shown ? 1 : 0
+        let current = layer.presentation()?.opacity ?? layer.opacity
+        layer.removeAnimation(forKey: "frostedBackdropOpacity")
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        backdropView.alphaValue = CGFloat(target)
+        CATransaction.commit()
+        guard duration > 0, abs(current - target) > 0.001 else { return }
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = current
+        animation.toValue = target
+        animation.duration = duration
+        animation.timingFunction = shown
+            ? CAMediaTimingFunction(controlPoints: 0.20, 0.78, 0.18, 1)
+            : CAMediaTimingFunction(name: .easeOut)
+        layer.add(animation, forKey: "frostedBackdropOpacity")
     }
 
     private func layerIdentity() {

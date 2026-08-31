@@ -227,7 +227,7 @@ enum ThinkingOrbEntranceMath {
 
 final class ThinkingOrbCanvasView: NSView {
     private static let orbSize = 84.0
-    private static let particleRadiusScale = 1.28
+    private static let particleRadiusScale = 1.14
     // Leave a stable gap above the status word while giving a voiced outer-ring hit enough room
     // to travel beyond the authored sphere without clipping against the expanded window.
     private static let orbOriginY = 22.0

@@ -2945,6 +2945,21 @@ feel that evening; if any of these is wrong, this is where to look:
   (PID 95221 at handoff time). local.44 is recoverable at
   `/private/tmp/hypervibe-before-local45.6hSr1y/HyperVibe.app`; the public beta.7 release was not
   replaced and these local readability changes were not pushed.
+- local.47 replaces local.45's oversized 1.28 particle multiplier with the more refined 1.14 scale
+  and adds a true behind-window frosted material centred under the orb. Its AppKit `maskImage` is a
+  radial alpha field (72% at the centre, smoothly reaching zero at the edge), so there is no glass
+  disc or rectangular boundary; it fades in with a new presentation and follows the particles out
+  during short-capture reversal. A first build 46 prototype incorrectly used a CALayer mask; live
+  composite capture exposed its square blur, so it was rejected and never installed. The corrected
+  build 47 was captured against a real busy application background and inspected at
+  `/private/tmp/hypervibe-local46-composite.png`: the square is gone, background detail is softened
+  most at the centre, and the material continuously disappears toward the outside. Verification:
+  Core **134/134**, native Voice **112/112**, optimized compilation, `git diff --check`, deep/strict
+  signing, and candidate/installed executable equality all pass (SHA-256
+  `dfe351f155bfda8d7c04ba9a5b64cba6ca3b5fe4f7df4c330c665ad5814e0877`). The installed App is
+  build 47 / `1.0.0`, signed by `siriRemote Local Signing`, with one no-argument process from
+  `/Applications/HyperVibe.app` (PID 1725 at handoff time). build 45 is recoverable at
+  `/private/tmp/hypervibe-before-local47.8yXC58/HyperVibe.app`; these changes were not pushed.
 
 ## Maintenance rules
 
