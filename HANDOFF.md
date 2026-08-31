@@ -3033,6 +3033,22 @@ feel that evening; if any of these is wrong, this is where to look:
   no-argument process from `/Applications/HyperVibe.app` (PID 70496 at handoff time). The rejected
   build 54 is recoverable at `/private/tmp/hypervibe-before-local55-20260831/HyperVibe.app`; these
   changes were not pushed.
+- local.56 decouples overall sphere size from microphone energy. The live Listening sphere has a
+  fixed base radius 6% larger than before; volume, pitch and brightness redistribute individual
+  latitude layers around that base instead of scaling the whole silhouette. The previous ten
+  chronological level samples are reduced to one recent level and one onset impulse, then applied
+  to every ring with different deterministic phases. This removes the direct oldest-to-newest,
+  south-to-north mapping that made sudden loud sounds visibly sweep down the sphere. Brightness now
+  uses a zero-mean local ripple, so it cannot inflate the whole surface either. Deterministic frames
+  at `/private/tmp/hypervibe-local56-stable-{0,1,2,3}.png` show simultaneous per-layer changes with
+  no vertical scan. Pixel measurement of stable Listening frames finds only about 6% width and 7%
+  height variation while their internal ring shapes remain distinct. Verification: native Voice
+  **112/112**, optimized compilation, `git diff --check`, stable deep/strict signing, and
+  candidate/installed executable equality all pass (SHA-256
+  `5881fdde76d8aafd50e1f1e8ceb162a51b0f935788a9afe2f4f6ba212e41a0c5`). The installed App is
+  build 56 / `1.0.0`, signed by `siriRemote Local Signing`, with one no-argument process from
+  `/Applications/HyperVibe.app` (PID 75090 at handoff time). build 55 is recoverable at
+  `/private/tmp/hypervibe-before-local56-20260831/HyperVibe.app`; these changes were not pushed.
 
 ## Maintenance rules
 

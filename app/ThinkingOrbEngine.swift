@@ -404,42 +404,49 @@ enum ThinkingOrbEngine {
                 + 0.38 * sin(time * 1.27 + Double(ringIndex) * 0.83)
             let wave: Double
             let ringEnergy: Double
+            let ringImpulse: Double
             if let acoustics, !acoustics.ringLevels.isEmpty {
-                let levels = acoustics.ringLevels
-                let sampleIndex = min(levels.count - 1,
-                                      Int((Double(ringIndex) / Double(rings)
-                                           * Double(levels.count - 1)).rounded()))
-                // Most of the motion is the delayed ring sample; a small amount of the current
-                // envelope keeps neighbouring layers sympathetically alive as a hit travels on.
+                let levels = acoustics.ringLevels.map { min(0.82, max(0, $0)) }
+                let recentCount = min(3, levels.count)
+                let recentLevels = levels.suffix(recentCount)
+                let shortLevel = recentLevels.reduce(0, +) / Double(max(1, recentCount))
+                let olderLevels = levels.dropLast(recentCount)
+                let olderLevel = olderLevels.isEmpty
+                    ? shortLevel : olderLevels.reduce(0, +) / Double(olderLevels.count)
+                // Time history now creates a single onset strength. It is no longer assigned from
+                // south to north across the latitude rings, which made every loud syllable look
+                // like an unattractive vertical scan.
                 let level = min(0.82, max(0,
-                    levels[sampleIndex] * 0.92 + acoustics.overallLevel * 0.08
+                    shortLevel * 0.72 + acoustics.overallLevel * 0.28
                 ))
                 ringEnergy = level
+                ringImpulse = max(0, (levels.last ?? level) - olderLevel)
                 let pitch = min(1, max(-1, acoustics.pitch))
                     * min(1, max(0, acoustics.pitchConfidence))
+                let layerPhase = sin(Double(ringIndex) * 1.73 + pitch * 0.9)
+                let counterPhase = cos(Double(ringIndex) * 0.91 - time * 0.08)
                 let pitchShape = pitch
-                    * sin(latitude * 1.75 + Double(ringIndex) * 0.34) * 0.72
-                // Preserve the normalizer's remaining headroom: ordinary speech lives around the
-                // middle of this range, while only a relative syllable peak reaches the top.
-                let voice = (level - 0.16) * 1.75
-                wave = min(1.65, max(-1.0,
-                    synthetic * 0.06 + voice + pitchShape
+                    * sin(latitude * 1.75 + Double(ringIndex) * 0.34) * 0.055
+                let voiceShape = level * (0.045 * layerPhase + 0.025 * counterPhase)
+                let hitShape = ringImpulse * (
+                    0.09 * layerPhase + 0.045 * sin(Double(ringIndex) * 2.41)
+                )
+                wave = min(0.14, max(-0.14,
+                    synthetic * 0.012 + voiceShape + hitShape + pitchShape
                 ))
             } else {
                 ringEnergy = 0
+                ringImpulse = 0
                 wave = synthetic
             }
-            // The upstream idle wave stays untouched for golden parity. Live speech receives a
-            // much wider radial range, allowing ten independently delayed rings to visibly pull
-            // away from and return to the sphere.
+            // Keep upstream idle geometry untouched for golden parity. The live sphere itself is
+            // deliberately larger and nearly fixed; acoustic energy redistributes its layers
+            // around that base instead of scaling the whole silhouette with background noise.
             let ringRadius: Double
             if acoustics == nil {
                 ringRadius = radius * (0.88 + 0.105 * wave)
             } else {
-                // Let voiced hits open dramatically, but limit inward recoil so multiple rings do
-                // not collapse into an untidy knot at the centre.
-                let radialWave = wave >= 0 ? 0.285 * wave : 0.12 * wave
-                ringRadius = radius * (0.86 + radialWave)
+                ringRadius = radius * (1.06 + wave)
             }
             let acousticBrightness = acoustics.map {
                 min(1, max(0, $0.brightness))
@@ -449,9 +456,9 @@ enum ThinkingOrbEngine {
                 let longitude = Double(longitudeIndex) / Double(lonCount) * 2 * .pi
                 // Timbre now changes the surface as well as particle size. The three-lobed ripple
                 // keeps neighbouring dots coherent, avoiding random visual noise.
-                let shimmer = 0.5 + 0.5 * sin(longitude * 3 + time * 0.42)
-                let surfaceRipple = 1 + acousticBrightness
-                    * (0.014 + 0.052 * shimmer) * (0.35 + 0.65 * ringEnergy)
+                let shimmer = sin(longitude * 3 + time * 0.42)
+                let surfaceRipple = 1 + acousticBrightness * 0.026 * shimmer
+                    * (0.35 + 0.65 * ringEnergy)
                 let point = project(cosLatitude * cos(longitude) * ringRadius * surfaceRipple,
                                     sinLatitude * ringRadius * surfaceRipple,
                                     cosLatitude * sin(longitude) * ringRadius * surfaceRipple)
@@ -460,7 +467,10 @@ enum ThinkingOrbEngine {
                 var liveScale = 1.0
                 if let acoustic = acoustics {
                     let brightness = min(1, max(0, acoustic.brightness))
-                    liveScale += 0.46 * ringEnergy + 0.14 * brightness * shimmer
+                    let shimmerAmount = 0.5 + 0.5 * shimmer
+                    liveScale += 0.26 * ringEnergy
+                        + 0.16 * ringImpulse * (0.4 + 0.6 * shimmerAmount)
+                        + 0.10 * brightness * shimmerAmount
                 }
                 dots.append(ThinkingOrbDot(
                     x: point.0, y: point.1, z: point.2,
