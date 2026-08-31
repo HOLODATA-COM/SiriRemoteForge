@@ -721,7 +721,7 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
         // particle renderer. `maskImage` affects only the sampled material, not these subviews.
         let backdropView = FrostedOrbBackdropView(
             frame: root.bounds,
-            orbCentre: NSPoint(x: windowSize.width / 2, y: 64)
+            orbCentre: NSPoint(x: windowSize.width / 2, y: 72)
         )
         backdropView.autoresizingMask = [.width, .height]
         root.addSubview(backdropView)

@@ -2996,6 +2996,26 @@ feel that evening; if any of these is wrong, this is where to look:
   no-argument process from `/Applications/HyperVibe.app` (PID 23363 at handoff time). build 50 is
   recoverable at `/private/tmp/hypervibe-before-local51-20260831/HyperVibe.app`; build 49 is at
   `/private/tmp/hypervibe-before-local50-20260831/HyperVibe.app`. These changes were not pushed.
+- local.54 makes the Listening sphere substantially more expressive without restoring fast globe
+  rotation. Meter input now removes a 1.2% noise floor, uses a stronger perceptual curve, reaches
+  full pitch displacement at 4.5 rather than 7 semitones from its slowly adapting baseline, and
+  lets spectral brightness create a coherent three-lobed surface ripple instead of changing only
+  dot size. Voiced hits propagate more strongly through the ten delayed latitude samples: outward
+  travel reaches about 24%, while inward recoil is deliberately limited to prevent layers from
+  collapsing into a central knot. Rise times are faster and releases slightly longer so individual
+  syllables hit immediately and continue into neighbouring layers. Rejected build 52 exposed
+  excessive inward collapse; build 53 fixed that but live capture showed maximum expansion touching
+  the status word. The final build shifts both sphere and material centre up 8 points. Deterministic
+  captures at `/private/tmp/hypervibe-local54-reactive-{0,1,2,3}.png` show clearly distinct compact,
+  full-sphere and pitch-shaped silhouettes with no clipping or label collision. The native geometry
+  regression now requires more than 150 points of aggregate acoustic travel rather than 80.
+  Verification: Core **134/134**, native Voice **112/112**, optimized compilation,
+  `git diff --check`, stable deep/strict signing, and candidate/installed executable equality all
+  pass (SHA-256 `d9b1cff8fe362510873ec7bcd3fae4bcc069176242cd2f55924c22d9f6ec98bf`).
+  The installed App is build 54 / `1.0.0`, signed by `siriRemote Local Signing`, with one
+  no-argument process from `/Applications/HyperVibe.app` (PID 56811 at handoff time). build 53 is
+  recoverable at `/private/tmp/hypervibe-before-local54-20260831/HyperVibe.app`; these changes were
+  not pushed.
 
 ## Maintenance rules
 

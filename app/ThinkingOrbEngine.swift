@@ -412,16 +412,16 @@ enum ThinkingOrbEngine {
                 // Most of the motion is the delayed ring sample; a small amount of the current
                 // envelope keeps neighbouring layers sympathetically alive as a hit travels on.
                 let level = min(1, max(0,
-                    levels[sampleIndex] * 0.88 + acoustics.overallLevel * 0.12
+                    levels[sampleIndex] * 1.02 + acoustics.overallLevel * 0.14
                 ))
                 ringEnergy = level
                 let pitch = min(1, max(-1, acoustics.pitch))
                     * min(1, max(0, acoustics.pitchConfidence))
                 let pitchShape = pitch
-                    * sin(latitude * 1.75 + Double(ringIndex) * 0.34) * 0.58
-                let voice = (level * 2.15 - 0.30) * 0.94
-                wave = min(1.35, max(-1.15,
-                    synthetic * 0.08 + voice + pitchShape
+                    * sin(latitude * 1.75 + Double(ringIndex) * 0.34) * 0.92
+                let voice = (level * 2.42 - 0.28) * 1.04
+                wave = min(1.55, max(-1.25,
+                    synthetic * 0.06 + voice + pitchShape
                 ))
             } else {
                 ringEnergy = 0
@@ -430,22 +430,35 @@ enum ThinkingOrbEngine {
             // The upstream idle wave stays untouched for golden parity. Live speech receives a
             // much wider radial range, allowing ten independently delayed rings to visibly pull
             // away from and return to the sphere.
-            let ringRadius = acoustics == nil
-                ? radius * (0.88 + 0.105 * wave)
-                : radius * (0.86 + 0.18 * wave)
+            let ringRadius: Double
+            if acoustics == nil {
+                ringRadius = radius * (0.88 + 0.105 * wave)
+            } else {
+                // Let voiced hits open dramatically, but limit inward recoil so multiple rings do
+                // not collapse into an untidy knot at the centre.
+                let radialWave = wave >= 0 ? 0.245 * wave : 0.145 * wave
+                ringRadius = radius * (0.86 + radialWave)
+            }
+            let acousticBrightness = acoustics.map {
+                min(1, max(0, $0.brightness))
+            } ?? 0
             let lonCount = max(1, Int((abs(cosLatitude) * Double(lonDensity)).rounded()))
             for longitudeIndex in 0..<lonCount {
                 let longitude = Double(longitudeIndex) / Double(lonCount) * 2 * .pi
-                let point = project(cosLatitude * cos(longitude) * ringRadius,
-                                    sinLatitude * ringRadius,
-                                    cosLatitude * sin(longitude) * ringRadius)
+                // Timbre now changes the surface as well as particle size. The three-lobed ripple
+                // keeps neighbouring dots coherent, avoiding random visual noise.
+                let shimmer = 0.5 + 0.5 * sin(longitude * 3 + time * 0.42)
+                let surfaceRipple = 1 + acousticBrightness
+                    * (0.014 + 0.052 * shimmer) * (0.35 + 0.65 * ringEnergy)
+                let point = project(cosLatitude * cos(longitude) * ringRadius * surfaceRipple,
+                                    sinLatitude * ringRadius * surfaceRipple,
+                                    cosLatitude * sin(longitude) * ringRadius * surfaceRipple)
                 let depth = (point.2 / radius + 1) / 2
                 let crest = max(0, wave)
                 var liveScale = 1.0
                 if let acoustic = acoustics {
                     let brightness = min(1, max(0, acoustic.brightness))
-                    let shimmer = 0.5 + 0.5 * sin(longitude * 3 + time * 0.42)
-                    liveScale += 0.62 * ringEnergy + 0.16 * brightness * shimmer
+                    liveScale += 0.68 * ringEnergy + 0.18 * brightness * shimmer
                 }
                 dots.append(ThinkingOrbDot(
                     x: point.0, y: point.1, z: point.2,

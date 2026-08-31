@@ -400,7 +400,7 @@ enum VoiceInputSelfTest {
         let acousticTravel = zip(reactiveFrame.dots, idleFrame.dots).reduce(0.0) {
             $0 + hypot($1.0.x - $1.1.x, $1.0.y - $1.1.y)
         }
-        expect(reactiveFrame.dots.count == idleFrame.dots.count && acousticTravel > 80,
+        expect(reactiveFrame.dots.count == idleFrame.dots.count && acousticTravel > 150,
                "listening orb turns a voiced hit into strong per-ring geometric travel")
         let successSymbol = ThinkingOrbSymbolGeometry.frame(success: true, time: 0)
         let failureSymbol = ThinkingOrbSymbolGeometry.frame(success: false, time: 0)

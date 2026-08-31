@@ -230,7 +230,7 @@ final class ThinkingOrbCanvasView: NSView {
     private static let particleRadiusScale = 1.14
     // Leave a stable gap above the status word while giving a voiced outer-ring hit enough room
     // to travel beyond the authored sphere without clipping against the expanded window.
-    private static let orbOriginY = 22.0
+    private static let orbOriginY = 30.0
     private static let orbCenter = orbSize / 2
     private static let transitionDuration = 0.54
     private static let transitionStagger = 0.10
@@ -472,7 +472,10 @@ final class ThinkingOrbCanvasView: NSView {
 
     func ingest(_ sample: VoiceMeterSample) {
         let raw = sample.level.isFinite ? Double(sample.level) : 0
-        let perceptual = min(1, max(0, pow(raw, 0.72)))
+        // Remove the low noise floor, then use a more assertive perceptual curve so ordinary
+        // syllables—not only clipped peaks—travel visibly through the latitude rings.
+        let voiced = min(1, max(0, (raw - 0.012) / 0.988))
+        let perceptual = min(1, pow(voiced, 0.62) * 1.10)
         targetLevel = perceptual
         targetHistory.removeFirst()
         targetHistory.append(perceptual)
@@ -484,11 +487,11 @@ final class ThinkingOrbCanvasView: NSView {
             let pitchLog2 = log2(Double(sample.pitchHz))
             if pitchBaselineLog2 == nil { pitchBaselineLog2 = pitchLog2 }
             let baseline = pitchBaselineLog2 ?? pitchLog2
-            targetPitch = min(1, max(-1, (pitchLog2 - baseline) / (7.0 / 12.0)))
+            targetPitch = min(1, max(-1, (pitchLog2 - baseline) / (4.5 / 12.0)))
             pitchBaselineLog2 = baseline + (pitchLog2 - baseline) * 0.004
         }
         targetBrightness = sample.brightness.isFinite
-            ? min(1, max(0, Double(sample.brightness))) : 0
+            ? min(1, pow(max(0, Double(sample.brightness)), 0.72)) : 0
         lastMeterAt = CACurrentMediaTime()
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { needsDisplay = true }
     }
@@ -534,18 +537,18 @@ final class ThinkingOrbCanvasView: NSView {
         }
         for index in displayedHistory.indices {
             let target = targetHistory[index]
-            let constant = target > displayedHistory[index] ? 0.038 : 0.15
+            let constant = target > displayedHistory[index] ? 0.025 : 0.18
             let fraction = 1 - exp(-delta / constant)
             displayedHistory[index] += (target - displayedHistory[index]) * fraction
         }
         displayedLevel = approach(displayedLevel, targetLevel, delta: delta,
-                                  rise: 0.032, fall: 0.14)
+                                  rise: 0.024, fall: 0.17)
         displayedPitch = approach(displayedPitch, targetPitch, delta: delta,
-                                  rise: 0.07, fall: 0.12)
+                                  rise: 0.045, fall: 0.065)
         displayedPitchConfidence = approach(displayedPitchConfidence, targetPitchConfidence,
                                             delta: delta, rise: 0.06, fall: 0.16)
         displayedBrightness = approach(displayedBrightness, targetBrightness,
-                                       delta: delta, rise: 0.07, fall: 0.18)
+                                       delta: delta, rise: 0.045, fall: 0.19)
         needsDisplay = true
     }
 
