@@ -402,6 +402,28 @@ enum VoiceInputSelfTest {
         }
         expect(reactiveFrame.dots.count == idleFrame.dots.count && acousticTravel > 80,
                "listening orb turns a voiced hit into strong per-ring geometric travel")
+        let quietListeningFrame = ThinkingOrbEngine.frame(
+            state: .listening, time: 0.6,
+            acoustics: ThinkingOrbAcoustics(
+                ringLevels: [Double](repeating: 0.08, count: 10), overallLevel: 0.08,
+                pitch: 0, pitchConfidence: 0, brightness: 0
+            )
+        )
+        let loudListeningFrame = ThinkingOrbEngine.frame(
+            state: .listening, time: 0.6,
+            acoustics: ThinkingOrbAcoustics(
+                ringLevels: [Double](repeating: 0.72, count: 10), overallLevel: 0.72,
+                pitch: 0, pitchConfidence: 0, brightness: 0
+            )
+        )
+        let quietExtent = quietListeningFrame.dots.map {
+            hypot($0.x - 32, $0.y - 32)
+        }.max() ?? 0
+        let loudExtent = loudListeningFrame.dots.map {
+            hypot($0.x - 32, $0.y - 32)
+        }.max() ?? 0
+        expect(loudExtent > quietExtent + 0.5 && loudExtent < quietExtent + 4.5,
+               "listening volume adds a visible but bounded whole-sphere breath")
         let successSymbol = ThinkingOrbSymbolGeometry.frame(success: true, time: 0)
         let failureSymbol = ThinkingOrbSymbolGeometry.frame(success: false, time: 0)
         let copySymbol = ThinkingOrbSymbolGeometry.copyFrame(time: 0)

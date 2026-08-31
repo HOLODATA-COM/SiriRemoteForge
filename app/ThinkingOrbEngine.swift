@@ -405,6 +405,7 @@ enum ThinkingOrbEngine {
             let wave: Double
             let ringEnergy: Double
             let ringImpulse: Double
+            let globalLevel: Double
             if let acoustics, !acoustics.ringLevels.isEmpty {
                 let levels = acoustics.ringLevels.map { min(0.82, max(0, $0)) }
                 let recentCount = min(3, levels.count)
@@ -421,6 +422,7 @@ enum ThinkingOrbEngine {
                 ))
                 ringEnergy = level
                 ringImpulse = max(0, (levels.last ?? level) - olderLevel)
+                globalLevel = min(0.76, max(0, acoustics.overallLevel))
                 let pitch = min(1, max(-1, acoustics.pitch))
                     * min(1, max(0, acoustics.pitchConfidence))
                 let layerPhase = sin(Double(ringIndex) * 1.73 + pitch * 0.9)
@@ -437,6 +439,7 @@ enum ThinkingOrbEngine {
             } else {
                 ringEnergy = 0
                 ringImpulse = 0
+                globalLevel = 0
                 wave = synthetic
             }
             // Keep upstream idle geometry untouched for golden parity. The live sphere itself is
@@ -446,7 +449,11 @@ enum ThinkingOrbEngine {
             if acoustics == nil {
                 ringRadius = radius * (0.88 + 0.105 * wave)
             } else {
-                ringRadius = radius * (1.06 + wave)
+                // A restrained 5.5% whole-sphere breath makes volume readable without allowing
+                // background noise to dominate the silhouette. Layer deformation remains the
+                // larger and more expressive acoustic channel.
+                let globalBreath = 0.055 * globalLevel / 0.76
+                ringRadius = radius * (1.035 + globalBreath + wave)
             }
             let acousticBrightness = acoustics.map {
                 min(1, max(0, $0.brightness))

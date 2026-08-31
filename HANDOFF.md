@@ -3049,6 +3049,20 @@ feel that evening; if any of these is wrong, this is where to look:
   build 56 / `1.0.0`, signed by `siriRemote Local Signing`, with one no-argument process from
   `/Applications/HyperVibe.app` (PID 75090 at handoff time). build 55 is recoverable at
   `/private/tmp/hypervibe-before-local56-20260831/HyperVibe.app`; these changes were not pushed.
+- local.57 restores a deliberately small volume-driven whole-sphere breath on top of local.56's
+  stable large base. Normalized Voice level contributes only 0...5.5% to every ring's common
+  radius; the independent phase-based layer, pitch and timbre deformation remains the dominant
+  motion and the removed chronological north/south scan does not return. A new native regression
+  constructs otherwise identical quiet and loud acoustic frames and requires the loud envelope to
+  be measurably larger while staying under a strict 4.5-point delta. Captures at
+  `/private/tmp/hypervibe-local57-breath-{0,1,2,3}.png` show a subtle common breath with simultaneous
+  layer changes and no vertical sweep. Stable captured frames vary by about 7% in width and 9% in
+  height. Verification: native Voice **113/113**, optimized compilation, `git diff --check`, stable
+  deep/strict signing, and candidate/installed executable equality all pass (SHA-256
+  `c06942ad76b094002367fae318a32fd5dee9384e17da2466221dc9285d98757c`). The installed App is
+  build 57 / `1.0.0`, signed by `siriRemote Local Signing`, with one no-argument process from
+  `/Applications/HyperVibe.app` (PID 88933 at handoff time). build 56 is recoverable at
+  `/private/tmp/hypervibe-before-local57-20260901/HyperVibe.app`; these changes were not pushed.
 
 ## Maintenance rules
 
