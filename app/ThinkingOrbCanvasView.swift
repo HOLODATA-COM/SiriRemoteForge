@@ -261,6 +261,10 @@ final class ThinkingOrbCanvasView: NSView {
     private var tintStartedAt: CFTimeInterval = 0
     private var previousLabel = ""
     private var labelStartedAt: CFTimeInterval = 0
+    private var displayedVisualRadius = 42.0
+    private var visualRadiusUpdatedAt: CFTimeInterval = 0
+
+    var onVisualRadiusChange: ((CGFloat) -> Void)?
 
     private var frameTimer: Timer?
     private var lastFrameAt: CFTimeInterval = 0
@@ -278,6 +282,7 @@ final class ThinkingOrbCanvasView: NSView {
     private var pitchBaselineLog2: Double?
 
     override var isOpaque: Bool { false }
+    override var allowsVibrancy: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -497,7 +502,10 @@ final class ThinkingOrbCanvasView: NSView {
         super.draw(dirtyRect)
         let now = CACurrentMediaTime()
         if !particlesHidden {
-            draw(presentationFrame(at: now), tint: renderedTint(at: now))
+            let authored = authoredFrame(at: now)
+            reportVisualRadius(of: authored, at: now)
+            draw(presentationFrame(at: now, authoredTarget: authored),
+                 tint: renderedTint(at: now))
         }
         drawLabel(at: now)
     }
@@ -595,11 +603,14 @@ final class ThinkingOrbCanvasView: NSView {
 
     /// Every visible dot receives its own destination, delay and under-damped trajectory. A new
     /// state captures these current in-flight positions and immediately remaps from there.
-    private func presentationFrame(at time: CFTimeInterval) -> ThinkingOrbFrame {
+    private func presentationFrame(
+        at time: CFTimeInterval,
+        authoredTarget: ThinkingOrbFrame? = nil
+    ) -> ThinkingOrbFrame {
         if let departureSourceFrame {
             return departureFrame(departureSourceFrame, at: time)
         }
-        let target = authoredFrame(at: time)
+        let target = authoredTarget ?? authoredFrame(at: time)
         let base: ThinkingOrbFrame
         if transitionPairs.isEmpty {
             base = target
@@ -615,6 +626,26 @@ final class ThinkingOrbCanvasView: NSView {
             }
         }
         return entranceFrame(base, at: time)
+    }
+
+    /// Follow the actual authored particle envelope rather than audio level alone: pitch can pull
+    /// one ring farther than volume does. Entrance particles are deliberately excluded so their
+    /// off-screen assembly routes do not inflate the central material before the sphere exists.
+    private func reportVisualRadius(of frame: ThinkingOrbFrame, at time: CFTimeInterval) {
+        let rawRadius = frame.dots.reduce(0.0) { radius, dot in
+            guard dot.alpha > 0.04 else { return radius }
+            let particleRadius = dot.r * Self.particleRadiusScale
+            return max(radius, hypot(dot.x - Self.orbCenter, dot.y - Self.orbCenter)
+                + particleRadius)
+        }
+        let target = min(46.0, max(28.0, rawRadius))
+        let delta = visualRadiusUpdatedAt > 0
+            ? min(0.05, max(0, time - visualRadiusUpdatedAt)) : 1 / 60
+        visualRadiusUpdatedAt = time
+        let constant = target > displayedVisualRadius ? 0.045 : 0.13
+        let fraction = 1 - exp(-delta / constant)
+        displayedVisualRadius += (target - displayedVisualRadius) * fraction
+        onVisualRadiusChange?(CGFloat(displayedVisualRadius))
     }
 
     private func departureFrame(_ source: ThinkingOrbFrame,
@@ -759,7 +790,6 @@ final class ThinkingOrbCanvasView: NSView {
     private func draw(_ frame: ThinkingOrbFrame, tint: NSColor) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         let originX = (Double(bounds.width) - Self.orbSize) / 2
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let resolvedTint = tint.usingColorSpace(.deviceRGB) ?? tint
         context.saveGState()
         context.translateBy(x: originX, y: Self.orbOriginY + Self.orbSize)
@@ -768,7 +798,6 @@ final class ThinkingOrbCanvasView: NSView {
         for line in frame.lines {
             let white = min(1, max(0, line.white))
             context.setStrokeColor(inkColor(tint: resolvedTint, white: white,
-                                            dark: dark,
                                             alpha: min(1, max(0, line.alpha))).cgColor)
             context.setLineWidth(line.width * 1.08)
             context.beginPath()
@@ -779,7 +808,6 @@ final class ThinkingOrbCanvasView: NSView {
         for dot in frame.dots {
             let white = min(1, max(0, dot.white))
             context.setFillColor(inkColor(tint: resolvedTint, white: white,
-                                          dark: dark,
                                           alpha: min(1, max(0, dot.alpha))).cgColor)
             let radius = dot.r * Self.particleRadiusScale
             context.fillEllipse(in: CGRect(x: dot.x - radius, y: dot.y - radius,
@@ -790,13 +818,12 @@ final class ThinkingOrbCanvasView: NSView {
 
     /// Preserve the upstream front/back depth signal while expressing it through the active
     /// Layer hue. This changes neither geometry nor alpha and adds no outline around the sphere.
-    private func inkColor(tint: NSColor, white: Double,
-                          dark: Bool, alpha: Double) -> NSColor {
+    private func inkColor(tint: NSColor, white: Double, alpha: Double) -> NSColor {
         let frontness = CGFloat(1 - white)
-        let anchor: NSColor = dark ? .white : .black
-        let fraction = dark
-            ? 0.18 + frontness * 0.52
-            : 0.10 + frontness * 0.30
+        // `labelColor` becomes the system's black or white contrast mode inside a vibrant
+        // material. Preserve Layer tint as hue, but let the actual background choose luminance.
+        let anchor = NSColor.labelColor
+        let fraction = 0.38 + frontness * 0.45
         let colored = tint.blended(withFraction: fraction, of: anchor) ?? tint
         return colored.withAlphaComponent(CGFloat(alpha))
     }

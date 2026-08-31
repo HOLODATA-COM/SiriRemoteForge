@@ -602,7 +602,13 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
     /// over busy content, then feathers the blur all the way to zero instead of drawing a glass
     /// disc or any other visible boundary around the particles.
     private final class FrostedOrbBackdropView: NSVisualEffectView {
-        override init(frame frameRect: NSRect) {
+        private let orbCentre: NSPoint
+        private var maskCache: [Int: NSImage] = [:]
+        private var displayedMaskKey: Int?
+        private static let fadeWidth: CGFloat = 18
+
+        init(frame frameRect: NSRect, orbCentre: NSPoint) {
+            self.orbCentre = orbCentre
             super.init(frame: frameRect)
             wantsLayer = true
             material = .hudWindow
@@ -610,32 +616,57 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             state = .active
             isEmphasized = false
             alphaValue = 0
-
-            // `NSVisualEffectView` samples outside the regular Core Animation subtree, so its
-            // dedicated maskImage API is required here. A layer mask looks correct in isolation
-            // but leaves the live backdrop itself rectangular.
-            maskImage = NSImage(size: frameRect.size, flipped: false) { rect in
-                guard let gradient = NSGradient(colors: [
-                    NSColor.white.withAlphaComponent(0.72),
-                    NSColor.white.withAlphaComponent(0.66),
-                    NSColor.white.withAlphaComponent(0.24),
-                    NSColor.clear,
-                ]) else { return false }
-                let centre = NSPoint(x: rect.midX, y: rect.midY)
-                gradient.draw(fromCenter: centre, radius: 0,
-                              toCenter: centre, radius: min(rect.width, rect.height) / 2,
-                              options: [])
-                return true
-            }
+            setSphereRadius(42)
         }
 
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        func setSphereRadius(_ proposedRadius: CGFloat) {
+            let radius = min(46, max(28, proposedRadius))
+            // Quarter-point quantisation is visually continuous while avoiding a new AppKit image
+            // allocation for sub-pixel noise in an otherwise stable audio envelope.
+            let key = Int((radius * 4).rounded())
+            guard displayedMaskKey != key else { return }
+            displayedMaskKey = key
+            if let cached = maskCache[key] {
+                maskImage = cached
+                return
+            }
+            let quantisedRadius = CGFloat(key) / 4
+            let outerRadius = quantisedRadius + Self.fadeWidth
+            let imageSize = bounds.size
+            let centre = orbCentre
+            let plateau = quantisedRadius / outerRadius
+            let shoulder = (quantisedRadius + 7) / outerRadius
+            let tail = (quantisedRadius + 13) / outerRadius
+            var locations: [CGFloat] = [0, plateau, shoulder, tail, 1]
+            let colours = [
+                NSColor.black.withAlphaComponent(0.56),
+                NSColor.black.withAlphaComponent(0.56),
+                NSColor.black.withAlphaComponent(0.46),
+                NSColor.black.withAlphaComponent(0.18),
+                NSColor.clear,
+            ]
+            let gradient = locations.withUnsafeMutableBufferPointer { buffer in
+                NSGradient(colors: colours, atLocations: buffer.baseAddress,
+                           colorSpace: .deviceRGB)
+            }
+            let image = NSImage(size: imageSize, flipped: false) { _ in
+                guard let gradient else { return false }
+                gradient.draw(fromCenter: centre, radius: 0,
+                              toCenter: centre, radius: outerRadius,
+                              options: [.drawsAfterEndingLocation])
+                return true
+            }
+            maskCache[key] = image
+            maskImage = image
+        }
     }
 
-    private let windowSize = NSSize(width: 120, height: 112)
+    private let windowSize = NSSize(width: 136, height: 136)
     private let panel: OrbPanel
     private let backdropView: FrostedOrbBackdropView
     private let orbView: ThinkingOrbCanvasView
@@ -681,21 +712,26 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
         let root = DragSurface(frame: NSRect(origin: .zero, size: windowSize))
         root.wantsLayer = true
         root.layer?.backgroundColor = NSColor.clear.cgColor
-        // The 96-point material is centred exactly behind the 84-point orb. Its six-point feather
-        // beyond each side of the authored sphere disappears before reaching the panel edge.
+        // The effect view fills the transparent panel because it also supplies vibrancy to the
+        // particle renderer. `maskImage` affects only the sampled material, not these subviews.
         let backdropView = FrostedOrbBackdropView(
-            frame: NSRect(x: 12, y: 16, width: 96, height: 96)
+            frame: root.bounds,
+            orbCentre: NSPoint(x: windowSize.width / 2, y: 64)
         )
+        backdropView.autoresizingMask = [.width, .height]
         root.addSubview(backdropView)
         let orbView = ThinkingOrbCanvasView(frame: root.bounds)
         orbView.autoresizingMask = [.width, .height]
-        root.addSubview(orbView)
+        backdropView.addSubview(orbView)
         panel.contentView = root
 
         self.panel = panel
         self.backdropView = backdropView
         self.orbView = orbView
         super.init()
+        orbView.onVisualRadiusChange = { [weak backdropView] radius in
+            backdropView?.setSphereRadius(radius)
+        }
         orbView.setTint(VoiceLayerPalette.tint(for: nil, layers: layers), animated: false)
         panel.delegate = self
         observers.append(NotificationCenter.default.addObserver(

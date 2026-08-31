@@ -2960,6 +2960,24 @@ feel that evening; if any of these is wrong, this is where to look:
   build 47 / `1.0.0`, signed by `siriRemote Local Signing`, with one no-argument process from
   `/Applications/HyperVibe.app` (PID 1725 at handoff time). build 45 is recoverable at
   `/private/tmp/hypervibe-before-local47.8yXC58/HyperVibe.app`; these changes were not pushed.
+- local.49 replaces the centre-heavy local.47 frost with an audio-reactive material envelope. The
+  mask has a constant 56% material plateau through the actual authored particle radius and fades
+  only across the following 18 points, so the orb interior is even and the outside has no hard
+  edge or bright centre. The radius follows the visible authored dots (including pitch-driven ring
+  movement), is smoothed independently for expansion and contraction, and is quantised to quarter
+  points between 28 and 46 to avoid mask-image churn. The particles now render with semantic
+  `labelColor` inside the active vibrant HUD material, letting macOS choose black over bright
+  backgrounds and white over dark backgrounds without screen-pixel capture or a new Screen
+  Recording permission. Installed-background captures at
+  `/private/tmp/hypervibe-local48-dynamic-{0,3,7}.png` confirm black particles over a bright photo,
+  the absence of a white centre, and the material growing with the loud-state particle envelope.
+  Build 48 used an overly bright material and was rejected without installation. Verification:
+  Core **134/134**, native Voice **112/112**, optimized compilation, `git diff --check`, stable
+  deep/strict signing, and candidate/installed executable equality all pass (SHA-256
+  `5b8259be3619d075d6ba0c2ff318eee8b4213cbfa20e4fe75d67ff5b95d8e8b2`). The installed App is
+  build 49 / `1.0.0`, signed by `siriRemote Local Signing`, with one no-argument process from
+  `/Applications/HyperVibe.app` (PID 9790 at handoff time). local.47 is recoverable at
+  `/private/tmp/hypervibe-before-local49-20260831/HyperVibe.app`; these changes were not pushed.
 
 ## Maintenance rules
 
