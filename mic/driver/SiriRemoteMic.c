@@ -440,6 +440,18 @@ static int64_t                      gSRM_FadeStartTime = kSRM_FadeIdleTime;
 #define kSRM_FadeScratchFrames      8192u
 static Float32                      gSRM_FadeScratch[kSRM_FadeScratchFrames * SRM_CHANNELS];
 
+// CoreAudio can ask for the same input timeline window once per client. Only the first read may
+// observe producer progress or advance source-selection state; later reads must return the exact
+// same audio. Otherwise a chunk arriving between two clients can commit a switch in the discarded
+// second render, making the next timeline window skip its crossfade. A single-window cache covers
+// the host's consecutive per-client reads without allocation or locking on the real-time path.
+#define kSRM_RenderCacheFrames      8192u
+static Float32                      gSRM_RenderCache[kSRM_RenderCacheFrames * SRM_CHANNELS];
+static int64_t                      gSRM_RenderCacheTime = kSRM_FadeIdleTime;
+static UInt32                       gSRM_RenderCacheFrameCount = 0;
+static Float32                      gSRM_LastOutputSample[SRM_CHANNELS];
+static Boolean                      gSRM_LastOutputSampleValid = false;
+
 static void SRM_AttachRing(SRMRingReader* r)
 {
     if (r->shm != NULL) { return; }
@@ -518,6 +530,9 @@ static void SRM_ResetSession(void)
     gSRM_Source = kSRM_SourceSilence;
     gSRM_FadeFrom = kSRM_SourceSilence;
     gSRM_FadeStartTime = kSRM_FadeIdleTime;   // the new session's timeline restarts near zero
+    gSRM_RenderCacheTime = kSRM_FadeIdleTime;
+    gSRM_RenderCacheFrameCount = 0;
+    gSRM_LastOutputSampleValid = false;
 }
 
 static void SRM_DetachRing(SRMRingReader* r)
@@ -579,8 +594,8 @@ static Boolean SRM_RingFresh(const SRMRingReader* r, int64_t inNow)
 // The position-based windowed read (the primed/jitter logic, unchanged in substance from the
 // single-ring version): fill outBuffer for the window starting at inNow, silence-padding any
 // underrun tail and re-arming the gate cheaply.
-static void SRM_RingRender(SRMRingReader* r, uint64_t w, int64_t inNow,
-                           UInt32 inFrames, Float32* outBuffer)
+static UInt32 SRM_RingRender(SRMRingReader* r, uint64_t w, int64_t inNow,
+                             UInt32 inFrames, Float32* outBuffer)
 {
     const UInt32 chans = kNumber_Of_Channels;
 
@@ -596,7 +611,7 @@ static void SRM_RingRender(SRMRingReader* r, uint64_t w, int64_t inNow,
     if (!r->primed)
     {
         vDSP_vclr(outBuffer, 1, inFrames * chans);
-        return;
+        return 0;
     }
 
     const int64_t position64 = inNow + r->offset;
@@ -638,6 +653,7 @@ static void SRM_RingRender(SRMRingReader* r, uint64_t w, int64_t inNow,
         r->gate = r->reprimeFrames;
     }
     if (position + toRead > r->consumedTo) { r->consumedTo = position + toRead; }
+    return toRead;
 }
 
 // Keep a live-but-unselected ring caught up: unprimed, at most primeFrames behind its writer.
@@ -651,22 +667,23 @@ static void SRM_RingPark(SRMRingReader* r, uint64_t w)
     if (parked > r->consumedTo) { r->consumedTo = parked; }
 }
 
-static void SRM_RenderSource(SRMSource inSource,
-                             Boolean inRemoteUsable, uint64_t inRemoteWrite,
-                             Boolean inBuiltinUsable, uint64_t inBuiltinWrite,
-                             int64_t inNow, UInt32 inFrames, Float32* outBuffer)
+static UInt32 SRM_RenderSource(SRMSource inSource,
+                               Boolean inRemoteUsable, uint64_t inRemoteWrite,
+                               Boolean inBuiltinUsable, uint64_t inBuiltinWrite,
+                               int64_t inNow, UInt32 inFrames, Float32* outBuffer)
 {
     if (inSource == kSRM_SourceRemote && inRemoteUsable)
     {
-        SRM_RingRender(&gSRM_Remote, inRemoteWrite, inNow, inFrames, outBuffer);
+        return SRM_RingRender(&gSRM_Remote, inRemoteWrite, inNow, inFrames, outBuffer);
     }
     else if (inSource == kSRM_SourceBuiltin && inBuiltinUsable)
     {
-        SRM_RingRender(&gSRM_Builtin, inBuiltinWrite, inNow, inFrames, outBuffer);
+        return SRM_RingRender(&gSRM_Builtin, inBuiltinWrite, inNow, inFrames, outBuffer);
     }
     else
     {
         vDSP_vclr(outBuffer, 1, inFrames * kNumber_Of_Channels);
+        return 0;
     }
 }
 
@@ -5130,6 +5147,15 @@ static OSStatus	BlackHole_DoIOOperation(AudioServerPlugInDriverRef inDriver, Aud
         Float32* outMain = (Float32*)ioMainBuffer;
         const int64_t now = (int64_t)inIOCycleInfo->mInputTime.mSampleTime;
 
+        if (inIOBufferFrameSize <= kSRM_RenderCacheFrames &&
+            gSRM_RenderCacheTime == now &&
+            gSRM_RenderCacheFrameCount == inIOBufferFrameSize)
+        {
+            memcpy(outMain, gSRM_RenderCache,
+                   (size_t)inIOBufferFrameSize * chans * sizeof(Float32));
+            goto Done;
+        }
+
         const Boolean unmuted       = !gMute_Master_Value;
         const Boolean remoteUsable  = unmuted && SRM_RingValid(&gSRM_Remote);
         const Boolean builtinUsable = unmuted && SRM_RingValid(&gSRM_Builtin);
@@ -5193,8 +5219,9 @@ static OSStatus	BlackHole_DoIOOperation(AudioServerPlugInDriverRef inDriver, Aud
             gSRM_FadeStartTime = now;
         }
 
-        SRM_RenderSource(gSRM_Source, remoteUsable, remoteWrite, builtinUsable, builtinWrite,
-                         now, inIOBufferFrameSize, outMain);
+        (void)SRM_RenderSource(gSRM_Source, remoteUsable, remoteWrite,
+                              builtinUsable, builtinWrite,
+                              now, inIOBufferFrameSize, outMain);
 
         // Linear crossfade out of the previous source. The weight is a pure function of the
         // timeline position, and the outgoing source keeps being rendered position-based until
@@ -5202,9 +5229,30 @@ static OSStatus	BlackHole_DoIOOperation(AudioServerPlugInDriverRef inDriver, Aud
         const Boolean fadeInWindow = (now - gSRM_FadeStartTime) < (int64_t)kSRM_SourceFadeFrames;
         if (fadeInWindow && inIOBufferFrameSize <= kSRM_FadeScratchFrames)
         {
-            SRM_RenderSource(gSRM_FadeFrom, remoteUsable, remoteWrite,
-                             builtinUsable, builtinWrite,
-                             now, inIOBufferFrameSize, gSRM_FadeScratch);
+            const UInt32 outgoingFrames =
+                SRM_RenderSource(gSRM_FadeFrom, remoteUsable, remoteWrite,
+                                 builtinUsable, builtinWrite,
+                                 now, inIOBufferFrameSize, gSRM_FadeScratch);
+
+            // A released producer can run out during the 5 ms fade. Zero-padding that outgoing
+            // tail creates exactly the hard edge the fade is meant to prevent, so hold its last
+            // real sample for only the remainder of this fade window. If it has no frame left,
+            // continue from the prior rendered output sample. Silence as an intentional source
+            // stays silence.
+            if (gSRM_FadeFrom != kSRM_SourceSilence && outgoingFrames < inIOBufferFrameSize)
+            {
+                for (UInt32 channel = 0; channel < chans; ++channel)
+                {
+                    const Float32 held = (outgoingFrames > 0)
+                        ? gSRM_FadeScratch[(size_t)(outgoingFrames - 1) * chans + channel]
+                        : (gSRM_LastOutputSampleValid ? gSRM_LastOutputSample[channel] : 0.0f);
+                    for (UInt32 frame = outgoingFrames;
+                         frame < inIOBufferFrameSize; ++frame)
+                    {
+                        gSRM_FadeScratch[(size_t)frame * chans + channel] = held;
+                    }
+                }
+            }
             const Float32 fadeStep = 1.0f / (Float32)kSRM_SourceFadeFrames;
             for (UInt32 frame = 0; frame < inIOBufferFrameSize; ++frame)
             {
@@ -5244,6 +5292,29 @@ static OSStatus	BlackHole_DoIOOperation(AudioServerPlugInDriverRef inDriver, Aud
             vDSP_vclip(outMain, 1, &lo, &hi, outMain, 1, inIOBufferFrameSize * chans);
         }
         // A pure-silence cycle already had its buffer cleared by SRM_RenderSource.
+
+        if (inIOBufferFrameSize > 0)
+        {
+            for (UInt32 channel = 0; channel < chans; ++channel)
+            {
+                gSRM_LastOutputSample[channel] =
+                    outMain[(size_t)(inIOBufferFrameSize - 1) * chans + channel];
+            }
+            gSRM_LastOutputSampleValid = true;
+        }
+
+        if (inIOBufferFrameSize <= kSRM_RenderCacheFrames)
+        {
+            memcpy(gSRM_RenderCache, outMain,
+                   (size_t)inIOBufferFrameSize * chans * sizeof(Float32));
+            gSRM_RenderCacheTime = now;
+            gSRM_RenderCacheFrameCount = inIOBufferFrameSize;
+        }
+        else
+        {
+            gSRM_RenderCacheTime = kSRM_FadeIdleTime;
+            gSRM_RenderCacheFrameCount = 0;
+        }
     }
     
 #if kDevice_HasOutput

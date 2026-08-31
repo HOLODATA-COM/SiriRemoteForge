@@ -214,6 +214,8 @@ static unsigned gFailures = 0;
 
 typedef struct {
     size_t silent, fullScale, discontinuities, transitions;
+    size_t firstDiscontinuity;
+    Float32 beforeDiscontinuity, afterDiscontinuity;
 } StreamStats;
 
 // Splice/garbage scan. Exact 0.0f is served silence; steps out of / into silence are legal
@@ -224,7 +226,9 @@ static StreamStats analyze_stream(const Float32 *x, size_t total)
 {
     const double slope = 2.0 * kTriSpan / (double)kTrianglePeriod;
     const double discontinuityThreshold = 8.0 * slope;
-    StreamStats s = {0, 0, 0, 0};
+    StreamStats s = {
+        .firstDiscontinuity = SIZE_MAX,
+    };
     for (size_t i = 0; i < total; ++i)
     {
         const Float32 v = x[i];
@@ -234,7 +238,16 @@ static StreamStats analyze_stream(const Float32 *x, size_t total)
         {
             const Float32 p = x[i - 1];
             if (p == 0.0f) { ++s.transitions; continue; }     // silence boundary: allowed
-            if (fabs((double)v - (double)p) > discontinuityThreshold) { ++s.discontinuities; }
+            if (fabs((double)v - (double)p) > discontinuityThreshold)
+            {
+                if (s.firstDiscontinuity == SIZE_MAX)
+                {
+                    s.firstDiscontinuity = i;
+                    s.beforeDiscontinuity = p;
+                    s.afterDiscontinuity = v;
+                }
+                ++s.discontinuities;
+            }
         }
     }
     return s;
@@ -302,6 +315,8 @@ typedef struct {
     unsigned    totalCycles;
     unsigned    jumpAtCycle;       // kNoCycle = no resync jump
     unsigned    jumpFrames;
+    int         primeRemoteAfterStart;
+    int         primeBuiltinAfterStart;
     unsigned    remoteStartCycle;  // kNoCycle = leave the writer gate untouched
     unsigned    remoteStopCycle;
     unsigned    remoteResumeCycle;
@@ -309,6 +324,9 @@ typedef struct {
     Float32    *stream;            // totalCycles * kCycleFrames, allocated by run_phase
     unsigned    idemMismatches;
     unsigned    comparedWindows;
+    unsigned    firstIdemMismatchCycle;
+    unsigned    firstIdemMismatchFrame;
+    Float32     firstIdemValueA, firstIdemValueB;
     double      wrapRate;
 } PhaseRun;
 
@@ -318,11 +336,40 @@ static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
     if (run->stream == NULL) { fprintf(stderr, "io sim: out of memory\n"); return -1; }
     run->idemMismatches = 0;
     run->comparedWindows = 0;
+    run->firstIdemMismatchCycle = kNoCycle;
+    run->firstIdemMismatchFrame = 0;
     run->wrapRate = 0;
 
     OSStatus status = (*driver)->StartIO(driver, kObjectID_Device, 1);
     CHECK(status == noErr, "%s: StartIO status=%d", run->name, (int)status);
     if (status != noErr) { return -1; }
+
+    if (run->primeRemoteAfterStart)
+    {
+        const uint64_t afterStart =
+            atomic_load_explicit(&gRemoteProducer.shm->writeIndex, memory_order_acquire);
+        if (producer_wait_for_frames(&gRemoteProducer,
+                                     afterStart + 10 * kChunkFrames) != 0)
+        {
+            return -1;
+        }
+    }
+    if (run->primeBuiltinAfterStart)
+    {
+        // StartIO deliberately parks the reader at the producer's current write index so a new
+        // session never replays old microphone audio. Establish ten fresh 10 ms chunks after
+        // that reset before advancing the simulated CoreAudio timeline. Without this handshake,
+        // host thread scheduling (rather than the driver) decides whether phase 3's fixed startup
+        // window contains enough audio to satisfy the 40 ms built-in prime gate; the extra 60 ms
+        // keeps an overloaded CI host from starving the feeder during the assertion itself.
+        const uint64_t afterStart =
+            atomic_load_explicit(&gBuiltinProducer.shm->writeIndex, memory_order_acquire);
+        if (producer_wait_for_frames(&gBuiltinProducer,
+                                     afterStart + 10 * kChunkFrames) != 0)
+        {
+            return -1;
+        }
+    }
 
     Float32 bufferB[kCycleFrames];
 
@@ -412,7 +459,24 @@ static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
         if (fullyServed && remoteBefore == remoteAfter && builtinBefore == builtinAfter)
         {
             ++run->comparedWindows;
-            if (memcmp(outA, bufferB, sizeof(bufferB)) != 0) { ++run->idemMismatches; }
+            if (memcmp(outA, bufferB, sizeof(bufferB)) != 0)
+            {
+                if (run->firstIdemMismatchCycle == kNoCycle)
+                {
+                    run->firstIdemMismatchCycle = k;
+                    for (unsigned i = 0; i < kCycleFrames; ++i)
+                    {
+                        if (outA[i] != bufferB[i])
+                        {
+                            run->firstIdemMismatchFrame = i;
+                            run->firstIdemValueA = outA[i];
+                            run->firstIdemValueB = bufferB[i];
+                            break;
+                        }
+                    }
+                }
+                ++run->idemMismatches;
+            }
         }
     }
 
@@ -463,6 +527,7 @@ int main(int argc, char **argv)
     PhaseRun phase1 = {
         .name = "phase1", .totalCycles = 380,
         .jumpAtCycle = 200, .jumpFrames = 24000,   // +0.5 s forward ~2.1 s in
+        .primeRemoteAfterStart = 1,
         .remoteStartCycle = kNoCycle, .remoteStopCycle = kNoCycle,
         .remoteResumeCycle = kNoCycle,
     };
@@ -498,6 +563,7 @@ int main(int argc, char **argv)
     PhaseRun phase2 = {
         .name = "phase2", .totalCycles = 165,
         .jumpAtCycle = kNoCycle, .jumpFrames = 0,
+        .primeRemoteAfterStart = 1,
         .remoteStartCycle = kNoCycle, .remoteStopCycle = 47, .remoteResumeCycle = 113,
     };
     if (run_phase(driver, &phase2) != 0) { return 2; }
@@ -537,6 +603,7 @@ int main(int argc, char **argv)
     PhaseRun phase3 = {
         .name = "phase3", .totalCycles = 285,
         .jumpAtCycle = kNoCycle, .jumpFrames = 0,
+        .primeBuiltinAfterStart = 1,
         .remoteStartCycle = 24, .remoteStopCycle = 94, .remoteResumeCycle = 188,
     };
     if (run_phase(driver, &phase3) != 0) { return 2; }
@@ -569,10 +636,15 @@ int main(int argc, char **argv)
                           106000, total, 1, 0.95);
         CHECK(s.fullScale == 0, "phase3 (d): %zu full-scale samples", s.fullScale);
         CHECK(s.discontinuities == 0,
-              "phase3 (d): %zu splices — a transition popped beyond the crossfade",
-              s.discontinuities);
-        CHECK(phase3.idemMismatches == 0, "phase3 (d): %u re-read windows differed",
-              phase3.idemMismatches);
+              "phase3 (d): %zu splices — first at frame %zu (%.6f -> %.6f)",
+              s.discontinuities, s.firstDiscontinuity,
+              (double)s.beforeDiscontinuity, (double)s.afterDiscontinuity);
+        CHECK(phase3.idemMismatches == 0,
+              "phase3 (d): %u re-read windows differed — first cycle %u frame %u "
+              "(%.6f vs %.6f)",
+              phase3.idemMismatches, phase3.firstIdemMismatchCycle,
+              phase3.firstIdemMismatchFrame,
+              (double)phase3.firstIdemValueA, (double)phase3.firstIdemValueB);
         CHECK(phase3.comparedWindows > phase3.totalCycles / 3,
               "phase3: too few fully-served windows (%u) to judge", phase3.comparedWindows);
         free(phase3.stream);
