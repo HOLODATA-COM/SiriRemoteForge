@@ -3016,6 +3016,23 @@ feel that evening; if any of these is wrong, this is where to look:
   no-argument process from `/Applications/HyperVibe.app` (PID 56811 at handoff time). build 53 is
   recoverable at `/private/tmp/hypervibe-before-local54-20260831/HyperVibe.app`; these changes were
   not pushed.
+- local.55 fixes a live-only saturation regression in local.54. The deterministic preview looked
+  expressive, but the real microphone's already-curved display envelope was curved and boosted a
+  second time, so ordinary speech immediately clipped the sphere at its largest geometry and left
+  no headroom for syllables. The orb now reuses the same tested `VoiceWaveformLevelNormalizer` as
+  the other Voice surfaces: every hold has a 5.5% acoustic gate, a slowly releasing local peak and
+  a hard 0.76 visual ceiling. Geometry maps that unsaturated relative level into wider positional
+  travel rather than manufacturing motion by clipping the meter. Spectral brightness is gated by
+  real acoustic energy, and dot-size gain is secondary to ring movement. Captures at
+  `/private/tmp/hypervibe-local55-dynamic-{0,1,2,3}.png` show a compact first frame, a distinct
+  syllable expansion, and two visibly smaller pitch-shaped releases instead of a permanently
+  maximum sphere. Verification: native Voice **112/112**, optimized compilation,
+  `git diff --check`, stable deep/strict signing, and candidate/installed executable equality all
+  pass (SHA-256 `1f2e10d22e7a0a7d75181a8b0b904736d040d2d24de39e342940c34b69bdaec4`).
+  The installed App is build 55 / `1.0.0`, signed by `siriRemote Local Signing`, with one
+  no-argument process from `/Applications/HyperVibe.app` (PID 70496 at handoff time). The rejected
+  build 54 is recoverable at `/private/tmp/hypervibe-before-local55-20260831/HyperVibe.app`; these
+  changes were not pushed.
 
 ## Maintenance rules
 

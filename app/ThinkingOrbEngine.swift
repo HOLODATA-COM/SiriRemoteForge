@@ -411,16 +411,18 @@ enum ThinkingOrbEngine {
                                            * Double(levels.count - 1)).rounded()))
                 // Most of the motion is the delayed ring sample; a small amount of the current
                 // envelope keeps neighbouring layers sympathetically alive as a hit travels on.
-                let level = min(1, max(0,
-                    levels[sampleIndex] * 1.02 + acoustics.overallLevel * 0.14
+                let level = min(0.82, max(0,
+                    levels[sampleIndex] * 0.92 + acoustics.overallLevel * 0.08
                 ))
                 ringEnergy = level
                 let pitch = min(1, max(-1, acoustics.pitch))
                     * min(1, max(0, acoustics.pitchConfidence))
                 let pitchShape = pitch
-                    * sin(latitude * 1.75 + Double(ringIndex) * 0.34) * 0.92
-                let voice = (level * 2.42 - 0.28) * 1.04
-                wave = min(1.55, max(-1.25,
+                    * sin(latitude * 1.75 + Double(ringIndex) * 0.34) * 0.72
+                // Preserve the normalizer's remaining headroom: ordinary speech lives around the
+                // middle of this range, while only a relative syllable peak reaches the top.
+                let voice = (level - 0.16) * 1.75
+                wave = min(1.65, max(-1.0,
                     synthetic * 0.06 + voice + pitchShape
                 ))
             } else {
@@ -436,7 +438,7 @@ enum ThinkingOrbEngine {
             } else {
                 // Let voiced hits open dramatically, but limit inward recoil so multiple rings do
                 // not collapse into an untidy knot at the centre.
-                let radialWave = wave >= 0 ? 0.245 * wave : 0.145 * wave
+                let radialWave = wave >= 0 ? 0.285 * wave : 0.12 * wave
                 ringRadius = radius * (0.86 + radialWave)
             }
             let acousticBrightness = acoustics.map {
@@ -458,7 +460,7 @@ enum ThinkingOrbEngine {
                 var liveScale = 1.0
                 if let acoustic = acoustics {
                     let brightness = min(1, max(0, acoustic.brightness))
-                    liveScale += 0.68 * ringEnergy + 0.18 * brightness * shimmer
+                    liveScale += 0.46 * ringEnergy + 0.14 * brightness * shimmer
                 }
                 dots.append(ThinkingOrbDot(
                     x: point.0, y: point.1, z: point.2,

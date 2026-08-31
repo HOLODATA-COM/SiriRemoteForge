@@ -280,6 +280,7 @@ final class ThinkingOrbCanvasView: NSView {
     private var targetBrightness = 0.0
     private var displayedBrightness = 0.0
     private var pitchBaselineLog2: Double?
+    private var levelNormalizer = VoiceWaveformLevelNormalizer()
 
     override var isOpaque: Bool { false }
     override var allowsVibrancy: Bool { true }
@@ -460,6 +461,7 @@ final class ThinkingOrbCanvasView: NSView {
         targetBrightness = 0
         displayedBrightness = 0
         pitchBaselineLog2 = nil
+        levelNormalizer.reset()
         needsDisplay = true
     }
 
@@ -471,11 +473,10 @@ final class ThinkingOrbCanvasView: NSView {
     }
 
     func ingest(_ sample: VoiceMeterSample) {
-        let raw = sample.level.isFinite ? Double(sample.level) : 0
-        // Remove the low noise floor, then use a more assertive perceptual curve so ordinary
-        // syllables—not only clipped peaks—travel visibly through the latitude rings.
-        let voiced = min(1, max(0, (raw - 0.012) / 0.988))
-        let perceptual = min(1, pow(voiced, 0.62) * 1.10)
+        // Share the tested per-hold peak normalizer with the other Voice visualisations. Its real
+        // noise gate and 0.76 ceiling preserve syllable-to-syllable headroom instead of turning a
+        // normal microphone level into a permanently saturated sphere.
+        let perceptual = Double(levelNormalizer.normalize(sample.level))
         targetLevel = perceptual
         targetHistory.removeFirst()
         targetHistory.append(perceptual)
@@ -490,8 +491,9 @@ final class ThinkingOrbCanvasView: NSView {
             targetPitch = min(1, max(-1, (pitchLog2 - baseline) / (4.5 / 12.0)))
             pitchBaselineLog2 = baseline + (pitchLog2 - baseline) * 0.004
         }
-        targetBrightness = sample.brightness.isFinite
-            ? min(1, pow(max(0, Double(sample.brightness)), 0.72)) : 0
+        let rawBrightness = sample.brightness.isFinite
+            ? min(1, max(0, Double(sample.brightness))) : 0
+        targetBrightness = pow(rawBrightness, 0.85) * min(1, perceptual * 1.6)
         lastMeterAt = CACurrentMediaTime()
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { needsDisplay = true }
     }
