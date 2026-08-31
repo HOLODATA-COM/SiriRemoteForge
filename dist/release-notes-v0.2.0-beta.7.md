@@ -1,0 +1,110 @@
+# SiriRemoteForge v0.2.0-beta.7
+
+This release is an upgrade from **v0.2.0-beta.6**. It replaces the rectangular Voice capsule with
+an audio-reactive particle orb, adds safe spoken editing of selected text, learns app-specific
+dictation style and user corrections, strengthens delivery recovery, and fixes Siri Remote voice
+capture on firmware layouts that use ATT handle `0x0036`.
+
+## Upgrade from beta.6
+
+- **Existing beta.6 installation:** use **Check for Updates…** for the app-only update, or download
+  `HyperVibe-0.2.0-beta.7-macOS-arm64.zip`.
+- **Important for issue #7 / ATT handle `0x0036`:** install
+  `HyperVibe-Full-Setup-0.2.0-beta.7-arm64.pkg`. The parser fix lives in the separately installed
+  Siri Remote Mic router; Sparkle's app-only update intentionally does not replace system audio or
+  capture components.
+- **First installation:** use `HyperVibe-Full-Setup-0.2.0-beta.7-arm64.pkg`.
+- **Legacy Full Setup:** `HyperVibe-Full-Setup-0.2.0-beta.7-arm64.zip` remains available when the
+  native Installer cannot be used.
+
+These beta artifacts remain non-notarized. The App bundles are ad-hoc signed and the native package
+is unsigned because the project does not yet have Developer ID distribution certificates.
+Control-click the download and choose **Open** once; never disable Gatekeeper globally. HyperVibe
+requires macOS 13 or newer on Apple silicon.
+
+## What changed since beta.6
+
+### Audio-reactive particle Voice orb
+
+- Replaces the old rectangular Voice card with a larger spherical field of individually animated
+  particles. Listening reacts to measured level, pitch confidence and spectral energy instead of
+  rotating as one decorative object.
+- Particles arrive together from changing off-orb positions, preserve interruption continuity and
+  reverse cleanly when a sub-minimum recording is discarded.
+- Processing stages morph continuously rather than using the previous sweep-tail treatment.
+  Success, failure and clipboard recovery resolve into particle-built check, cross and Copy forms.
+- Mute + Side still cycles External / Final / Live globally, but its three choices remain recognisable
+  icons rather than three competing Voice balls. Layer colour is carried into the orb.
+
+### Select, speak and replace
+
+- Holding Side while editable text is selected now treats the utterance as an edit instruction.
+  HyperVibe rewrites the exact selection captured at key-down and replaces it only if the same app,
+  field, selection and secure-input state remain valid.
+- Readable terminal or scrollback selections can still be transformed, but their result is copied
+  rather than pretending an in-place edit succeeded. Any failed replacement preserves the original
+  selection and copies the complete generated result.
+- Selection editing has its own enable switch and OpenAI / DeepSeek provider choice. Selected text
+  is isolated as untrusted source data; it is never treated as a prompt or answered conversationally.
+
+### App-aware dictation memory and user corrections
+
+- Ordinary dictation keeps up to 100 local examples for each explicit `appProfiles` group, or for
+  each individual app when no group exists. Final cleanup receives only the active target's latest
+  20 examples, helping recurring vocabulary, capitalization and formatting without mixing apps.
+- After a successful insertion, HyperVibe can observe only the just-inserted span in that same
+  Accessibility text field for 30 seconds. A stable backspace/retype correction replaces the saved
+  example, so future cleanup learns the user's correction rather than reinforcing the earlier error.
+- Canonical dictionary entries now reach transcription context even when they have no aliases.
+  Terms such as `skill`, `layer` and `core` therefore receive general vocabulary support without a
+  hard-coded `SQL` substitution.
+
+History is stored as current-user-only JSON at
+`~/Library/Application Support/HyperVibe/VoiceHistory/history.json` (directory mode `0700`, file
+mode `0600`). The field's pre-existing contents and global keyboard activity are never recorded.
+When Final cloud cleanup is enabled, the active app/group's recent examples are included in the
+request to the selected OpenAI or DeepSeek provider. Quit HyperVibe before deleting the history file
+to clear this memory.
+
+### More reliable mode switching, insertion and recovery
+
+- Fixes a stale config-reload race where the UI could confirm Final while the next Side hold still
+  behaved as External. Rapid selector dismissal can no longer leave a real Voice turn invisible.
+- Final delivery now prioritises the compatibility path that reliably emits DOM input events in
+  Chrome and other web editors, while retaining Accessibility and Unicode fallbacks.
+- React and Electron editors may rebuild their Accessibility node during transcription. HyperVibe
+  now accepts only a semantically and geometrically compatible replacement field and rechecks it
+  immediately before mutation.
+- Completed text is always preserved on the clipboard when direct delivery cannot be proven,
+  including disabled auto-insert, changed or secure targets, and failed selection replacement.
+- Credential and provider failures now show actionable, sanitised reasons. Settings reads cached
+  credential state instead of revalidating the signed helper on the main thread.
+
+### Siri Remote microphone firmware compatibility
+
+- Fixes [issue #7](https://github.com/HOLODATA-COM/SiriRemoteForge/issues/7): the router now accepts
+  the two independently observed Siri Remote voice value handles, `0x0035` and `0x0036`.
+- All existing validation remains in place: receive direction, ATT notification opcode,
+  sequence/length layout and Opus TOC `0xB8`. Unknown handles such as `0x0037` remain rejected.
+- The reported A2854 / firmware `0x0033` capture produced 619 decoded frames with zero decoder errors
+  and non-silent PCM. Private voice captures and device identifiers are not included in this release.
+
+## Verification
+
+- SiriRemoteCore: **134/134 tests passed**.
+- Packaged native Voice: **112/112 self-checks passed**.
+- Microphone router parser, monitor ring, Opus decoder and all shipping components build successfully.
+- GitHub CI passes both Core and App jobs on the repository's Xcode 16 runner.
+- Release audit expands the app-only ZIP, Full Setup ZIP and native package; verifies checksums,
+  signatures, payload seals, architecture, macOS deployment target, updater metadata and license
+  notices; and rejects private paths, device identifiers, personal config and PacketLogger.
+
+Use the attached `SHA256SUMS.txt` to verify all downloads:
+
+```sh
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+This remains prerelease software. It relies on private macOS frameworks and an undocumented
+Bluetooth voice path; please include the macOS version, remote model and firmware when reporting a
+reproducible issue.
