@@ -611,6 +611,11 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             self.orbCentre = orbCentre
             super.init(frame: frameRect)
             wantsLayer = true
+            // Keep the material itself neutral and dark. AppKit's semantic foreground colours
+            // follow the app appearance, not the arbitrary pixels under a floating window; a
+            // forced dark vibrant surface therefore gives the particles a dependable contrast
+            // island without requesting Screen Recording access.
+            appearance = NSAppearance(named: .vibrantDark)
             material = .hudWindow
             blendingMode = .behindWindow
             state = .active
@@ -644,10 +649,10 @@ final class VoicePipelineHUDController: NSObject, NSWindowDelegate {
             let tail = (quantisedRadius + 13) / outerRadius
             var locations: [CGFloat] = [0, plateau, shoulder, tail, 1]
             let colours = [
-                NSColor.black.withAlphaComponent(0.56),
-                NSColor.black.withAlphaComponent(0.56),
                 NSColor.black.withAlphaComponent(0.46),
-                NSColor.black.withAlphaComponent(0.18),
+                NSColor.black.withAlphaComponent(0.46),
+                NSColor.black.withAlphaComponent(0.31),
+                NSColor.black.withAlphaComponent(0.10),
                 NSColor.clear,
             ]
             let gradient = locations.withUnsafeMutableBufferPointer { buffer in

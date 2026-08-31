@@ -820,9 +820,10 @@ final class ThinkingOrbCanvasView: NSView {
     /// Layer hue. This changes neither geometry nor alpha and adds no outline around the sphere.
     private func inkColor(tint: NSColor, white: Double, alpha: Double) -> NSColor {
         let frontness = CGFloat(1 - white)
-        // `labelColor` becomes the system's black or white contrast mode inside a vibrant
-        // material. Preserve Layer tint as hue, but let the actual background choose luminance.
-        let anchor = NSColor.labelColor
+        // The orb sits on a deliberately dark vibrant material. Keep every depth layer on the
+        // bright side of its Layer hue so an unrelated app's appearance cannot turn the dots
+        // black over a dark webpage or terminal.
+        let anchor = NSColor.white
         let fraction = 0.38 + frontness * 0.45
         let colored = tint.blended(withFraction: fraction, of: anchor) ?? tint
         return colored.withAlphaComponent(CGFloat(alpha))

@@ -2978,6 +2978,24 @@ feel that evening; if any of these is wrong, this is where to look:
   build 49 / `1.0.0`, signed by `siriRemote Local Signing`, with one no-argument process from
   `/Applications/HyperVibe.app` (PID 9790 at handoff time). local.47 is recoverable at
   `/private/tmp/hypervibe-before-local49-20260831/HyperVibe.app`; these changes were not pushed.
+- local.51 fixes local.49's false assumption that semantic `labelColor` can classify arbitrary
+  pixels beneath a floating window. On a black webpage under a light system appearance it could
+  still render black particles over a pale HUD material. The orb now owns a deliberately dark,
+  neutral vibrant material and keeps every depth layer on the bright side of the active Layer hue;
+  this guarantees contrast on both black and bright application content without requesting Screen
+  Recording access. The material plateau is only 46% (31% shoulder, 10% tail), so it suppresses
+  busy light backgrounds without becoming the obvious grey disc seen in rejected build 50. A
+  precompiled, non-interactive black-background fixture covering the lower centre of every display
+  was used to catch the Listening animation without timing or cursor-screen ambiguity. Captures at
+  `/private/tmp/hypervibe-local51-black-listening-{0,3,7}.png` confirm bright mint/white particles,
+  readable audio-driven size changes, no white fog, and no visible circular edge on pure black.
+  Verification: Core **134/134**, native Voice **112/112**, optimized compilation,
+  `git diff --check`, stable deep/strict signing, and candidate/installed executable equality all
+  pass (SHA-256 `3865846624c66d3357542cd2ad92f6f58ca19752a91890c83e4329e5d8d9e543`).
+  The installed App is build 51 / `1.0.0`, signed by `siriRemote Local Signing`, with one
+  no-argument process from `/Applications/HyperVibe.app` (PID 23363 at handoff time). build 50 is
+  recoverable at `/private/tmp/hypervibe-before-local51-20260831/HyperVibe.app`; build 49 is at
+  `/private/tmp/hypervibe-before-local50-20260831/HyperVibe.app`. These changes were not pushed.
 
 ## Maintenance rules
 
