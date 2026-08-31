@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="500" viewBox="0 0 960 500" role="img" aria-labelledby="title description">
   <title id="title">Star history for HOLODATA-COM/SiriRemoteForge</title>
-  <desc id="description">44 GitHub stars as of 2026-08-30.</desc>
+  <desc id="description">44 GitHub stars as of 2026-08-31.</desc>
   <defs>
     <linearGradient id="star-area-light" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#ff806b" stop-opacity="0.42"/>
@@ -23,10 +23,10 @@
   <text x="76" y="82" class="subtitle">HOLODATA-COM/SiriRemoteForge</text>
   <rect x="790" y="36" width="128" height="38" rx="19" fill="#fff1ef"/>
   <text x="854" y="61" text-anchor="middle" dominant-baseline="middle" class="count">44 stars</text>
-  <text x="918" y="104" text-anchor="end" class="subtitle">Updated Aug 30, 2026 · UTC</text>
+  <text x="918" y="104" text-anchor="end" class="subtitle">Updated Aug 31, 2026 · UTC</text>
   <line x1="76" y1="436.00" x2="918" y2="436.00" class="grid"/><text x="60" y="440.00" text-anchor="end" class="tick">0</text><line x1="76" y1="380.00" x2="918" y2="380.00" class="grid"/><text x="60" y="384.00" text-anchor="end" class="tick">10</text><line x1="76" y1="324.00" x2="918" y2="324.00" class="grid"/><text x="60" y="328.00" text-anchor="end" class="tick">20</text><line x1="76" y1="268.00" x2="918" y2="268.00" class="grid"/><text x="60" y="272.00" text-anchor="end" class="tick">30</text><line x1="76" y1="212.00" x2="918" y2="212.00" class="grid"/><text x="60" y="216.00" text-anchor="end" class="tick">40</text><line x1="76" y1="156.00" x2="918" y2="156.00" class="grid"/><text x="60" y="160.00" text-anchor="end" class="tick">50</text>
-  <path d="M 76.00 436.00 L 98.16 380.00 L 120.32 346.40 L 142.47 335.20 L 164.63 307.20 L 186.79 296.00 L 275.42 290.40 L 297.58 279.20 L 319.74 273.60 L 341.89 268.00 L 386.21 262.40 L 519.16 256.80 L 541.32 251.20 L 696.42 245.60 L 718.58 240.00 L 740.74 234.40 L 785.05 223.20 L 829.37 212.00 L 895.84 200.80 L 918.00 189.60 L 918.00 436.00 L 76.00 436.00 Z" fill="url(#star-area-light)"/>
-  <path d="M 76.00 436.00 L 98.16 380.00 L 120.32 346.40 L 142.47 335.20 L 164.63 307.20 L 186.79 296.00 L 275.42 290.40 L 297.58 279.20 L 319.74 273.60 L 341.89 268.00 L 386.21 262.40 L 519.16 256.80 L 541.32 251.20 L 696.42 245.60 L 718.58 240.00 L 740.74 234.40 L 785.05 223.20 L 829.37 212.00 L 895.84 200.80 L 918.00 189.60" fill="none" stroke="#ff6b57" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#line-glow)"/>
+  <path d="M 76.00 436.00 L 97.59 380.00 L 119.18 346.40 L 140.77 335.20 L 162.36 307.20 L 183.95 296.00 L 270.31 290.40 L 291.90 279.20 L 313.49 273.60 L 335.08 268.00 L 378.26 262.40 L 507.79 256.80 L 529.38 251.20 L 680.51 245.60 L 702.10 240.00 L 723.69 234.40 L 766.87 223.20 L 810.05 212.00 L 874.82 200.80 L 896.41 189.60 L 918.00 189.60 L 918.00 436.00 L 76.00 436.00 Z" fill="url(#star-area-light)"/>
+  <path d="M 76.00 436.00 L 97.59 380.00 L 119.18 346.40 L 140.77 335.20 L 162.36 307.20 L 183.95 296.00 L 270.31 290.40 L 291.90 279.20 L 313.49 273.60 L 335.08 268.00 L 378.26 262.40 L 507.79 256.80 L 529.38 251.20 L 680.51 245.60 L 702.10 240.00 L 723.69 234.40 L 766.87 223.20 L 810.05 212.00 L 874.82 200.80 L 896.41 189.60 L 918.00 189.60" fill="none" stroke="#ff6b57" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#line-glow)"/>
   <circle cx="918.00" cy="189.60" r="6" fill="#ffffff" stroke="#ff6b57" stroke-width="3"/>
-  <text x="76.00" y="470" text-anchor="start" class="tick">23 Jul</text><text x="253.26" y="470" text-anchor="middle" class="tick">31 Jul</text><text x="408.37" y="470" text-anchor="middle" class="tick">7 Aug</text><text x="585.63" y="470" text-anchor="middle" class="tick">15 Aug</text><text x="740.74" y="470" text-anchor="middle" class="tick">22 Aug</text><text x="918.00" y="470" text-anchor="end" class="tick">30 Aug</text>
+  <text x="76.00" y="470" text-anchor="start" class="tick">23 Jul</text><text x="248.72" y="470" text-anchor="middle" class="tick">31 Jul</text><text x="421.44" y="470" text-anchor="middle" class="tick">8 Aug</text><text x="572.56" y="470" text-anchor="middle" class="tick">15 Aug</text><text x="745.28" y="470" text-anchor="middle" class="tick">23 Aug</text><text x="918.00" y="470" text-anchor="end" class="tick">31 Aug</text>
 </svg>
