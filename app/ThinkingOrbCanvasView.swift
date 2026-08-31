@@ -273,6 +273,7 @@ final class ThinkingOrbCanvasView: NSView {
     private var displayedHistory = [Double](repeating: 0, count: 10)
     private var targetLevel = 0.0
     private var displayedLevel = 0.0
+    private var levelVelocity = 0.0
     private var targetPitch = 0.0
     private var displayedPitch = 0.0
     private var targetPitchConfidence = 0.0
@@ -454,6 +455,7 @@ final class ThinkingOrbCanvasView: NSView {
         displayedHistory = [Double](repeating: 0, count: 10)
         targetLevel = 0
         displayedLevel = 0
+        levelVelocity = 0
         targetPitch = 0
         displayedPitch = 0
         targetPitchConfidence = 0
@@ -543,8 +545,18 @@ final class ThinkingOrbCanvasView: NSView {
             let fraction = 1 - exp(-delta / constant)
             displayedHistory[index] += (target - displayedHistory[index]) * fraction
         }
-        displayedLevel = approach(displayedLevel, targetLevel, delta: delta,
-                                  rise: 0.024, fall: 0.17)
+        // A lightly under-damped response gives loud syllables a soft overshoot and recoil like a
+        // suspended object, rather than the mechanical exponential zoom used by the first pass.
+        levelVelocity += (targetLevel - displayedLevel) * 140 * delta
+        levelVelocity *= exp(-15 * delta)
+        displayedLevel += levelVelocity * delta
+        if displayedLevel < 0 {
+            displayedLevel = 0
+            levelVelocity = max(0, levelVelocity) * 0.2
+        } else if displayedLevel > 0.82 {
+            displayedLevel = 0.82
+            levelVelocity = min(0, levelVelocity) * 0.2
+        }
         displayedPitch = approach(displayedPitch, targetPitch, delta: delta,
                                   rise: 0.045, fall: 0.065)
         displayedPitchConfidence = approach(displayedPitchConfidence, targetPitchConfidence,

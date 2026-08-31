@@ -424,6 +424,22 @@ enum VoiceInputSelfTest {
         }.max() ?? 0
         expect(loudExtent > quietExtent + 0.5 && loudExtent < quietExtent + 4.5,
                "listening volume adds a visible but bounded whole-sphere breath")
+        func radialSpread(_ frame: ThinkingOrbFrame) -> Double {
+            let radii = frame.dots.map { dot -> Double in
+                let dx = dot.x - 32
+                let dy = dot.y - 32
+                return sqrt(dx * dx + dy * dy + dot.z * dot.z)
+            }
+            guard !radii.isEmpty else { return 0 }
+            let mean = radii.reduce(0, +) / Double(radii.count)
+            let variance = radii.reduce(0) { $0 + ($1 - mean) * ($1 - mean) }
+                / Double(radii.count)
+            return sqrt(variance)
+        }
+        let quietSpread = radialSpread(quietListeningFrame)
+        let loudSpread = radialSpread(loudListeningFrame)
+        expect(loudSpread > quietSpread + 0.4 && loudSpread < 1.5,
+               "listening energy produces bounded local bulges instead of uniform zoom")
         let successSymbol = ThinkingOrbSymbolGeometry.frame(success: true, time: 0)
         let failureSymbol = ThinkingOrbSymbolGeometry.frame(success: false, time: 0)
         let copySymbol = ThinkingOrbSymbolGeometry.copyFrame(time: 0)

@@ -406,6 +406,7 @@ enum ThinkingOrbEngine {
             let ringEnergy: Double
             let ringImpulse: Double
             let globalLevel: Double
+            let ringPitch: Double
             if let acoustics, !acoustics.ringLevels.isEmpty {
                 let levels = acoustics.ringLevels.map { min(0.82, max(0, $0)) }
                 let recentCount = min(3, levels.count)
@@ -425,6 +426,7 @@ enum ThinkingOrbEngine {
                 globalLevel = min(0.76, max(0, acoustics.overallLevel))
                 let pitch = min(1, max(-1, acoustics.pitch))
                     * min(1, max(0, acoustics.pitchConfidence))
+                ringPitch = pitch
                 let layerPhase = sin(Double(ringIndex) * 1.73 + pitch * 0.9)
                 let counterPhase = cos(Double(ringIndex) * 0.91 - time * 0.08)
                 let pitchShape = pitch
@@ -440,6 +442,7 @@ enum ThinkingOrbEngine {
                 ringEnergy = 0
                 ringImpulse = 0
                 globalLevel = 0
+                ringPitch = 0
                 wave = synthetic
             }
             // Keep upstream idle geometry untouched for golden parity. The live sphere itself is
@@ -449,11 +452,11 @@ enum ThinkingOrbEngine {
             if acoustics == nil {
                 ringRadius = radius * (0.88 + 0.105 * wave)
             } else {
-                // A restrained 5.5% whole-sphere breath makes volume readable without allowing
+                // A restrained 7.5% whole-sphere breath makes volume readable without allowing
                 // background noise to dominate the silhouette. Layer deformation remains the
                 // larger and more expressive acoustic channel.
-                let globalBreath = 0.055 * globalLevel / 0.76
-                ringRadius = radius * (1.035 + globalBreath + wave)
+                let globalBreath = 0.075 * min(1, globalLevel / 0.76)
+                ringRadius = radius * (1.025 + globalBreath + wave)
             }
             let acousticBrightness = acoustics.map {
                 min(1, max(0, $0.brightness))
@@ -461,11 +464,20 @@ enum ThinkingOrbEngine {
             let lonCount = max(1, Int((abs(cosLatitude) * Double(lonDensity)).rounded()))
             for longitudeIndex in 0..<lonCount {
                 let longitude = Double(longitudeIndex) / Double(lonCount) * 2 * .pi
-                // Timbre now changes the surface as well as particle size. The three-lobed ripple
-                // keeps neighbouring dots coherent, avoiding random visual noise.
-                let shimmer = sin(longitude * 3 + time * 0.42)
-                let surfaceRipple = 1 + acousticBrightness * 0.026 * shimmer
-                    * (0.35 + 0.65 * ringEnergy)
+                // Siri-like freedom comes from several coherent low-frequency bulges moving over
+                // the surface, not from uniformly scaling a rigid globe. Each source owns a
+                // different spatial mode; all are zero-mean so they preserve the bounded envelope.
+                let energySurface = sin(longitude * 2 + latitude * 1.35 + time * 0.14)
+                let impactSurface = sin(longitude * 3.1 - latitude * 2.2 - time * 0.50
+                    + Double(ringIndex) * 0.41)
+                let pitchSurface = sin(longitude * 1.25 + latitude * 2.1)
+                let brightnessSurface = sin(longitude * 3 + time * 0.42)
+                let organicRipple = ringEnergy * 0.040 * energySurface
+                    + ringImpulse * 0.075 * impactSurface
+                    + ringPitch * 0.034 * pitchSurface
+                    + acousticBrightness * 0.026 * brightnessSurface
+                        * (0.35 + 0.65 * ringEnergy)
+                let surfaceRipple = min(1.11, max(0.89, 1 + organicRipple))
                 let point = project(cosLatitude * cos(longitude) * ringRadius * surfaceRipple,
                                     sinLatitude * ringRadius * surfaceRipple,
                                     cosLatitude * sin(longitude) * ringRadius * surfaceRipple)
@@ -474,10 +486,11 @@ enum ThinkingOrbEngine {
                 var liveScale = 1.0
                 if let acoustic = acoustics {
                     let brightness = min(1, max(0, acoustic.brightness))
-                    let shimmerAmount = 0.5 + 0.5 * shimmer
+                    let shimmerAmount = 0.5 + 0.5 * brightnessSurface
                     liveScale += 0.26 * ringEnergy
                         + 0.16 * ringImpulse * (0.4 + 0.6 * shimmerAmount)
                         + 0.10 * brightness * shimmerAmount
+                        + max(0, surfaceRipple - 1) * 1.1
                 }
                 dots.append(ThinkingOrbDot(
                     x: point.0, y: point.1, z: point.2,

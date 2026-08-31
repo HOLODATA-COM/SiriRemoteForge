@@ -3063,6 +3063,24 @@ feel that evening; if any of these is wrong, this is where to look:
   build 57 / `1.0.0`, signed by `siriRemote Local Signing`, with one no-argument process from
   `/Applications/HyperVibe.app` (PID 88933 at handoff time). build 56 is recoverable at
   `/private/tmp/hypervibe-before-local57-20260901/HyperVibe.app`; these changes were not pushed.
+- local.60 makes the Listening orb feel like a suspended soft body rather than a rigid globe that
+  only zooms. The common volume breath increases from 5.5% to a still-bounded 7.5%, while a lightly
+  under-damped level spring adds a small recoil after loud syllables. Energy, onset, pitch and
+  spectral brightness drive four different coherent, zero-mean surface modes, so neighbouring
+  particles form moving local bulges instead of random noise or the removed north/south scan.
+  Particles on an outward crest grow slightly to keep the deformation readable. Installed dark-
+  background captures preserved under `/private/tmp/hypervibe-local60-siri-fluid/` show Listening
+  envelopes changing from about 163x151 to 173x169 pixels without clipping or touching the status
+  label; the later processing, insertion and checkmark transitions also remain clean. A new native
+  regression measures true three-dimensional radial spread (about 0.216 quiet versus 0.968 loud)
+  and rejects both uniform zoom and unbounded distortion. Verification: native Voice **114/114**,
+  optimized compilation, `git diff --check`, stable deep/strict signing, and candidate/installed
+  executable equality all pass (SHA-256
+  `aedc4fac4c89335ef9e29288aeea15c7520dc92de9ba579544ab4e5facac9465`). The installed App is
+  build 60 / `1.0.0-local.60`, signed by `siriRemote Local Signing`, with one no-argument process
+  from `/Applications/HyperVibe.app` (PID 27553 at handoff time). build 58 is recoverable at
+  `/private/tmp/hypervibe-before-local60-20260901/HyperVibe.app`; build 57 is at
+  `/private/tmp/hypervibe-before-local58-20260901/HyperVibe.app`. These changes were not pushed.
 
 ## Maintenance rules
 
