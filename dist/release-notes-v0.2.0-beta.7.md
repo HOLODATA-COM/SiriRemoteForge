@@ -77,6 +77,10 @@ to clear this memory.
   immediately before mutation.
 - Completed text is always preserved on the clipboard when direct delivery cannot be proven,
   including disabled auto-insert, changed or secure targets, and failed selection replacement.
+- The virtual microphone now returns an identical cached frame window to every CoreAudio client,
+  so a secondary reader cannot advance a source handoff behind the primary reader. When a released
+  source runs out during its 5 ms handoff, the last real sample is held only through the remaining
+  fade instead of zero-padding a click into the transition.
 - Credential and provider failures now show actionable, sanitised reasons. Settings reads cached
   credential state instead of revalidating the signed helper on the main thread.
 
