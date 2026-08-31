@@ -121,7 +121,6 @@ echo "Building for: $TARGET"
 # Compile the narrow login-keychain compatibility bridge once for both executables. Its source
 # scopes the deprecated declarations precisely; -Werror remains enabled for every other warning.
 clang -c -O2 -Wall -Wextra -Werror \
-    -fmodules-cache-path="$MODULE_CACHE" \
     -isysroot "$SDK_PATH" \
     -mmacosx-version-min=13.0 \
     CredentialKeychainBridge.c \
@@ -150,7 +149,6 @@ swiftc \
 # into the Swift binary: C owns the C11 atomics of the shared-memory ABI (see
 # mic/router/SiriRemoteMicRingWriter.c for the pattern this follows).
 clang -c -O2 -Wall -Wextra -Werror \
-    -fmodules-cache-path="$MODULE_CACHE" \
     -isysroot "$SDK_PATH" \
     -mmacosx-version-min=13.0 \
     BuiltinMicRingWriter.c \
