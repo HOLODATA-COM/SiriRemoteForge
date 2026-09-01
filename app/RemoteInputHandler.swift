@@ -483,6 +483,24 @@ class RemoteInputHandler {
             }
         }
     }
+
+    /// Remove only the interface reported by IOHIDManager. Another physical Siri Remote may still
+    /// own same-model sibling interfaces, so a single removal must never close the entire set.
+    func removeRemoteDevice(_ device: IOHIDDevice) {
+        guard let index = devices.firstIndex(where: { $0 == device }) else { return }
+
+        // Gesture state is shared across mirrored interfaces. Reset it conservatively so a button
+        // held by the departing remote cannot leave the remaining remote's next press deduplicated.
+        releaseAllHeldKeys()
+        IOHIDDeviceRegisterInputValueCallback(device, nil, nil)
+        IOHIDDeviceUnscheduleFromRunLoop(
+            device, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue
+        )
+        IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
+        devices.remove(at: index)
+        isFirstPressAfterConnection = false
+        rmDebug("🛰 input interface removed; \(devices.count) opened interface(s) remain")
+    }
     
     /// Register a raw input-report callback (voice-capture diagnostic). The buffer must outlive the
     /// registration, so it's retained in `reportBuffers`.

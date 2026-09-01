@@ -3081,6 +3081,25 @@ feel that evening; if any of these is wrong, this is where to look:
   from `/Applications/HyperVibe.app` (PID 27553 at handoff time). build 58 is recoverable at
   `/private/tmp/hypervibe-before-local60-20260901/HyperVibe.app`; build 57 is at
   `/private/tmp/hypervibe-before-local58-20260901/HyperVibe.app`. These changes were not pushed.
+- local.61 fixes same-model multi-Siri-Remote teardown. `RemoteDetector` previously collapsed every
+  physical device and every one of its HID interfaces into the key `vendorID:productID`; two gen-3
+  remotes therefore looked like one connection, and the first removal deleted that shared key and
+  sent a global nil callback. `RemoteInputHandler` responded by closing every opened interface,
+  including those belonging to the still-connected remote. Detection now registers actual
+  `IOHIDDevice` interface identities, emits explicit added/removed/reset events, and derives the
+  public connected state from whether any interface remains. A removal closes only that exact
+  interface; shared gesture state is safely unwound so a held button on the departing remote cannot
+  poison deduplication on the survivor. A deterministic regression creates two same-model remotes
+  with multiple interfaces and requires the second to remain connected after all first-remote
+  interfaces leave. Current hardware startup could enumerate only one online gen-3 remote
+  (`C08RX8PR2330`, five interfaces), and all five were separately registered and seized with no HID
+  open failure; the two-device physical disconnect still needs a user hardware confirmation.
+  Verification: native Voice **115/115**, optimized compilation, `git diff --check`, stable
+  deep/strict signing, and candidate/installed executable equality all pass (SHA-256
+  `8d41d259a3496cd57a4d1bb0cd4627e9efe4a494a38156a66c9f02b822621b1a`). The installed App is
+  build 61 / `1.0.0-local.61`, signed by `siriRemote Local Signing`, with one no-argument process
+  from `/Applications/HyperVibe.app` (PID 69387 at handoff time). build 60 is recoverable at
+  `/private/tmp/hypervibe-before-local61-20260901/HyperVibe.app`; these changes were not pushed.
 
 ## Maintenance rules
 

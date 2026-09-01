@@ -1635,11 +1635,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         // Start remote detection
-        remoteDetector = RemoteDetector { [weak self] device in
+        remoteDetector = RemoteDetector { [weak self] event in
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                let connected = (device != nil)
-                self.remoteInputHandler?.setRemoteDevice(device)
+                let connected = event.isConnected
+                switch event {
+                case let .added(device, _):
+                    self.remoteInputHandler?.setRemoteDevice(device)
+                case let .removed(device, _):
+                    self.remoteInputHandler?.removeRemoteDevice(device)
+                case .reset:
+                    self.remoteInputHandler?.setRemoteDevice(nil)
+                }
                 self.menuBarManager.updateConnectionStatus(connected: connected)
                 self.settingsModel?.connected = connected
                 self.demoModeWindow?.setConnected(connected)

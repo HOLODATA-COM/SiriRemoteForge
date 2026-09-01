@@ -48,6 +48,18 @@ enum VoiceInputSelfTest {
             if !condition() { failures.append(name) }
         }
 
+        var remoteInterfaces = RemoteInterfaceRegistry<String>()
+        let registeredTwoSameModelRemotes = remoteInterfaces.add("remote-a/buttons")
+            && remoteInterfaces.add("remote-a/vendor")
+            && remoteInterfaces.add("remote-b/buttons")
+            && !remoteInterfaces.add("remote-b/buttons")
+        let firstRemoteDisconnected = remoteInterfaces.remove("remote-a/buttons")
+            && remoteInterfaces.remove("remote-a/vendor")
+        expect(registeredTwoSameModelRemotes && firstRemoteDisconnected
+               && remoteInterfaces.isConnected && remoteInterfaces.count == 1
+               && remoteInterfaces.remove("remote-b/buttons") && !remoteInterfaces.isConnected,
+               "disconnecting one same-model remote preserves the other remote's interfaces")
+
         let credentialTestRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("HyperVibe-Credential-Test-\(UUID().uuidString)",
                                     isDirectory: true)
