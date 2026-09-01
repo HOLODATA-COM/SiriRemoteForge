@@ -22,6 +22,27 @@ enum CircularScrollAxis {
     case horizontal
 }
 
+/// Serialises the shared gesture state across several remote touch surfaces. A positive frame from
+/// either remote takes ownership immediately; a stale zero-touch frame from the previous remote
+/// cannot end the new remote's gesture.
+struct ActiveTouchDeviceTracker<Key: Hashable> {
+    private(set) var active: Key?
+
+    mutating func beginOrContinue(_ key: Key) -> Bool {
+        let switched = active != nil && active != key
+        active = key
+        return switched
+    }
+
+    mutating func endIfActive(_ key: Key) -> Bool {
+        guard active == key else { return false }
+        active = nil
+        return true
+    }
+
+    mutating func reset() { active = nil }
+}
+
 private func touchCallback(device: MTDevice?,
                            touches: UnsafeMutablePointer<MTTouch>?,
                            numTouches: Int,
@@ -30,7 +51,8 @@ private func touchCallback(device: MTDevice?,
                            refcon: UnsafeMutableRawPointer?) {
     guard let refcon = refcon else { return }
     let handler = Unmanaged<TouchHandler>.fromOpaque(refcon).takeUnretainedValue()
-    handler.handleTouches(touches: touches, count: numTouches, timestamp: timestamp)
+    handler.handleTouches(device: device, touches: touches,
+                          count: numTouches, timestamp: timestamp)
 }
 
 class TouchHandler {
@@ -53,11 +75,13 @@ class TouchHandler {
     }
     
     private let cursorController: CursorController
-    private var device: MTDevice?
+    private var devices: [UInt64: MTDevice] = [:]
+    private var activeTouchDevice = ActiveTouchDeviceTracker<UInt64>()
+    private let touchStateLock = NSLock()
 
     /// Sensor surface in 0.01 mm units, for anything that needs to draw the pad at true scale.
     var surfaceDimensions: CGSize? {
-        guard let dev = device else { return nil }
+        guard let dev = devices.values.first else { return nil }
         var w: Int32 = 0, h: Int32 = 0
         MTDeviceGetSensorSurfaceDimensions(dev, &w, &h)
         guard w > 0, h > 0 else { return nil }
@@ -197,7 +221,7 @@ class TouchHandler {
     }
     
     func start() {
-        findAndStartDevice()
+        findAndReconcileDevices(logInventory: true)
         startReconnectTimer()
         // Restart MT device after sleep (trackpad stops delivering until restarted).
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -218,41 +242,37 @@ class TouchHandler {
         reconnectTimer = nil
         fastReconnectTimer?.invalidate()
         fastReconnectTimer = nil
-        stopDevice()
+        stopAllDevices()
     }
     
     /// Call when HID button activity is detected (e.g. after remote wake). Re-scans MT devices
-    /// only when we don't have a device, so we can reattach if it reappeared. If we already
-    /// have a working device, do nothing — restarting on every button press would break the trackpad.
+    /// after HID activity. A newly connected second remote must be discovered even while the first
+    /// touch surface is healthy, so this reconciles the complete set rather than returning early.
     func tryReconnectTrackpad() {
-        guard device == nil else { return }
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.tryReconnectTrackpad() }
+            return
+        }
         let doScan = { [weak self] in
-            guard self?.device == nil else { return }
-            self?.findAndStartDevice()
+            self?.findAndReconcileDevices(logInventory: false)
         }
-        if Thread.isMainThread {
-            doScan()
-        } else {
-            DispatchQueue.main.async { doScan() }
-        }
+        doScan()
         // Device may re-enumerate shortly after HID activity; retry once after a short delay.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { doScan() }
-        // Poll more often for a limited time so we attach as soon as the trackpad reappears.
+        // A connected surface already has the normal two-second reconciliation timer. Only use the
+        // aggressive recovery loop when every touch surface is missing; otherwise every ordinary
+        // button press would keep a needless 500 ms scan running for twenty seconds.
+        guard devices.isEmpty else { return }
         fastReconnectTimer?.invalidate()
         let startDate = Date()
         fastReconnectTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
             guard let self = self else { timer.invalidate(); return }
-            if self.device != nil {
-                timer.invalidate()
-                self.fastReconnectTimer = nil
-                return
-            }
             if Date().timeIntervalSince(startDate) > 20 {
                 timer.invalidate()
                 self.fastReconnectTimer = nil
                 return
             }
-            self.findAndStartDevice()
+            self.findAndReconcileDevices(logInventory: false)
         }
         if let timer = fastReconnectTimer {
             RunLoop.main.add(timer, forMode: .common)
@@ -260,8 +280,14 @@ class TouchHandler {
     }
     
     private func restartTrackpadAfterWake() {
-        stopDevice()
-        findAndStartDevice()
+        stopAllDevices()
+        findAndReconcileDevices(logInventory: true)
+    }
+
+    private func deviceID(_ dev: MTDevice) -> UInt64 {
+        var value: UInt64 = 0
+        MTDeviceGetDeviceID(dev, &value)
+        return value
     }
     
     private func describe(_ dev: MTDevice) -> String {
@@ -282,46 +308,58 @@ class TouchHandler {
         return maxDim > 0 && maxDim < 6000
     }
 
-    private func findAndStartDevice() {
+    private func findAndReconcileDevices(logInventory: Bool) {
         guard let cfArray = MTDeviceCreateList()?.takeRetainedValue() else { return }
         let deviceList = cfArray as [MTDevice]
-        rmDebug("📱 MTDeviceCreateList: \(deviceList.count) device(s)")
-        for (i, dev) in deviceList.enumerated() {
-            rmDebug("📱   [\(i)] \(describe(dev))")
+        if logInventory {
+            rmDebug("📱 MTDeviceCreateList: \(deviceList.count) device(s)")
+            for (i, dev) in deviceList.enumerated() {
+                rmDebug("📱   [\(i)] \(describe(dev))")
+            }
         }
-        // Attach to the remote specifically (small surface), never a trackpad.
-        if let remote = deviceList.first(where: { !MTDeviceIsBuiltIn($0) && isRemoteSurface($0) }) {
-            rmDebug("📱 selecting remote (small surface): \(describe(remote))")
-            startDevice(remote)
-            return
+        let remotes = deviceList.filter { !MTDeviceIsBuiltIn($0) && isRemoteSurface($0) }
+        var liveByID: [UInt64: MTDevice] = [:]
+        for remote in remotes {
+            liveByID[deviceID(remote)] = remote
         }
-        // No remote-sized device present: do not hijack a trackpad; wait for the remote to appear.
-        rmDebug("📱 no remote-sized multitouch device found; not attaching")
-        if device != nil { stopDevice() }
+
+        for id in Set(devices.keys).subtracting(liveByID.keys) {
+            stopDevice(id: id)
+        }
+        for (id, remote) in liveByID {
+            if let current = devices[id], MTDeviceIsRunning(current) { continue }
+            if devices[id] != nil { stopDevice(id: id) }
+            startDevice(remote, id: id)
+        }
+        if remotes.isEmpty {
+            rmDebug("📱 no remote-sized multitouch device found; not attaching")
+        }
     }
     
-    private func startDevice(_ dev: MTDevice) {
-        stopDevice()
-        device = dev
-        
+    private func startDevice(_ dev: MTDevice, id: UInt64) {
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         MTRegisterContactFrameCallbackWithRefcon(dev, touchCallback, refcon)
         MTDeviceStart(dev, 0)
+        devices[id] = dev
         // Reset so we don't immediately re-enter starvation and restart every 2s when no touches yet.
         lastTouchTime = mach_absolute_time()
-        print("📱 Trackpad device connected and started")
+        rmDebug("📱 remote touch surface started id=\(id) activeSurfaces=\(devices.count)")
+        print("📱 Trackpad device connected and started (\(devices.count) active)")
     }
     
-    private func stopDevice() {
-        guard let dev = device else { return }
+    private func stopDevice(id: UInt64) {
+        guard let dev = devices.removeValue(forKey: id) else { return }
         MTUnregisterContactFrameCallback(dev, touchCallback)
         MTDeviceStop(dev)
-        device = nil
-        
-        print("📱 Trackpad device disconnected")
-        lastTouchPosition = nil
-        lastTouchCount = 0
-        hadMultipleFingersInSession = false
+        touchStateLock.lock()
+        if activeTouchDevice.endIfActive(id) { resetTouchSessionWithoutAction() }
+        touchStateLock.unlock()
+        rmDebug("📱 remote touch surface stopped id=\(id) activeSurfaces=\(devices.count)")
+        print("📱 Trackpad device disconnected (\(devices.count) active)")
+    }
+
+    private func stopAllDevices() {
+        for id in Array(devices.keys) { stopDevice(id: id) }
     }
     
     private func startReconnectTimer() {
@@ -338,20 +376,21 @@ class TouchHandler {
         let timeSinceLastTouch = lastTouchTime == 0 ? 0 : Self.machDeltaToSeconds(from: lastTouchTime)
 
         guard let cfArray = MTDeviceCreateList()?.takeRetainedValue() else { return }
-        let deviceCount = CFArrayGetCount(cfArray)
+        let listed = cfArray as [MTDevice]
+        let liveRemoteIDs = Set(listed.filter {
+            !MTDeviceIsBuiltIn($0) && isRemoteSurface($0)
+        }.map(deviceID))
+        let knownIDs = Set(devices.keys)
+        let hasStoppedDevice = devices.values.contains { !MTDeviceIsRunning($0) }
 
-        // Restart if we have a device ref but the driver stopped (e.g. after remote sleep).
-        if let dev = device, !MTDeviceIsRunning(dev) {
-            findAndStartDevice()
-            return
-        }
-        // Restart if we have a device but no touch events for a while (remote slept; no "remote wake" API).
-        if device != nil && timeSinceLastTouch > touchStarvationThreshold {
-            findAndStartDevice()
-            return
-        }
-        if device == nil || (timeSinceLastTouch > idleTimeout && deviceCount > 1) {
-            findAndStartDevice()
+        // Reconcile immediately when a second surface appears or one disappears. If all known
+        // surfaces have been silent long enough, restart the set to recover from remote sleep.
+        if liveRemoteIDs != knownIDs || hasStoppedDevice || devices.isEmpty {
+            findAndReconcileDevices(logInventory: true)
+        } else if timeSinceLastTouch > touchStarvationThreshold
+                    || (timeSinceLastTouch > idleTimeout && listed.count > 1) {
+            stopAllDevices()
+            findAndReconcileDevices(logInventory: true)
         }
     }
     
@@ -389,7 +428,25 @@ class TouchHandler {
     /// press can be aligned against the touch signal and the lead time measured rather than guessed.
     private let dumpPress = CommandLine.arguments.contains("--dump-press")
 
-    func handleTouches(touches: UnsafeMutablePointer<MTTouch>?, count: Int, timestamp: Double) {
+    func handleTouches(device: MTDevice?, touches: UnsafeMutablePointer<MTTouch>?,
+                       count: Int, timestamp: Double) {
+        guard let device else { return }
+        let sourceID = deviceID(device)
+        touchStateLock.lock()
+        defer { touchStateLock.unlock() }
+
+        if count > 0 {
+            if activeTouchDevice.beginOrContinue(sourceID) {
+                // Switching surfaces is ownership transfer, not a lift from the prior surface.
+                // Cancel its partial tap/swipe/scroll without firing an action, then let this frame
+                // establish the new remote's clean anchor immediately.
+                resetTouchSessionWithoutAction()
+                rmDebug("📱 active touch surface switched to id=\(sourceID)")
+            }
+        } else if !activeTouchDevice.endIfActive(sourceID) {
+            return
+        }
+
         // Live monitor tap: every frame, verbatim, for the touch-monitor window. Nil in normal use.
         if let sink = onRawTouch {
             // A zero-contact callback may carry a nil pointer. Still publish an empty frame so a
@@ -626,6 +683,32 @@ class TouchHandler {
         }
         
         lastTouchCount = activeTouchCount
+    }
+
+    /// Drop an interrupted device's partial gesture without manufacturing a tap, swipe or click.
+    /// Caller owns `touchStateLock`.
+    private func resetTouchSessionWithoutAction() {
+        endCircularScrollGestureIfNeeded()
+        lastTouchPosition = nil
+        lastTouchCount = 0
+        lastContact = 0
+        touchStartTime = 0
+        touchStartPosition = .zero
+        hadMultipleFingersInSession = false
+        sessionMaxFingers = 0
+        circularActive = false
+        circularEligible = false
+        didScroll = false
+        circularScrollPhaseStarted = false
+        activeCircularScrollAxis = nil
+        scrollRemainder = 0
+        rotationTotal = 0
+        scrollEmitted = 0
+        pressFreezeFrames = 0
+        shakeLastSign = 0
+        shakeReversalTimes.removeAll()
+        circularDetector.reset()
+        cursorController.resetMoveAccumulator()
     }
     
     /// Classify a flick delta into a swipe direction (nil if too diagonal).

@@ -3118,6 +3118,29 @@ feel that evening; if any of these is wrong, this is where to look:
   build 62 / `1.0.0-local.62`, signed by `siriRemote Local Signing`, with one no-argument process
   from `/Applications/HyperVibe.app` (PID 75830 at handoff time). build 61 is recoverable at
   `/private/tmp/hypervibe-before-local62-20260901/HyperVibe.app`; these changes were not pushed.
+- local.64 fixes live switching between two simultaneously connected Siri Remotes across touch,
+  buttons and the native Voice hold. The immediate cause of the cursor failure was
+  `TouchHandler` selecting only the first remote-sized `MTDevice`; it now reconciles every such
+  surface, registers callbacks on both, and transfers the shared gesture owner on the first
+  positive frame from either device. A stale zero-contact frame from the old surface cannot end
+  the new surface's gesture. HID state is now grouped by physical-remote serial before being
+  collapsed to logical buttons, so mirrored interfaces remain deduplicated without collapsing two
+  remotes into one. A held Siri/microphone action can hand off A -> B and closes only when the last
+  physical holder releases; removing one remote likewise releases only buttons no surviving remote
+  still holds. The old global first-press suppression is physical-device scoped and expires after
+  750 ms, so adding B's sibling interfaces cannot swallow A's next Voice press and remotes already
+  online at App launch do not lose a later first press. Real startup enumerated both serials
+  (`C08RX8PR2330`, `C08RQGMC2330`), all ten HID interfaces opened successfully, and both 2775x2775
+  multitouch surfaces (`112614654`, `4096904318`) started with `activeSurfaces=2`. Deterministic
+  regressions cover touch ownership/stale lift and Siri hold handoff. Verification: Core **134/134**,
+  native Voice **118/118**, optimized compilation, `git diff --check`, stable deep/strict signing,
+  and candidate/installed executable equality all pass (SHA-256
+  `7f715ef9366ebe07e0084fa45774548a88ee612c421dd3f42171011d3fae29cf`). The installed App is
+  build 64 / `1.0.0-local.64`, signed by `siriRemote Local Signing`, with one no-argument process
+  from `/Applications/HyperVibe.app` (PID 83104 at handoff time). build 62 is recoverable at
+  `/private/tmp/hypervibe-before-local63-20260901/HyperVibe.app`; intermediate build 63 is at
+  `/private/tmp/hypervibe-installed-local63-replaced-20260901.app`. The requested physical A/B
+  cursor and Siri-button test is pending user confirmation; nothing was pushed.
 
 ## Maintenance rules
 

@@ -60,6 +60,34 @@ enum VoiceInputSelfTest {
                && remoteInterfaces.remove("remote-b/buttons") && !remoteInterfaces.isConnected,
                "disconnecting one same-model remote preserves the other remote's interfaces")
 
+        var sharedButtons = MultiRemoteButtonState<String, String>()
+        let firstSiriDown = sharedButtons.update(
+            source: "remote-a", button: "siri", pressed: true
+        ) == .globalDown
+        let secondSiriTakesHold = sharedButtons.update(
+            source: "remote-b", button: "siri", pressed: true
+        ) == .sourceOnly
+        let firstSiriReleaseHandsOff = sharedButtons.update(
+            source: "remote-a", button: "siri", pressed: false
+        ) == .sourceOnly && sharedButtons.isPressed("siri")
+        let secondSiriReleaseEndsVoice = sharedButtons.update(
+            source: "remote-b", button: "siri", pressed: false
+        ) == .globalUp && !sharedButtons.isPressed("siri")
+        expect(firstSiriDown && secondSiriTakesHold && firstSiriReleaseHandsOff
+               && secondSiriReleaseEndsVoice,
+               "Siri hold and microphone ownership hand off across physical remotes")
+
+        var touchOwner = ActiveTouchDeviceTracker<String>()
+        let firstTouchStartsCleanly = !touchOwner.beginOrContinue("remote-a")
+        let secondTouchTakesOwnership = touchOwner.beginOrContinue("remote-b")
+        let staleFirstLiftIsIgnored = !touchOwner.endIfActive("remote-a")
+            && touchOwner.active == "remote-b"
+        let activeSecondLiftEnds = touchOwner.endIfActive("remote-b")
+            && touchOwner.active == nil
+        expect(firstTouchStartsCleanly && secondTouchTakesOwnership
+               && staleFirstLiftIsIgnored && activeSecondLiftEnds,
+               "either remote touch surface takes ownership without a stale peer lift ending it")
+
         let credentialTestRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("HyperVibe-Credential-Test-\(UUID().uuidString)",
                                     isDirectory: true)

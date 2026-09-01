@@ -25,6 +25,52 @@ enum VoiceModeChordRoute: Equatable {
     case cycle
 }
 
+enum SharedButtonTransition: Equatable {
+    case duplicate
+    case sourceOnly
+    case globalDown
+    case globalUp
+}
+
+/// Collapses mirrored HID interfaces within one physical remote while allowing several remotes to
+/// contribute to the same logical button. If A hands a held button to B, A's later release is only
+/// a source transition; the app-level button stays down until B releases it.
+struct MultiRemoteButtonState<Source: Hashable, Button: Hashable> {
+    private var heldBySource: [Source: Set<Button>] = [:]
+
+    var heldButtons: Set<Button> {
+        heldBySource.values.reduce(into: Set<Button>()) { $0.formUnion($1) }
+    }
+
+    func isPressed(_ button: Button) -> Bool {
+        heldBySource.values.contains { $0.contains(button) }
+    }
+
+    mutating func update(source: Source, button: Button,
+                         pressed: Bool) -> SharedButtonTransition {
+        let sourceWasPressed = heldBySource[source]?.contains(button) == true
+        guard sourceWasPressed != pressed else { return .duplicate }
+        let wasGloballyPressed = isPressed(button)
+        if pressed {
+            heldBySource[source, default: []].insert(button)
+        } else {
+            heldBySource[source]?.remove(button)
+            if heldBySource[source]?.isEmpty == true { heldBySource[source] = nil }
+        }
+        let isGloballyPressed = isPressed(button)
+        guard wasGloballyPressed != isGloballyPressed else { return .sourceOnly }
+        return isGloballyPressed ? .globalDown : .globalUp
+    }
+
+    /// Removes a physical remote and returns only buttons that no remaining remote still holds.
+    mutating func removeSource(_ source: Source) -> Set<Button> {
+        guard let removed = heldBySource.removeValue(forKey: source) else { return [] }
+        return Set(removed.filter { !isPressed($0) })
+    }
+
+    mutating func removeAll() { heldBySource.removeAll() }
+}
+
 /// Pure two-button chord state. It owns both releases after Mute+Side is recognized, which is what
 /// prevents either the configured Mute action or a Voice opener from leaking out of the gesture.
 /// No timer is involved: ordinary side-button latency is completely unchanged.
@@ -74,6 +120,7 @@ class RemoteInputHandler {
     private let cursorController: CursorController
     private weak var menuBarManager: MenuBarManager?
     private var devices: [IOHIDDevice] = []
+    private var deviceSources: [IOHIDDevice: String] = [:]
 
     // --- Mic/voice capture diagnostic (enabled with `--capture-mic`). The 3rd-gen remote streams
     //     its microphone as large HID input reports (the button interface is 3 bytes; there's a
@@ -311,8 +358,12 @@ class RemoteInputHandler {
     /// Device loss has no release edge. Observers use this to clear every visual down-state.
     var onPhysicalButtonStateReset: (() -> Void)?
     
-    // First press after connection: do not perform action (sound already played at connect).
-    private var isFirstPressAfterConnection = false
+    // A wake/connect handshake can replay the button that brought the remote online. Suppress that
+    // pair only in a short, physical-remote-scoped window; a remote already present at App launch
+    // must not lose the user's first real Siri press seconds later.
+    private var initialPressSuppressionDeadline: [String: UInt64] = [:]
+    private var suppressedInitialButtons: [String: Set<String>] = [:]
+    private static let initialPressSuppressionWindowNanoseconds: UInt64 = 750_000_000
     
     // Click/drag state
     private var isSelectPressed = false
@@ -401,14 +452,40 @@ class RemoteInputHandler {
         ["ringUp", "ringDown", "ringLeft", "ringRight", "select"]
 
 
-    /// Last observed pressed/released state per button. The Siri Remote mirrors each logical
-    /// button across multiple HID interfaces (6 seized here), so every physical press/release
-    /// fires the callback N times. This collapses dup events to a single state transition.
-    private var buttonState: [String: Bool] = [:]
+    /// Last observed state grouped first by physical remote, then collapsed to the app-level edge.
+    /// This deduplicates mirrored interfaces without treating two remotes as the same device.
+    private var remoteButtonState = MultiRemoteButtonState<String, String>()
     
     init(cursorController: CursorController, menuBarManager: MenuBarManager) {
         self.cursorController = cursorController
         self.menuBarManager = menuBarManager
+    }
+
+    private func remoteSourceID(for device: IOHIDDevice) -> String {
+        if let serial = IOHIDDeviceGetProperty(
+            device, kIOHIDSerialNumberKey as CFString
+        ) as? String, !serial.isEmpty {
+            return serial
+        }
+        let product = IOHIDDeviceGetProperty(
+            device, kIOHIDProductKey as CFString
+        ) as? String ?? "Siri Remote"
+        let location = IOHIDDeviceGetProperty(
+            device, kIOHIDLocationIDKey as CFString
+        ) as? Int ?? 0
+        return "\(product)@\(location)"
+    }
+
+    private func recordOpenedInterface(_ device: IOHIDDevice) {
+        let source = remoteSourceID(for: device)
+        let isNewPhysicalRemote = !deviceSources.values.contains(source)
+        deviceSources[device] = source
+        devices.append(device)
+        if isNewPhysicalRemote {
+            initialPressSuppressionDeadline[source] = DispatchTime.now().uptimeNanoseconds
+                &+ Self.initialPressSuppressionWindowNanoseconds
+            rmDebug("🛰 physical remote input ready source=\(source)")
+        }
     }
     
     func setRemoteDevice(_ device: IOHIDDevice?) {
@@ -420,7 +497,9 @@ class RemoteInputHandler {
                 IOHIDDeviceClose(d, IOOptionBits(kIOHIDOptionsTypeNone))
             }
             devices.removeAll()
-            isFirstPressAfterConnection = false
+            deviceSources.removeAll()
+            initialPressSuppressionDeadline.removeAll()
+            suppressedInitialButtons.removeAll()
             return
         }
         
@@ -460,9 +539,8 @@ class RemoteInputHandler {
                     self?.sendMicActivation(device)
                 }
             }
+            recordOpenedInterface(device)
             IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
-            devices.append(device)
-            isFirstPressAfterConnection = true
         } else {
             rmDebug(String(format: "⚠️ FAILED to %@ HID device usage=0x%X/0x%X (IOReturn=0x%X) — retrying non-exclusive",
                            shouldSeize ? "seize" : "open", usagePage, usage, openResult))
@@ -477,9 +555,8 @@ class RemoteInputHandler {
                         self?.sendMicActivation(device)
                     }
                 }
+                recordOpenedInterface(device)
                 IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
-                devices.append(device)
-                isFirstPressAfterConnection = true
             }
         }
     }
@@ -488,17 +565,26 @@ class RemoteInputHandler {
     /// own same-model sibling interfaces, so a single removal must never close the entire set.
     func removeRemoteDevice(_ device: IOHIDDevice) {
         guard let index = devices.firstIndex(where: { $0 == device }) else { return }
-
-        // Gesture state is shared across mirrored interfaces. Reset it conservatively so a button
-        // held by the departing remote cannot leave the remaining remote's next press deduplicated.
-        releaseAllHeldKeys()
+        let source = deviceSources[device] ?? remoteSourceID(for: device)
         IOHIDDeviceRegisterInputValueCallback(device, nil, nil)
         IOHIDDeviceUnscheduleFromRunLoop(
             device, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue
         )
         IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
         devices.remove(at: index)
-        isFirstPressAfterConnection = false
+        deviceSources[device] = nil
+        if !deviceSources.values.contains(source) {
+            initialPressSuppressionDeadline[source] = nil
+            suppressedInitialButtons[source] = nil
+            let globallyReleased = remoteButtonState.removeSource(source)
+            for buttonName in globallyReleased {
+                endPressScopedWork(buttonName)
+                onPhysicalButtonStateChanged?(buttonName, false)
+            }
+            if !globallyReleased.isEmpty { voiceModeChord.reset() }
+            rmDebug("🛰 physical remote input removed source=\(source); "
+                    + "released=\(globallyReleased.sorted())")
+        }
         rmDebug("🛰 input interface removed; \(devices.count) opened interface(s) remain")
     }
     
@@ -697,23 +783,49 @@ class RemoteInputHandler {
 
     func handleInputValue(_ value: IOHIDValue) {
         let element = IOHIDValueGetElement(value)
+        let sourceDevice = IOHIDElementGetDevice(element)
+        let source = deviceSources[sourceDevice] ?? remoteSourceID(for: sourceDevice)
         let usagePage = IOHIDElementGetUsagePage(element)
         let usage = IOHIDElementGetUsage(element)
         let intValue = IOHIDValueGetIntegerValue(value)
 
         let identified = identifyButton(page: usagePage, usage: usage)
-        rmDebug(String(format: "🎮 HID event: page=0x%X usage=0x%X value=%d → %@",
-                       usagePage, usage, intValue, identified ?? "<unmapped>"))
+        rmDebug(String(format: "🎮 HID event: source=%@ page=0x%X usage=0x%X value=%d → %@",
+                       source, usagePage, usage, intValue, identified ?? "<unmapped>"))
         guard let buttonName = identified else { return }
 
         onButtonActivity?()
 
-        // Collapse mirrored-interface duplicates: only proceed on a real state transition.
         let isPressed = (intValue == 1)
-        if buttonState[buttonName] == isPressed {
+        let transition = remoteButtonState.update(
+            source: source, button: buttonName, pressed: isPressed
+        )
+        guard transition != .duplicate else { return }
+
+        // Consume the complete first down/up pair for this physical remote only. Sibling interface
+        // registration never re-arms it, and connecting B cannot swallow A's next real Siri press.
+        if isPressed, let deadline = initialPressSuppressionDeadline.removeValue(forKey: source) {
+            if DispatchTime.now().uptimeNanoseconds <= deadline {
+                suppressedInitialButtons[source, default: []].insert(buttonName)
+                rmDebug("🎮 initial handshake press suppressed source=\(source) "
+                        + "button=\(buttonName)")
+                return
+            }
+        }
+        if !isPressed, suppressedInitialButtons[source]?.remove(buttonName) != nil {
+            if suppressedInitialButtons[source]?.isEmpty == true {
+                suppressedInitialButtons[source] = nil
+            }
             return
         }
-        buttonState[buttonName] = isPressed
+
+        // A source-only transition is a seamless handoff: another remote is still holding the
+        // same logical button, so neither Voice nor any other continuous action should close/open.
+        guard transition != .sourceOnly else {
+            rmDebug("🎮 shared button handoff source=\(source) button=\(buttonName) "
+                    + "pressed=\(isPressed)")
+            return
+        }
         onPhysicalButtonStateChanged?(buttonName, isPressed)
 
         // The remote can sleep between initial enumeration and a later Siri press. Re-send the
@@ -776,12 +888,6 @@ class RemoteInputHandler {
             stopKeyRepeat(buttonName)
         }
 
-        // First key-down after connection: skip so the connect handshake doesn't fire an action.
-        if intValue == 1 && isFirstPressAfterConnection {
-            isFirstPressAfterConnection = false
-            return
-        }
-
         // Inside the Power input guard, other buttons are read and tracked but must not fire their
         // bindings — a button clipped while reaching for Power should do nothing. Power itself is
         // exempt so its own press/release still work normally.
@@ -809,7 +915,7 @@ class RemoteInputHandler {
         let voiceModeRoute = voiceModeChord.route(
             buttonName: buttonName,
             pressed: pressed,
-            muteIsDown: buttonState["mute"] == true,
+            muteIsDown: remoteButtonState.isPressed("mute"),
             enabled: shouldUseVoiceModeCycleChord?() == true
         )
         switch voiceModeRoute {
@@ -1457,14 +1563,14 @@ class RemoteInputHandler {
         rmDebug("🔁 media-repeat ARM \(buttonName) → \(tapKey)")
         timer.setEventHandler { [weak self] in
             guard let self = self, let controller = self.controller else { return }
-            // Check against ground truth before every repeat. `buttonState` is maintained by the
+            // Check against ground truth before every repeat. `remoteButtonState` is maintained by the
             // HID decoder from real transitions, so if the button is not actually held any more,
             // this timer has outlived its press and must die — whatever desynchronised it.
             //
             // A repeat that survives its release is unbounded: it types forever with no way to stop
             // it short of unpairing the remote. That has been seen and could not be reproduced on
             // demand, so rather than guess at the cause, the damage is bounded to one interval.
-            guard self.buttonState[buttonName] == true else {
+            guard self.remoteButtonState.isPressed(buttonName) else {
                 rmDebug("🔁 media-repeat ORPHANED \(buttonName) — button not held, stopping")
                 self.stopKeyRepeat(buttonName)
                 return
@@ -1512,10 +1618,10 @@ class RemoteInputHandler {
         rmDebug("🔁 held-repeat ARM \(buttonName) keys=\(keys) pressNow=\(pressNow)")
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
-            // Ground truth: `buttonState` comes from real HID transitions. A timer outliving its
+            // Ground truth: `remoteButtonState` comes from real HID transitions. A timer outliving its
             // press must die — and because `stopKeyRepeat` also LIFTS the held key, an orphaned
             // repeat can never leave a key stuck down (unbounded typing until the remote unpairs).
-            guard self.buttonState[buttonName] == true else {
+            guard self.remoteButtonState.isPressed(buttonName) else {
                 rmDebug("🔁 held-repeat ORPHANED \(buttonName) — button not held, stopping")
                 self.stopKeyRepeat(buttonName)
                 return
@@ -1869,10 +1975,10 @@ class RemoteInputHandler {
         // press with no release at all, so nothing it armed would otherwise be cancelled — a Select
         // press interrupted inside its 0.5s drag window posted mouseDown AFTER this cleanup ran,
         // leaving the left button down with no remote attached.
-        for name in Set(buttonState.keys).union(["select"]) {
+        for name in remoteButtonState.heldButtons.union(["select"]) {
             endPressScopedWork(name)
         }
-        buttonState.removeAll()
+        remoteButtonState.removeAll()
         voiceModeChord.reset()
         onPhysicalButtonStateReset?()
         // Sticky drag is designed to outlive letting go of the button AND the pad, so nothing else
