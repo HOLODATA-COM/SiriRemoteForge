@@ -588,6 +588,12 @@ enum VoiceInputSelfTest {
         for _ in 0..<1_000 { _ = recoveringWaveform.normalize(0) }
         expect(abs(recoveringWaveform.peak - 0.22) < 0.001,
                "waveform peak releases through quiet gated frames")
+        var orbWaveform = VoiceWaveformLevelNormalizer(minimumPeak: 0.12, gate: 0.025)
+        let quietOrbLevel = orbWaveform.normalize(0.02)
+        let softVoiceOrbLevel = orbWaveform.normalize(0.09)
+        expect(quietOrbLevel == 0 && softVoiceOrbLevel > 0.40
+               && softVoiceOrbLevel < 0.76,
+               "orb removes residual noise but preserves already-curved soft speech")
 
         let structuredCleanup = VoiceTextProcessor.cleanupInstructions(dictionary: [])
         expect(structuredCleanup.contains("untrusted quoted source")

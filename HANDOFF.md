@@ -3100,6 +3100,24 @@ feel that evening; if any of these is wrong, this is where to look:
   build 61 / `1.0.0-local.61`, signed by `siriRemote Local Signing`, with one no-argument process
   from `/Applications/HyperVibe.app` (PID 69387 at handoff time). build 60 is recoverable at
   `/private/tmp/hypervibe-before-local61-20260901/HyperVibe.app`; these changes were not pushed.
+- local.62 fixes the Listening orb becoming nearly static for a quieter real microphone even while
+  its deterministic preview remained expressive. `BuiltinMicFeeder` already converts PCM through
+  a -52 dBFS floor, perceptual curve and visual gate; the orb then reused the legacy waveform's
+  second 5.5% gate and 0.22 minimum adaptive peak. This double-gated ordinary already-curved levels
+  near 0.09 down to a barely visible response. `VoiceWaveformLevelNormalizer` is now parameterised;
+  existing waveform consumers retain their exact defaults, while only the orb uses a 2.5% second
+  gate and 0.12 minimum peak. A 0.02 residual remains zero, but a 0.09 soft-voice level produces
+  about 0.46 normalized travel with the same 0.76 ceiling, so it cannot regress to the old saturated
+  sphere. Every completed real hold now logs only its sample count and raw/normalized peaks to
+  `/tmp/hypervibe.log` for non-content diagnostics. Installed dark-background captures preserved at
+  `/private/tmp/hypervibe-local62-soft-voice/` show the low-level Listening envelope moving from
+  about 158x151 to 173x169 pixels (roughly 9.5% width and 12% height) without clipping or label
+  contact. Verification: native Voice **116/116**, optimized compilation, `git diff --check`,
+  stable deep/strict signing, and candidate/installed executable equality all pass (SHA-256
+  `f806b40b0d667cee2ee249e4b7dea489ac28e515a74cd1bab3ce3c8062869f4b`). The installed App is
+  build 62 / `1.0.0-local.62`, signed by `siriRemote Local Signing`, with one no-argument process
+  from `/Applications/HyperVibe.app` (PID 75830 at handoff time). build 61 is recoverable at
+  `/private/tmp/hypervibe-before-local62-20260901/HyperVibe.app`; these changes were not pushed.
 
 ## Maintenance rules
 

@@ -281,7 +281,15 @@ final class ThinkingOrbCanvasView: NSView {
     private var targetBrightness = 0.0
     private var displayedBrightness = 0.0
     private var pitchBaselineLog2: Double?
-    private var levelNormalizer = VoiceWaveformLevelNormalizer()
+    // BuiltinMicFeeder has already applied its -52 dBFS floor and perceptual curve. The generic
+    // waveform normalizer's 5.5% second gate and 0.22 minimum peak made quieter real microphones
+    // barely move this compact sphere, even though deterministic previews remained expressive.
+    private var levelNormalizer = VoiceWaveformLevelNormalizer(
+        minimumPeak: 0.12, gate: 0.025
+    )
+    private var rawAudioPeak = 0.0
+    private var normalizedAudioPeak = 0.0
+    private var audioSampleCount = 0
 
     override var isOpaque: Bool { false }
     override var allowsVibrancy: Bool { true }
@@ -464,10 +472,19 @@ final class ThinkingOrbCanvasView: NSView {
         displayedBrightness = 0
         pitchBaselineLog2 = nil
         levelNormalizer.reset()
+        rawAudioPeak = 0
+        normalizedAudioPeak = 0
+        audioSampleCount = 0
         needsDisplay = true
     }
 
     func finishAudio() {
+        if audioSampleCount > 0 {
+            rmDebug(String(
+                format: "🎛 orb meter hold samples=%d rawPeak=%.3f normalizedPeak=%.3f",
+                audioSampleCount, rawAudioPeak, normalizedAudioPeak
+            ))
+        }
         targetHistory = [Double](repeating: 0, count: 10)
         targetLevel = 0
         targetPitchConfidence = 0
@@ -475,10 +492,14 @@ final class ThinkingOrbCanvasView: NSView {
     }
 
     func ingest(_ sample: VoiceMeterSample) {
-        // Share the tested per-hold peak normalizer with the other Voice visualisations. Its real
-        // noise gate and 0.76 ceiling preserve syllable-to-syllable headroom instead of turning a
-        // normal microphone level into a permanently saturated sphere.
+        // Keep the tested adaptive per-hold peak and 0.76 ceiling, using the orb's lighter
+        // post-feeder gate so soft speech retains motion without turning a normal level into a
+        // permanently saturated sphere.
         let perceptual = Double(levelNormalizer.normalize(sample.level))
+        let raw = sample.level.isFinite ? min(1, max(0, Double(sample.level))) : 0
+        rawAudioPeak = max(rawAudioPeak, raw)
+        normalizedAudioPeak = max(normalizedAudioPeak, perceptual)
+        audioSampleCount += 1
         targetLevel = perceptual
         targetHistory.removeFirst()
         targetHistory.append(perceptual)

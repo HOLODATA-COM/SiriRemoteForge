@@ -20,23 +20,34 @@ import Symbols
 /// real noise gate. The waveform still carries syllable-to-syllable loudness, but changing Layer
 /// (and therefore capture route) no longer changes the apparent size of the speaker's voice.
 struct VoiceWaveformLevelNormalizer {
-    private(set) var peak: CGFloat = 0.22
+    private let minimumPeak: CGFloat
+    private let gate: CGFloat
+    private let outputCeiling: CGFloat
+    private(set) var peak: CGFloat
 
-    mutating func reset() { peak = 0.22 }
+    init(minimumPeak: CGFloat = 0.22,
+         gate: CGFloat = 0.055,
+         outputCeiling: CGFloat = 0.76) {
+        self.minimumPeak = minimumPeak
+        self.gate = gate
+        self.outputCeiling = outputCeiling
+        self.peak = minimumPeak
+    }
+
+    mutating func reset() { peak = minimumPeak }
 
     mutating func normalize(_ rawValue: Float) -> CGFloat {
         let raw = CGFloat(rawValue.isFinite ? min(1, max(0, rawValue)) : 0)
-        let gate: CGFloat = 0.055
         // Release is wall-clock/display-tick based, including quiet gaps. A loud transient must not
         // pin the scale indefinitely merely because silence sits below the acoustic gate.
-        peak = max(0.22, peak * 0.994)
+        peak = max(minimumPeak, peak * 0.994)
         guard raw > gate else { return 0 }
         let gated = (raw - gate) / (1 - gate)
         // About a 5.5-second peak release at the 30 Hz display cadence. A word can soften without
         // instantly being auto-amplified, while a later sentence can still establish a new scale.
         peak = max(peak, gated)
         let relative = min(1, max(0, gated / peak))
-        return min(1, pow(relative, 0.86) * 0.76)
+        return min(1, pow(relative, 0.86) * outputCeiling)
     }
 }
 
