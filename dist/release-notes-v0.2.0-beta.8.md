@@ -1,0 +1,94 @@
+# SiriRemoteForge v0.2.0-beta.8
+
+This release is an upgrade from **v0.2.0-beta.7**. It makes the particle Voice orb clearer and more
+expressive, supports two connected Siri Remotes without sacrificing input or microphone handoff,
+fixes native dictation selecting the Mac microphone when remote audio should be available, and lets
+a new Voice long hold cancel a result that is still processing.
+
+## Upgrade from beta.7
+
+- **Existing beta.7 installation:** use **Check for Updates…** for the authenticated app-only
+  update, or download `HyperVibe-0.2.0-beta.8-macOS-arm64.zip`.
+- **Important for Siri Remote microphone improvements:** install
+  `HyperVibe-Full-Setup-0.2.0-beta.8-arm64.pkg`. Sparkle intentionally updates only the App; the
+  capture daemon and microphone router changes in this release require Full Setup.
+- **First installation:** use `HyperVibe-Full-Setup-0.2.0-beta.8-arm64.pkg`.
+- **Legacy Full Setup:** `HyperVibe-Full-Setup-0.2.0-beta.8-arm64.zip` remains available when the
+  native Installer cannot be used.
+
+These beta artifacts remain non-notarized. The App bundles are ad-hoc signed and the native package
+is unsigned because the project does not yet have Developer ID distribution certificates.
+Control-click the download and choose **Open** once; never disable Gatekeeper globally. HyperVibe
+requires macOS 13 or newer on Apple silicon.
+
+## What changed since beta.7
+
+### More legible, more responsive Voice orb
+
+- The Listening orb now has larger but still refined particles and a borderless frosted material
+  behind the complete sphere. The material stays even inside the orb, feathers only outside its
+  particle envelope, and follows the live envelope instead of exposing a fixed disc or rectangle.
+- Bright particles and a deliberately neutral dark material preserve contrast over both light and
+  dark application backgrounds without requesting Screen Recording permission.
+- Soft speech is no longer lost behind a second visual noise gate. Volume, onset and pitch produce
+  stronger motion with longer carry and recoil, while a bounded common breath keeps background
+  noise from pinning the sphere at its maximum size.
+- Speech deformation is strictly symmetric by latitude layer: a whole layer may expand or contract,
+  but individual points cannot create lopsided bulges. Outward layers simultaneously gain particle
+  size and light, producing the clearer Siri-like sense of visual mass requested after beta.7.
+
+### Seamless two-remote input and microphone switching
+
+- Multiple same-model Siri Remotes are tracked by physical device rather than collapsed into one
+  vendor/product identity. Disconnecting one remote no longer tears down the surviving remote.
+- Buttons and multitouch surfaces can switch between two connected remotes without a stale release
+  ending the new gesture. A held Siri action remains open until the last physical holder releases.
+- Native Voice re-arms only the remote that produced the Siri press, including during a handoff.
+  The required generation-3 management interfaces stay open non-exclusively, so either remote can
+  wake its microphone without occupying the IR/radio services.
+
+### Native Voice now wakes and selects remote audio correctly
+
+- Native dictation publishes its own process-owned microphone demand on the raw press edge. The
+  capture supervisor watches that owner for crash cleanup and starts the remote pipeline even though
+  native Voice reads shared memory directly instead of opening the virtual CoreAudio device.
+- Remote selection waits briefly for fresh frames while losslessly buffering the built-in fallback.
+  A newly launched router starts at the current capture baseline, preventing the previous
+  utterance's tail from leaking into a new turn; an already-live router retains valid pre-roll.
+- The router accepts dynamically allocated ATT value handles only after the complete direction,
+  notification, length, sequence and Opus framing checks pass. This covers different per-remote GATT
+  layouts without weakening the audio-frame validation.
+
+### Cancel processing by starting a new Voice hold
+
+- If a released Voice turn is still transcribing or rewriting, press and hold Siri again to cancel
+  that old result and immediately begin a fresh Listening turn.
+- Replacement capture begins on the raw press edge, so the 200 ms long-hold discriminator does not
+  cut off the first phoneme. A quick accidental press discards only the speculative capture and lets
+  the existing result continue.
+- Every irreversible insertion path checks session ownership. Even if a cancelled provider request
+  ignores cooperative cancellation and returns late, it cannot insert stale text or overwrite the
+  new turn. The visible particle formation morphs directly back to Listening without blinking.
+
+## Verification
+
+- SiriRemoteCore: **134/134 tests passed**.
+- Packaged native Voice: **122/122 self-checks passed**.
+- Microphone router parser and monitor-ring tests, capture daemon, HAL driver contract and offline
+  CoreAudio handoff simulation pass with warnings treated as errors.
+- The release audit expands the app-only ZIP, Full Setup ZIP and native package; verifies checksums,
+  signatures, payload seals, architecture, macOS deployment target, updater metadata and licenses;
+  and rejects private paths, hardware identifiers, personal config and PacketLogger.
+- The published Sparkle feed and app-only enclosure are checked independently after upload: feed
+  signature, beta channel, monotonic build, URL, content length, archive signature and embedded App
+  version must all agree before the release is considered complete.
+
+Use the attached `SHA256SUMS.txt` to verify all downloads:
+
+```sh
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+This remains prerelease software. It relies on private macOS frameworks and an undocumented
+Bluetooth voice path; please include the macOS version, remote model and firmware when reporting a
+reproducible issue.

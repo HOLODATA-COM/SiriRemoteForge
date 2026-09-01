@@ -6,7 +6,8 @@ explicitly wants this integrated into siriRemote — reverse-engineering is the 
 
 ## Hardware / connection facts
 - 3rd-gen Siri Remote (2022, USB-C, A2843-ish). HID **product `0x0315` (789)**, vendor `0x004C`
-  (Apple), serial-as-name `C08RQGMC2330`. Connects over **BLE only** (`Services: 0x400000 <BLE>`);
+  (Apple), with its device serial exposed as the Bluetooth name. It connects over **BLE only**
+  (`Services: 0x400000 <BLE>`);
   it advertises **no Bluetooth audio profile** (no A2DP/HFP), so the mic is NOT a normal audio device.
 - It does **not** appear in CoreAudio (`system_profiler SPAudioDataType` — only MacBook mic, iPhone
   Continuity mic, etc.).
@@ -538,7 +539,7 @@ use `/usr/bin/log` explicitly. With that fixed, `bluetoothd` shows the remote re
 activation write, at each of the three attempts (initial arm, and the two Siri-down re-arms):
 
 ```text
-BTLEServer: Error writing value for characteristic "Report" on peripheral "C08RQGMC2330":
+BTLEServer: Error writing value for characteristic "Report" on peripheral "<remote-name>":
             Error Domain=CBATTErrorDomain Code=130 "Unknown ATT error."
 BTLEServer: Error setting feature report for ID #241: CBATTErrorDomain Code=130
 ```
@@ -554,8 +555,8 @@ it does not mean the remote accepted it.
 The remote was connected to the Mac over USB-C while remaining connected over BLE, giving a second,
 independent command channel with no GATT layer.
 
-USB enumeration (`Apple TV Remote`, `idVendor` 1452 / `0x05AC`, `idProduct` 789 / `0x0315`, serial
-`C08RQGMC2330`, `bcdUSB` 512, `bNumConfigurations` 2, currently configuration 2) exposes only two
+USB enumeration (`Apple TV Remote`, `idVendor` 1452 / `0x05AC`, `idProduct` 789 / `0x0315`,
+`bcdUSB` 512, `bNumConfigurations` 2, currently configuration 2) exposes only two
 interfaces:
 
 | interface | usage page / usage | maxInput | maxOutput | maxFeature |
@@ -654,7 +655,7 @@ HOGP stack no longer owned it. A dedicated CoreBluetooth tool then scanned, foun
 to it as an ordinary BLE peripheral:
 
 ```text
-FOUND C08RQGMC2330 rssi=-57
+FOUND <remote-name> rssi=-57
    adv: kCBAdvDataServiceUUIDs: [ Human Interface Device ]   <-- device advertises HID
 CONNECTED. discovering ALL services ...
 explicitly requesting HID service 0x1812 ...

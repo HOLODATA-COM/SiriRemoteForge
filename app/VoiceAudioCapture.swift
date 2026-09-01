@@ -26,6 +26,19 @@ struct VoiceCapturedAudio {
     }
 }
 
+/// Pure cursor policy shared with the native regression suite. A producer that was already live at
+/// press-down may expose current-session pre-roll; one launched for this press must begin exactly at
+/// the captured baseline so persistent shared memory cannot contribute a prior utterance tail.
+enum VoiceRemoteProbePolicy {
+    static let maximumWaitNanoseconds: UInt64 = 650_000_000
+    static let preRollFrames: UInt64 = 14_400 // 300 ms at 48 kHz
+
+    static func firstCursor(baseline: UInt64, producerWasActive: Bool) -> UInt64 {
+        guard producerWasActive, baseline > preRollFrames else { return baseline }
+        return baseline - preRollFrames
+    }
+}
+
 /// All mutable state is confined to `queue`; public methods only enqueue work or consume the
 /// single-producer AsyncStream.
 final class VoiceAudioCaptureSession: @unchecked Sendable {
@@ -50,6 +63,7 @@ final class VoiceAudioCaptureSession: @unchecked Sendable {
     private var builtinCursor: UInt64 = 0
     private var remoteCursor: UInt64 = 0
     private var remoteBaseline: UInt64 = 0
+    private var remoteWasActiveAtStart = false
     private var remoteWasLive = false
     private var remoteAdvancedFrames: UInt64 = 0
 
@@ -70,11 +84,11 @@ final class VoiceAudioCaptureSession: @unchecked Sendable {
     private let exclusionLock = NSLock()
     private var excludeUntilNanoseconds: UInt64 = 0
 
-    /// Capture starts on the raw press edge, before the 200 ms hold discriminator. A 120 ms probe
-    /// therefore finishes before Voice becomes visible, while still giving the remote stream six
-    /// complete 20 ms packets to prove freshness.
-    private let probeNanoseconds: UInt64 = 120_000_000
-    private let remotePreRollFrames: UInt64 = 14_400 // 300 ms at 48 kHz
+    /// Native dictation raises remote-pipeline demand on the raw press edge. A warm router normally
+    /// produces frames near the 200 ms hold discriminator; buffer the built-in fallback for up to
+    /// 650 ms so a slower launch can still win without losing the sentence beginning. A healthy
+    /// remote wins immediately after 20 ms of fresh audio, so the ceiling adds no healthy-path wait.
+    private let probeNanoseconds = VoiceRemoteProbePolicy.maximumWaitNanoseconds
 
     init(minimumDuration: TimeInterval,
          maxDuration: TimeInterval,
@@ -134,6 +148,7 @@ final class VoiceAudioCaptureSession: @unchecked Sendable {
         var active: UInt32 = 0
         if srm_builtin_audio_state(&builtinCursor, &active) != 0 { builtinCursor = 0 }
         if srm_remote_audio_state(&remoteBaseline, &active) == 0 {
+            remoteWasActiveAtStart = active != 0
             remoteCursor = remoteBaseline
         } else {
             remoteBaseline = 0
@@ -211,8 +226,11 @@ final class VoiceAudioCaptureSession: @unchecked Sendable {
             guard current > remoteBaseline else { return 0 }
             remoteWasLive = true
             remoteAdvancedFrames = current - remoteBaseline
-            remoteCursor = remoteBaseline > remotePreRollFrames
-                ? remoteBaseline - remotePreRollFrames : 0
+            // A newly launched router has no valid current-session audio before the baseline;
+            // reading backwards there would leak the previous dictation's final 300 ms.
+            remoteCursor = VoiceRemoteProbePolicy.firstCursor(
+                baseline: remoteBaseline, producerWasActive: remoteWasActiveAtStart
+            )
         } else if current > remoteCursor {
             remoteAdvancedFrames = max(remoteAdvancedFrames, current - remoteBaseline)
         }

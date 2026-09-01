@@ -1,6 +1,6 @@
 # SiriRemoteForge — living handoff
 
-Last updated: 2026-08-29 (Australia/Sydney)
+Last updated: 2026-09-02 (Australia/Sydney)
 
 This document is the concise source of truth for continuing development. Keep it updated whenever
 the architecture, user-facing mappings, build/run workflow, or microphone investigation changes.
@@ -29,6 +29,33 @@ belong in `docs/mic-reverse-engineering.md`.
 - Local checkout: the repository root (`siriremote-release`).
 - Current committed HEAD: `c39f300` (`docs(release): detail beta.5 UI redesign`; history-rewritten
   equivalent with Claude co-author trailers removed from public refs).
+
+### ⚡ LATEST — 2026-09-02: processing Voice can be replaced by a fresh long hold (uncommitted, tested, deployed)
+
+- A confirmed second Voice long hold while the preceding turn is processing now cancels that turn
+  and immediately promotes a fresh listening session. Capture for the replacement starts on the raw
+  press edge, before the existing 200 ms long-hold discriminator, so the first spoken phoneme is not
+  lost. A quick press is still harmless: it discards only the speculative capture and lets the old
+  turn continue.
+- Replacement is deliberately allowed only after the old physical hold was released. Duplicate
+  edges and multi-remote handoff during a live hold retain the existing busy semantics. At most one
+  speculative replacement can exist.
+- Old processing now has a cancellable task and a session-ID ownership guard at every irreversible
+  insertion boundary. If an old provider request ignores cooperative cancellation and returns late,
+  it still cannot update the transcript, replace a selection, or insert stale text. If it reaches
+  insertion during the 200 ms decision window, it waits: a quick press resumes it, while a confirmed
+  long hold invalidates it.
+- The HUD reuses its existing interruptible particle state transition. Confirming the replacement
+  morphs the visible processing particle formation directly back into Listening instead of hiding
+  and recreating the orb, preserving a smooth transaction.
+- Verification: warning-free optimized build; SiriRemoteCore **134/134**; packaged native Voice
+  self-test **122/122**; `git diff --check`; candidate and installed deep/strict signature checks;
+  and identical candidate/installed executable SHA-256
+  `3e581a70b7a128f76f80a88935309f7c6d13abf010a85916450ba959d169061f`.
+  `/Applications/HyperVibe.app` is build **70** / **`1.0.0-local.70`**, signed by the unchanged
+  `siriRemote Local Signing` identity and running as exactly one UI process from the required path
+  (PID **41833** at verification). local.69 is recoverable at
+  `/private/tmp/HyperVibe-local69-installed-before70-20260902.app`. Nothing was committed or pushed.
 
 ### ⚡ LATEST — 2026-08-29: Sci-fi Voice edge cues + transactional personal dictionary (uncommitted, tested, deployed)
 
@@ -1918,7 +1945,7 @@ output converts every remaining assumption into fact.
   Linux/BlueZ precedent proving the remote will bond to a non-Apple central at all.
 - **macOS provably cannot answer the bonding question — measured live.** Querying the connected
   remote: `system_profiler` shows it as BLE, Apple `0x004C`, product `0x0315`, firmware `0x0021`,
-  address `E0:C3:EA:A3:03:4D`; `ioreg` exposes **8862 parsed HID elements** (the digested report
+  address recorded privately; `ioreg` exposes **8862 parsed HID elements** (the digested report
   structure) but **zero raw GATT handles / characteristics** (`grep -c GATTCharacteristic|ATTHandle`
   = 0). macOS hands up the chewed HID and hides the GATT+SMP layer entirely — the same wall as the
   mic. So no amount of Mac-side probing predicts ESP32 bondability; only a stack that operates at the
@@ -3092,7 +3119,7 @@ feel that evening; if any of these is wrong, this is where to look:
   poison deduplication on the survivor. A deterministic regression creates two same-model remotes
   with multiple interfaces and requires the second to remain connected after all first-remote
   interfaces leave. Current hardware startup could enumerate only one online gen-3 remote
-  (`C08RX8PR2330`, five interfaces), and all five were separately registered and seized with no HID
+  (five interfaces), and all five were separately registered and seized with no HID
   open failure; the two-device physical disconnect still needs a user hardware confirmation.
   Verification: native Voice **115/115**, optimized compilation, `git diff --check`, stable
   deep/strict signing, and candidate/installed executable equality all pass (SHA-256
@@ -3129,9 +3156,9 @@ feel that evening; if any of these is wrong, this is where to look:
   physical holder releases; removing one remote likewise releases only buttons no surviving remote
   still holds. The old global first-press suppression is physical-device scoped and expires after
   750 ms, so adding B's sibling interfaces cannot swallow A's next Voice press and remotes already
-  online at App launch do not lose a later first press. Real startup enumerated both serials
-  (`C08RX8PR2330`, `C08RQGMC2330`), all ten HID interfaces opened successfully, and both 2775x2775
-  multitouch surfaces (`112614654`, `4096904318`) started with `activeSurfaces=2`. Deterministic
+  online at App launch do not lose a later first press. Real startup enumerated Remote A and Remote
+  B, all ten HID interfaces opened successfully, and both 2775x2775 multitouch surfaces started
+  with `activeSurfaces=2`. Deterministic
   regressions cover touch ownership/stale lift and Siri hold handoff. Verification: Core **134/134**,
   native Voice **118/118**, optimized compilation, `git diff --check`, stable deep/strict signing,
   and candidate/installed executable equality all pass (SHA-256
@@ -3141,6 +3168,116 @@ feel that evening; if any of these is wrong, this is where to look:
   `/private/tmp/hypervibe-before-local63-20260901/HyperVibe.app`; intermediate build 63 is at
   `/private/tmp/hypervibe-installed-local63-replaced-20260901.app`. The requested physical A/B
   cursor and Siri-button test is pending user confirmation; nothing was pushed.
+- local.65 fixes native Voice silently recording the Mac's built-in microphone even when the user
+  held a Siri Remote. Native dictation reads the remote shared-memory ring without opening the HAL
+  virtual device, but the root capture supervisor previously listened only to HAL consumer demand;
+  after its 120 ms probe every native turn therefore selected built-in audio unless another App
+  happened to have `Siri Remote Mic` open. HyperVibe now publishes an independent dictation-demand
+  notification carrying its live PID on the raw press edge. `srm_captured` ORs this with HAL demand,
+  watches the owner process for crash cleanup, and retains the existing three-second idle debounce.
+  Remote selection waits up to 650 ms while losslessly buffering built-in fallback and chooses the
+  remote immediately after 20 ms of fresh frames. A router launched for the current press starts at
+  the captured baseline rather than reading the persistent ring's prior 300 ms; already-live routers
+  retain valid pre-roll. Privacy-safe capture summaries now log source, duration, frames and RMS.
+  Verification: capture daemon builds warning-free with `-Werror`; optimized App compilation;
+  SiriRemoteCore **134/134**; packaged native Voice **119/119**; `git diff --check`; stable deep/strict
+  signing; and candidate/installed executable equality (SHA-256
+  `ef50591facc03306d34a2196ba6781773c968b17a5d73a0f8dc268f6340edb6c`). The installed daemon equals
+  the source build (SHA-256 `821c3eee786535118f27fe88b6710cce9855157c1cdcebfa4e41ffc7cb13996b`).
+  A live protocol probe started PacketLogger + `srm_router` from dictation demand and stopped both
+  after the idle edge, leaving only `srm_captured`. `/Applications/HyperVibe.app` is build 65 /
+  `1.0.0-local.65`, signed by `siriRemote Local Signing`, with exactly one UI process (PID 94416 at
+  handoff time); both physical remotes and both touch surfaces enumerated. build 64 is recoverable at
+  `/private/tmp/HyperVibe-local64-replaced-by65-20260901.app` and the old daemon at
+  `/private/tmp/srm_captured-before-local65-20260901`. A physical spoken turn is still required to
+  confirm the live capture summary reports `source=remote`; nothing was pushed.
+- The local.65 physical follow-up established that Remote A did wake the capture
+  path and delivered 309,120 remote frames over 12.88 seconds (`source=remote`, RMS 0.487096), while
+  Remote B started the same PacketLogger/router pipeline but delivered no fresh
+  remote ring frames and fell back to the built-in microphone. Both are product `0x0315` with the
+  same `0x0021` firmware, so this was not a model/firmware split. It exposed a second independent
+  issue: normal App startup retained only five HID interfaces per remote and sent the verified
+  Feature `0xFF` payload `[AF]` only under the `--activate-mic` diagnostic flag.
+- local.66 completes per-remote microphone wake and makes the Listening orb's live response clearly
+  readable. Normal detection now retains both gen-3 usage-page `0x20` IR/radio interfaces without
+  seizing them, giving each physical remote seven retained interfaces. Every native Voice Siri-down
+  re-sends only the evidence-backed Feature `0xFF` `[AF]` enable byte to interfaces sharing that
+  press's serial. This deliberately occurs before the logical `.sourceOnly` early return, so B can
+  wake and take the audio stream while A is still logically holding Voice without closing/reopening
+  the session. The router no longer assumes only ATT value handles `0x0035/0x0036`; it validates the
+  notification's length and Opus `0xB8` framing, retains the dynamic ATT handle as metadata, and logs
+  the first ACL/ATT stream identity without audio content.
+
+  The live orb keeps the quiet noise gate and avoids the rejected rigid maximum zoom: common volume
+  breath is bounded at 13%, while per-layer voice/pitch/impact displacement and coherent surface
+  bulges are roughly 2–2.5x stronger. Layer release is slower and the level spring less damped, so
+  syllables visibly travel and recoil instead of twitching in place. Particle-size modulation grows
+  secondarily, and the borderless frosted material follows the actual authored particle envelope up
+  to a 62-point radius. Upstream no-acoustic golden geometry remains unchanged.
+
+  Verification: router parser + monitor-ring tests pass; daemon builds warning-free with `-Werror`;
+  optimized App compilation; SiriRemoteCore **134/134**; packaged native Voice **119/119**;
+  `git diff --check`; and deep/strict stable-signature verification all pass. Candidate and installed
+  App executables are identical (SHA-256
+  `63b15612023022da8ebf5752ab96a3339009a048413ec2fc62f35393a626e6b9`); source/installed router
+  are identical (`4152530fc41c6d0c9af0ee781e354ed1008b3f338a63b5804a4736988e97dc5a`), as are the daemon
+  (`821c3eee786535118f27fe88b6710cce9855157c1cdcebfa4e41ffc7cb13996b`). Startup enumerated both
+  serials and all 14 HID interfaces; all four `0x20` interfaces opened non-exclusively. The installed
+  App is build 66 / `1.0.0-local.66`, signed by `siriRemote Local Signing`, with exactly one
+  no-argument UI process from `/Applications/HyperVibe.app` (PID 4942 at handoff time); daemon PID
+  3536 is idle. build 65 is recoverable at
+  `/private/tmp/HyperVibe-local65-installed-before66-20260901.app`, with additional App/daemon/router
+  backups named `*-before-local66-20260901` in `/private/tmp`. Physical A/B speech and orb-motion
+  confirmation remains pending; nothing was pushed.
+- local.67 replaces local.66's asymmetric soft-body deformation with strict symmetric layer
+  breathing at the user's request. During live Listening, every particle in one latitude layer now
+  receives the exact same 3D radius; only the complete layer may expand or contract. All
+  longitude-dependent energy/impact/pitch/brightness bulges and all speech-driven per-particle size
+  gain were removed. Different layers retain the stronger local.66 voice/pitch/onset amplitudes and
+  the common 13% bounded breath, so the sphere remains responsive without developing lopsided
+  protrusions. Particle depth styling is evaluated from a fixed reference sphere, preventing layer
+  motion from indirectly changing particle size. Idle/demo golden geometry remains untouched.
+  A new order-independent regression quantizes every voiced particle's 3D radius and requires no
+  more than the ten authored layer radii; the former surface ripple would create many more.
+  Verification: optimized compilation; SiriRemoteCore **134/134**; packaged native Voice
+  **120/120**; `git diff --check`; deep/strict stable signing; and candidate/installed executable
+  equality (SHA-256 `e0e2515611715fcc013898d7958258790317208301ce37c31c19b5213ea9718f`).
+  `/Applications/HyperVibe.app` is build 67 / `1.0.0-local.67`, signed by
+  `siriRemote Local Signing`, with exactly one no-argument UI process (PID 7217 at handoff time);
+  daemon PID 3536 remains running. build 66 is recoverable at
+  `/private/tmp/HyperVibe-local66-installed-before67-20260901.app`; nothing was pushed.
+- local.68 adds Siri-like visual weight to local.67's strict symmetric layers. A layer's outward
+  travel now drives one shared `layerBreath` for every point in that layer: particle radius grows by
+  up to 42% and its tinted ink moves toward white at the same time. The signal is 68% that layer's
+  normalized outward displacement plus 32% common voiced energy, so a strong syllable makes the
+  complete sphere visibly brighter while individual layers can still expand and recover at
+  different amplitudes. This changes no point positions beyond local.67's complete-layer scale and
+  cannot reintroduce longitude-dependent bulges. A new regression requires the loud deterministic
+  frame to have both at least 12% larger mean particles and a materially brighter mean ink value;
+  the ten-radius symmetry regression remains in force. Verification: optimized compilation;
+  SiriRemoteCore **134/134**; packaged native Voice **121/121**; `git diff --check`; deep/strict
+  stable signing; and candidate/installed executable equality (SHA-256
+  `562199c3683bedf0c627657e6e9bf6d94fa84db5bccc127b6be9c81a2feaa7b4`).
+  `/Applications/HyperVibe.app` is build 68 / `1.0.0-local.68`, signed by
+  `siriRemote Local Signing`, with exactly one no-argument UI process (PID 16462 at handoff time);
+  daemon PID 3536 remains running. build 67 is recoverable at
+  `/private/tmp/HyperVibe-local67-installed-before68-20260901.app`; nothing was pushed.
+- local.69 makes that particle-mass response intentionally exaggerated after real use showed
+  local.68's linear gain was still visually negligible at the compact HUD size. `layerBreath` now
+  passes through a square-root curve before styling, lifting ordinary mid-level speech rather than
+  reserving visible change for the theoretical peak. Live particle radius grows by up to 105%
+  (about 2.05x base radius, over 4x filled area) and the tint-to-white lift increases from 0.24 to
+  0.36. Geometry remains local.67's strict ten symmetric layer radii; the stronger style value is
+  still shared identically by every point in its layer. The regression now requires loud speech to
+  produce over 30% greater mean particle radius and a stronger mean-lightness delta while retaining
+  the ten-radius symmetry invariant. Verification: optimized compilation; SiriRemoteCore
+  **134/134**; packaged native Voice **121/121**; `git diff --check`; deep/strict stable signing;
+  and candidate/installed executable equality (SHA-256
+  `a0de1d60afc82cec792605d16cf432a03c7c18e16c631dcf5e0520551a2e4189`).
+  `/Applications/HyperVibe.app` is build 69 / `1.0.0-local.69`, signed by
+  `siriRemote Local Signing`, with exactly one no-argument UI process (PID 26888 at handoff time);
+  daemon PID 3536 remains running. build 68 is recoverable at
+  `/private/tmp/HyperVibe-local68-installed-before69-20260901.app`; nothing was pushed.
 
 ## Maintenance rules
 

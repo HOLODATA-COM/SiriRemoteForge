@@ -106,6 +106,7 @@ private final class Router {
     private var prebufferedSamples = 0
     private var producerPublished = false
     private var wavSamples: [Int16] = []
+    private var observedVoiceStreams = Set<String>()
     private(set) var stats = RouterStats()
 
     // Three 20 ms packets absorb normal BLE scheduling jitter before CoreAudio begins pulling.
@@ -153,6 +154,11 @@ private final class Router {
 
     func consume(_ frame: RemoteVoiceFrame) throws {
         stats.voiceFrames += 1
+        let stream = String(format: "%@/ATT-0x%04X",
+                            frame.connectionHandle, frame.attributeHandle)
+        if observedVoiceStreams.insert(stream).inserted, !options.quiet {
+            fputs("srm_router: voice stream \(stream)\n", stderr)
+        }
 
         if let previous = previousSequence {
             let distance = Int(frame.sequence &- previous)

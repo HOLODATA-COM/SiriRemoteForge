@@ -12,8 +12,13 @@
 
 set -uo pipefail
 
-SERIAL="${SIRIREMOTE_SERIAL:-C08RQGMC2330}"
+SERIAL="${SIRIREMOTE_SERIAL:-}"
 PRODUCT_ID=789   # 0x0315
+
+if [ -z "$SERIAL" ]; then
+    echo "set SIRIREMOTE_SERIAL to the paired remote's serial/name" >&2
+    exit 2
+fi
 
 bt_block() {
     system_profiler SPBluetoothDataType 2>/dev/null \

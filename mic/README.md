@@ -102,7 +102,7 @@ remote firmware, especially long-running clock drift and changes to Apple's priv
 **The entire input pipeline is proven and audibly verified.** The user held the Siri button and spoke;
 we captured, parsed, decoded, and played back their voice — they confirmed it is clearly them.
 Definitive GO. Concretely, from one live capture:
-- The remote (`E0:C3:EA:A3:03:4D`) connected on handle `0x0406`; holding Siri produced a burst of
+- The remote connected on handle `0x0406`; holding Siri produced a burst of
   ~111-byte packets — **877 RECV packets** in the window.
 - **804 voice frames** were extracted (~16.1 s = 50 frames/s = 20 ms/frame) and **all 804 decoded
   cleanly through `OpusVoiceDecoder` (0 errors)**, RMS 3232 (non-silent). WAV written and played back;

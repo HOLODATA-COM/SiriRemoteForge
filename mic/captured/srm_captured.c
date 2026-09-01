@@ -3,11 +3,11 @@
 //
 //  Runs as root from a LaunchDaemon. It exists to answer demand: the HAL plug-in broadcasts
 //  `au.holodata.SiriRemoteMic.consumers` whenever an app opens or closes the virtual mic device
-//  (state = number of devices with IO running; treat >=1 as "in use"). This daemon watches that
-//  notification and runs the heavy, privileged capture pipeline — PacketLogger (HCI sniff) feeding
-//  srm_router (voice extraction → shared-memory ring the plug-in reads) — ONLY while some app is
-//  actually using the device. Idle apps cost nothing; the moment one selects "Siri Remote Mic",
-//  the remote's audio starts flowing with no manual scripts and no sudo prompt.
+//  (state = number of devices with IO running; treat >=1 as "in use"). HyperVibe's native dictation
+//  reads the shared ring directly, so it independently publishes `...dictation` with its live PID.
+//  This daemon ORs both demands and runs the heavy, privileged capture pipeline — PacketLogger
+//  (HCI sniff) feeding srm_router (voice extraction → shared-memory ring) — only while either route
+//  needs it. The PID is watched for exit so an App crash cannot leave capture running.
 //
 //  WHY ROOT: PacketLogger's HCI capture and the MobileBluetooth debug traces both require root.
 //  A LaunchDaemon is the standard way to grant exactly that, once, instead of a per-use password.
@@ -35,6 +35,7 @@ extern char **environ;
 
 // --- fixed paths (see install.sh — the router is copied next to this binary) -------------------
 #define NOTIF_NAME    "au.holodata.SiriRemoteMic.consumers"
+#define DICTATION_NOTIF_NAME "au.holodata.SiriRemoteMic.dictation"
 #define PKLG_PATH     "/tmp/srm_captured.pklg"
 #define PACKETLOGGER  "/Applications/PacketLogger.app/Contents/Resources/packetlogger"
 #define ROUTER_PATH   "/Library/Application Support/SiriRemoteMic/srm_router"
@@ -50,6 +51,10 @@ static pid_t g_router = -1;
 static int   g_pipeline_up = 0;
 static int   g_hci_ready = 0;
 static dispatch_source_t g_stop_timer = NULL;
+static dispatch_source_t g_dictation_process = NULL;
+static int      g_dictation_token = 0;
+static uint64_t g_virtual_demand = 0;
+static pid_t    g_dictation_pid = 0;
 
 static void logmsg(const char *fmt, ...)
 {
@@ -193,13 +198,16 @@ static void cancel_stop_timer(void)
     if (g_stop_timer) { dispatch_source_cancel(g_stop_timer); g_stop_timer = NULL; }
 }
 
-// React to the plug-in's demand edge. state>=1 → in use, state==0 → idle. We also read state on
-// startup for ground truth (an app may already be using the device before the daemon loaded).
-static void handle_demand(int token)
+static int process_is_alive(pid_t pid)
 {
-    uint64_t state = 0;
-    notify_get_state(token, &state);
-    if (state >= 1) {
+    if (pid <= 0) return 0;
+    if (kill(pid, 0) == 0) return 1;
+    return errno == EPERM;
+}
+
+static void reconcile_demand(void)
+{
+    if (g_virtual_demand >= 1 || process_is_alive(g_dictation_pid)) {
         cancel_stop_timer();        // a re-open cancels a pending teardown
         start_pipeline();
     } else {
@@ -214,6 +222,63 @@ static void handle_demand(int token)
         });
         dispatch_resume(g_stop_timer);
     }
+}
+
+// The HAL consumer count remains owned exclusively by the plug-in. Native HyperVibe demand is
+// combined separately below rather than overwriting this multi-client state.
+static void handle_virtual_demand(int token)
+{
+    uint64_t state = 0;
+    if (notify_get_state(token, &state) == NOTIFY_STATUS_OK) g_virtual_demand = state;
+    reconcile_demand();
+}
+
+static void cancel_dictation_process_watch(void)
+{
+    if (g_dictation_process != NULL) {
+        dispatch_source_cancel(g_dictation_process);
+        g_dictation_process = NULL;
+    }
+}
+
+static void watch_dictation_process(pid_t pid)
+{
+    cancel_dictation_process_watch();
+    if (!process_is_alive(pid)) {
+        g_dictation_pid = 0;
+        return;
+    }
+    g_dictation_process = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)pid,
+                                                  DISPATCH_PROC_EXIT,
+                                                  dispatch_get_main_queue());
+    if (g_dictation_process == NULL) {
+        logmsg("cannot watch dictation pid %d — demand will follow explicit release", pid);
+        return;
+    }
+    dispatch_source_set_event_handler(g_dictation_process, ^{
+        if (g_dictation_pid != pid) return;
+        logmsg("dictation owner pid %d exited — releasing demand", pid);
+        g_dictation_pid = 0;
+        cancel_dictation_process_watch();
+        reconcile_demand();
+    });
+    dispatch_resume(g_dictation_process);
+}
+
+// Native HyperVibe capture reads the shared ring directly and therefore never opens the HAL
+// device. Its notification state carries the owner PID so a crash cannot leave capture running.
+static void handle_dictation_demand(int token)
+{
+    uint64_t state = 0;
+    if (notify_get_state(token, &state) != NOTIFY_STATUS_OK) state = 0;
+    pid_t requested = state > 0 && state <= INT32_MAX ? (pid_t)state : 0;
+    if (!process_is_alive(requested)) requested = 0;
+    if (requested != g_dictation_pid) {
+        g_dictation_pid = requested;
+        watch_dictation_process(requested);
+        logmsg("dictation demand %s", requested > 0 ? "active" : "idle");
+    }
+    reconcile_demand();
 }
 
 static void on_term(int sig)
@@ -258,15 +323,25 @@ int main(void)
 
     int token = 0;
     uint32_t rc = notify_register_dispatch(NOTIF_NAME, &token, dispatch_get_main_queue(), ^(int t) {
-        handle_demand(t);
+        handle_virtual_demand(t);
     });
     if (rc != NOTIFY_STATUS_OK) {
         logmsg("notify_register_dispatch(%s) failed: %u — cannot detect demand, exiting", NOTIF_NAME, rc);
         return 1;
     }
 
-    handle_demand(token);   // ground truth at startup (device may already be in use)
-    logmsg("watching demand on %s", NOTIF_NAME);
+    uint32_t dictation_rc = notify_register_dispatch(DICTATION_NOTIF_NAME, &g_dictation_token,
+                                                      dispatch_get_main_queue(), ^(int t) {
+        handle_dictation_demand(t);
+    });
+    if (dictation_rc != NOTIFY_STATUS_OK) {
+        logmsg("notify_register_dispatch(%s) failed: %u — native dictation will use built-in fallback",
+               DICTATION_NOTIF_NAME, dictation_rc);
+    }
+
+    handle_virtual_demand(token);   // ground truth at startup (device may already be in use)
+    if (dictation_rc == NOTIFY_STATUS_OK) handle_dictation_demand(g_dictation_token);
+    logmsg("watching demand on %s + %s", NOTIF_NAME, DICTATION_NOTIF_NAME);
     dispatch_main();
     return 0;
 }

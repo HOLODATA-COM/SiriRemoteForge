@@ -562,20 +562,23 @@ final class ThinkingOrbCanvasView: NSView {
         }
         for index in displayedHistory.indices {
             let target = targetHistory[index]
-            let constant = target > displayedHistory[index] ? 0.025 : 0.18
+            // Preserve the syllable attack but let each layer carry its displacement into the
+            // next beat. The former 25/180 ms envelope looked like stationary vibration because
+            // a layer snapped out before the eye could follow its travel.
+            let constant = target > displayedHistory[index] ? 0.040 : 0.24
             let fraction = 1 - exp(-delta / constant)
             displayedHistory[index] += (target - displayedHistory[index]) * fraction
         }
         // A lightly under-damped response gives loud syllables a soft overshoot and recoil like a
         // suspended object, rather than the mechanical exponential zoom used by the first pass.
-        levelVelocity += (targetLevel - displayedLevel) * 140 * delta
-        levelVelocity *= exp(-15 * delta)
+        levelVelocity += (targetLevel - displayedLevel) * 116 * delta
+        levelVelocity *= exp(-10.5 * delta)
         displayedLevel += levelVelocity * delta
         if displayedLevel < 0 {
             displayedLevel = 0
             levelVelocity = max(0, levelVelocity) * 0.2
-        } else if displayedLevel > 0.82 {
-            displayedLevel = 0.82
+        } else if displayedLevel > 0.95 {
+            displayedLevel = 0.95
             levelVelocity = min(0, levelVelocity) * 0.2
         }
         displayedPitch = approach(displayedPitch, targetPitch, delta: delta,
@@ -676,7 +679,7 @@ final class ThinkingOrbCanvasView: NSView {
             return max(radius, hypot(dot.x - Self.orbCenter, dot.y - Self.orbCenter)
                 + particleRadius)
         }
-        let target = min(46.0, max(28.0, rawRadius))
+        let target = min(62.0, max(28.0, rawRadius))
         let delta = visualRadiusUpdatedAt > 0
             ? min(0.05, max(0, time - visualRadiusUpdatedAt)) : 1 / 60
         visualRadiusUpdatedAt = time

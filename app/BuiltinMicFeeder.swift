@@ -53,14 +53,24 @@ final class BuiltinMicFeeder {
 
     /// The plug-in's demand signal (see SiriRemoteMic.c, SRM_PublishConsumerCount).
     private static let consumersNotification = "au.holodata.SiriRemoteMic.consumers"
+    /// Native dictation reads the shared ring directly instead of opening the HAL virtual mic, so
+    /// it owns a separate demand signal for the privileged remote-audio pipeline. Its state is the
+    /// live App PID (zero means idle), allowing the supervisor to recover after an App crash.
+    private static let dictationNotification = "au.holodata.SiriRemoteMic.dictation"
     /// CoreAudio's fixed UID for the internal microphone on modern Macs.
     private static let builtInMicUID = "BuiltInMicrophoneDevice"
 
-    /// Rule 3: every capture-side call (HAL properties, AU lifecycle, demand state)
-    /// happens on this queue. If coreaudiod stalls, this queue stalls — nothing else.
+    /// Rule 3: every HAL capture-side call (properties and AU lifecycle) happens on this queue. If
+    /// coreaudiod stalls, this queue stalls — nothing else, including remote-pipeline demand.
     private let queue = DispatchQueue(label: "com.hypervibe.builtin-mic-feeder")
+    /// Never put the remote-pipeline edge behind synchronous HAL work. AUHAL can stall inside
+    /// coreaudiod; this queue performs only bounded libnotify calls.
+    private let remoteDemandQueue = DispatchQueue(label: "com.hypervibe.remote-audio-demand",
+                                                   qos: .userInitiated)
 
     private var notifyToken: Int32?
+    private var remoteDemandToken: Int32?
+    private var remoteDemandActive = false
     private var demandActive = false
     private var meteringActive = false
     private var capturing = false
@@ -84,6 +94,14 @@ final class BuiltinMicFeeder {
     // MARK: - Lifecycle (called from the main thread by AppDelegate)
 
     func start() {
+        var remoteToken: Int32 = 0
+        let remoteStatus = notify_register_check(Self.dictationNotification, &remoteToken)
+        if remoteStatus == NOTIFY_STATUS_OK {
+            remoteDemandToken = remoteToken
+        } else {
+            print("🎙️ notify_register_check failed (\(remoteStatus)) — native remote mic demand unavailable")
+        }
+
         var token: Int32 = 0
         let status = notify_register_dispatch(Self.consumersNotification, &token,
                                               queue) { [weak self] _ in
@@ -117,6 +135,13 @@ final class BuiltinMicFeeder {
     /// mapped region is never munmapped mid-flight (process exit reclaims it), so the
     /// render thread can never touch freed memory.
     func stop() {
+        // This queue never performs HAL work, so draining it here guarantees the privacy-critical
+        // release reaches the supervisor before the App process disappears.
+        remoteDemandQueue.sync { publishRemoteDemand(false) }
+        if let token = remoteDemandToken {
+            notify_cancel(token)
+            remoteDemandToken = nil
+        }
         if let token = notifyToken {
             notify_cancel(token)
             notifyToken = nil
@@ -152,6 +177,9 @@ final class BuiltinMicFeeder {
     /// already pinned built-in-mic AUHAL instead of opening the default input through a second
     /// AVAudioEngine, which could accidentally select our own virtual microphone.
     func setVoiceMetering(_ active: Bool) {
+        // Publish first on an independent queue: remote pipeline startup overlaps the built-in
+        // fallback and the existing 200 ms tap/hold discriminator.
+        remoteDemandQueue.async { [weak self] in self?.publishRemoteDemand(active) }
         queue.async { [weak self] in
             guard let self = self, active != self.meteringActive else { return }
             self.meteringActive = active
@@ -170,6 +198,38 @@ final class BuiltinMicFeeder {
     }
 
     // MARK: - Demand gating (feeder queue)
+
+    /// Publish App-owned native-dictation demand without corrupting the HAL plug-in's independent
+    /// multi-client count.
+    private func publishRemoteDemand(_ active: Bool) {
+        guard active != remoteDemandActive, let token = remoteDemandToken else { return }
+        let ownPID = UInt64(ProcessInfo.processInfo.processIdentifier)
+        if active {
+            guard notify_set_state(token, ownPID) == NOTIFY_STATUS_OK else {
+                print("🎙️ native remote mic demand state publish failed")
+                return
+            }
+            notify_post(Self.dictationNotification)
+            remoteDemandActive = true
+            rmDebug("🎙 remote-audio demand active pid=\(ownPID)")
+            return
+        }
+
+        // Never clear another live HyperVibe instance's ownership if an accidental duplicate is
+        // shutting down. The normal operational rule still keeps exactly one UI process.
+        var state: UInt64 = 0
+        guard notify_get_state(token, &state) == NOTIFY_STATUS_OK, state == ownPID else {
+            remoteDemandActive = false
+            return
+        }
+        guard notify_set_state(token, 0) == NOTIFY_STATUS_OK else {
+            print("🎙️ native remote mic demand release publish failed")
+            return
+        }
+        notify_post(Self.dictationNotification)
+        remoteDemandActive = false
+        rmDebug("🎙 remote-audio demand idle pid=\(ownPID)")
+    }
 
     private func handleDemand() {
         var state: UInt64 = 0

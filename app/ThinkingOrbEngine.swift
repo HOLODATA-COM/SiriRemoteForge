@@ -403,12 +403,9 @@ enum ThinkingOrbEngine {
             let synthetic = 0.62 * sin(time * 2.1 - Double(ringIndex) * 0.52)
                 + 0.38 * sin(time * 1.27 + Double(ringIndex) * 0.83)
             let wave: Double
-            let ringEnergy: Double
-            let ringImpulse: Double
             let globalLevel: Double
-            let ringPitch: Double
             if let acoustics, !acoustics.ringLevels.isEmpty {
-                let levels = acoustics.ringLevels.map { min(0.82, max(0, $0)) }
+                let levels = acoustics.ringLevels.map { min(0.95, max(0, $0)) }
                 let recentCount = min(3, levels.count)
                 let recentLevels = levels.suffix(recentCount)
                 let shortLevel = recentLevels.reduce(0, +) / Double(max(1, recentCount))
@@ -418,31 +415,26 @@ enum ThinkingOrbEngine {
                 // Time history now creates a single onset strength. It is no longer assigned from
                 // south to north across the latitude rings, which made every loud syllable look
                 // like an unattractive vertical scan.
-                let level = min(0.82, max(0,
+                let level = min(0.95, max(0,
                     shortLevel * 0.72 + acoustics.overallLevel * 0.28
                 ))
-                ringEnergy = level
-                ringImpulse = max(0, (levels.last ?? level) - olderLevel)
-                globalLevel = min(0.76, max(0, acoustics.overallLevel))
+                let ringImpulse = max(0, (levels.last ?? level) - olderLevel)
+                globalLevel = min(0.95, max(0, acoustics.overallLevel))
                 let pitch = min(1, max(-1, acoustics.pitch))
                     * min(1, max(0, acoustics.pitchConfidence))
-                ringPitch = pitch
                 let layerPhase = sin(Double(ringIndex) * 1.73 + pitch * 0.9)
                 let counterPhase = cos(Double(ringIndex) * 0.91 - time * 0.08)
                 let pitchShape = pitch
-                    * sin(latitude * 1.75 + Double(ringIndex) * 0.34) * 0.055
-                let voiceShape = level * (0.045 * layerPhase + 0.025 * counterPhase)
+                    * sin(latitude * 1.75 + Double(ringIndex) * 0.34) * 0.10
+                let voiceShape = level * (0.11 * layerPhase + 0.055 * counterPhase)
                 let hitShape = ringImpulse * (
-                    0.09 * layerPhase + 0.045 * sin(Double(ringIndex) * 2.41)
+                    0.18 * layerPhase + 0.09 * sin(Double(ringIndex) * 2.41)
                 )
-                wave = min(0.14, max(-0.14,
+                wave = min(0.24, max(-0.24,
                     synthetic * 0.012 + voiceShape + hitShape + pitchShape
                 ))
             } else {
-                ringEnergy = 0
-                ringImpulse = 0
                 globalLevel = 0
-                ringPitch = 0
                 wave = synthetic
             }
             // Keep upstream idle geometry untouched for golden parity. The live sphere itself is
@@ -452,51 +444,57 @@ enum ThinkingOrbEngine {
             if acoustics == nil {
                 ringRadius = radius * (0.88 + 0.105 * wave)
             } else {
-                // A restrained 7.5% whole-sphere breath makes volume readable without allowing
-                // background noise to dominate the silhouette. Layer deformation remains the
-                // larger and more expressive acoustic channel.
-                let globalBreath = 0.075 * min(1, globalLevel / 0.76)
+                // The silhouette breathes enough to confirm input at a glance, while the larger
+                // response comes from each complete latitude layer choosing its own scale.
+                let globalBreath = 0.13 * min(1, globalLevel / 0.95)
                 ringRadius = radius * (1.025 + globalBreath + wave)
             }
-            let acousticBrightness = acoustics.map {
-                min(1, max(0, $0.brightness))
-            } ?? 0
+            // Siri's breath reads as one material response: distance, particle weight and light
+            // arrive together. Keep that response layer-uniform. Most of it follows this layer's
+            // outward travel; a smaller common-energy component makes the whole sphere brighten
+            // coherently on a voiced beat even while one layer happens to be contracting.
+            let layerBreath: Double
+            if acoustics == nil {
+                layerBreath = 0
+            } else {
+                let baseRadius = radius * 1.025
+                let outwardTravel = min(1, max(0,
+                    (ringRadius / baseRadius - 1) / 0.36
+                ))
+                let commonEnergy = min(1, globalLevel / 0.95)
+                layerBreath = 0.68 * outwardTravel + 0.32 * commonEnergy
+            }
             let lonCount = max(1, Int((abs(cosLatitude) * Double(lonDensity)).rounded()))
             for longitudeIndex in 0..<lonCount {
                 let longitude = Double(longitudeIndex) / Double(lonCount) * 2 * .pi
-                // Siri-like freedom comes from several coherent low-frequency bulges moving over
-                // the surface, not from uniformly scaling a rigid globe. Each source owns a
-                // different spatial mode; all are zero-mean so they preserve the bounded envelope.
-                let energySurface = sin(longitude * 2 + latitude * 1.35 + time * 0.14)
-                let impactSurface = sin(longitude * 3.1 - latitude * 2.2 - time * 0.50
-                    + Double(ringIndex) * 0.41)
-                let pitchSurface = sin(longitude * 1.25 + latitude * 2.1)
-                let brightnessSurface = sin(longitude * 3 + time * 0.42)
-                let organicRipple = ringEnergy * 0.040 * energySurface
-                    + ringImpulse * 0.075 * impactSurface
-                    + ringPitch * 0.034 * pitchSurface
-                    + acousticBrightness * 0.026 * brightnessSurface
-                        * (0.35 + 0.65 * ringEnergy)
-                let surfaceRipple = min(1.11, max(0.89, 1 + organicRipple))
-                let point = project(cosLatitude * cos(longitude) * ringRadius * surfaceRipple,
-                                    sinLatitude * ringRadius * surfaceRipple,
-                                    cosLatitude * sin(longitude) * ringRadius * surfaceRipple)
-                let depth = (point.2 / radius + 1) / 2
+                // Every point in this latitude receives the exact same radius. Speech is forbidden
+                // from adding longitude-dependent bulges or independently resizing particles: the
+                // only live deformation is a complete, symmetric layer expanding or contracting.
+                let point = project(cosLatitude * cos(longitude) * ringRadius,
+                                    sinLatitude * ringRadius,
+                                    cosLatitude * sin(longitude) * ringRadius)
+                let referencePoint = acoustics == nil ? point : project(
+                    cosLatitude * cos(longitude) * radius * 1.025,
+                    sinLatitude * radius * 1.025,
+                    cosLatitude * sin(longitude) * radius * 1.025
+                )
+                let depth = (referencePoint.2 / radius + 1) / 2
                 let crest = max(0, wave)
-                var liveScale = 1.0
-                if let acoustic = acoustics {
-                    let brightness = min(1, max(0, acoustic.brightness))
-                    let shimmerAmount = 0.5 + 0.5 * brightnessSurface
-                    liveScale += 0.26 * ringEnergy
-                        + 0.16 * ringImpulse * (0.4 + 0.6 * shimmerAmount)
-                        + 0.10 * brightness * shimmerAmount
-                        + max(0, surfaceRipple - 1) * 1.1
-                }
+                let idleCrestScale = acoustics == nil ? 1 + 0.4 * crest : 1
+                // Particle radius is tiny at this HUD size, so a linear 42% peak was numerically
+                // real but visually timid during ordinary speech. Lift the middle of the envelope
+                // with a square-root response: normal syllables gain animated visual mass while
+                // the exact same value is still shared by the whole layer. Radius (not area) tops
+                // out just over 2x, making a strong beat intentionally bold without changing the
+                // sphere's symmetric geometry.
+                let expressiveBreath = sqrt(layerBreath)
+                let liveParticleScale = 1 + 1.05 * expressiveBreath
+                let liveLight = 0.36 * expressiveBreath
                 dots.append(ThinkingOrbDot(
                     x: point.0, y: point.1, z: point.2,
-                    r: (0.6 + 1.7 * depth) * (1 + 0.4 * crest) * liveScale * rs,
-                    white: 0.66 - 0.56 * depth - 0.1 * crest
-                        - (acoustics == nil ? 0 : 0.08 * ringEnergy)
+                    r: (0.6 + 1.7 * depth) * idleCrestScale * liveParticleScale * rs,
+                    white: 0.66 - 0.56 * depth
+                        - (acoustics == nil ? 0.1 * crest : liveLight)
                 ))
             }
         }

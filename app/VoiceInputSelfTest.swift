@@ -207,6 +207,23 @@ enum VoiceInputSelfTest {
                    admission: .unavailable, configuredPushToTalk: false
                ) == .ordinary,
                "busy or misconfigured native voice never falls through to external push-to-talk")
+        expect(VoiceDictationReentryPolicy.route(
+            hasActiveSession: false, activeWasReleased: false,
+            hasPendingReplacement: false
+        ) == .fresh
+               && VoiceDictationReentryPolicy.route(
+                   hasActiveSession: true, activeWasReleased: true,
+                   hasPendingReplacement: false
+               ) == .replaceProcessing
+               && VoiceDictationReentryPolicy.route(
+                   hasActiveSession: true, activeWasReleased: false,
+                   hasPendingReplacement: false
+               ) == .busy
+               && VoiceDictationReentryPolicy.route(
+                   hasActiveSession: true, activeWasReleased: true,
+                   hasPendingReplacement: true
+               ) == .busy,
+               "a confirmed second hold replaces only post-release Voice processing")
 
         var chord = VoiceModeChordState()
         let ordinaryMuteDown = chord.route(buttonName: "mute", pressed: true,
@@ -440,8 +457,17 @@ enum VoiceInputSelfTest {
         let acousticTravel = zip(reactiveFrame.dots, idleFrame.dots).reduce(0.0) {
             $0 + hypot($1.0.x - $1.1.x, $1.0.y - $1.1.y)
         }
-        expect(reactiveFrame.dots.count == idleFrame.dots.count && acousticTravel > 80,
+        expect(reactiveFrame.dots.count == idleFrame.dots.count && acousticTravel > 180,
                "listening orb turns a voiced hit into strong per-ring geometric travel")
+        // finalize() depth-sorts particles, so validate the invariant independent of authored
+        // order: ten latitude layers may produce no more than ten distinct 3D radii. Any former
+        // longitude-driven surface bulge immediately produces many more.
+        let reactiveLayerRadii = Set(reactiveFrame.dots.map { dot -> Int64 in
+            let radius = sqrt(pow(dot.x - 32, 2) + pow(dot.y - 32, 2) + dot.z * dot.z)
+            return Int64((radius * 1_000_000).rounded())
+        })
+        expect(reactiveLayerRadii.count > 1 && reactiveLayerRadii.count <= 10,
+               "speech only scales complete symmetric layers, never individual surface points")
         let quietListeningFrame = ThinkingOrbEngine.frame(
             state: .listening, time: 0.6,
             acoustics: ThinkingOrbAcoustics(
@@ -462,7 +488,7 @@ enum VoiceInputSelfTest {
         let loudExtent = loudListeningFrame.dots.map {
             hypot($0.x - 32, $0.y - 32)
         }.max() ?? 0
-        expect(loudExtent > quietExtent + 0.5 && loudExtent < quietExtent + 4.5,
+        expect(loudExtent > quietExtent + 1.5 && loudExtent < quietExtent + 9,
                "listening volume adds a visible but bounded whole-sphere breath")
         func radialSpread(_ frame: ThinkingOrbFrame) -> Double {
             let radii = frame.dots.map { dot -> Double in
@@ -478,8 +504,19 @@ enum VoiceInputSelfTest {
         }
         let quietSpread = radialSpread(quietListeningFrame)
         let loudSpread = radialSpread(loudListeningFrame)
-        expect(loudSpread > quietSpread + 0.4 && loudSpread < 1.5,
-               "listening energy produces bounded local bulges instead of uniform zoom")
+        expect(loudSpread > quietSpread + 0.9 && loudSpread < 3.5,
+               "listening energy produces bounded differences between symmetric layer scales")
+        let quietMeanParticleRadius = quietListeningFrame.dots.map(\.r).reduce(0, +)
+            / Double(quietListeningFrame.dots.count)
+        let loudMeanParticleRadius = loudListeningFrame.dots.map(\.r).reduce(0, +)
+            / Double(loudListeningFrame.dots.count)
+        let quietMeanWhite = quietListeningFrame.dots.map(\.white).reduce(0, +)
+            / Double(quietListeningFrame.dots.count)
+        let loudMeanWhite = loudListeningFrame.dots.map(\.white).reduce(0, +)
+            / Double(loudListeningFrame.dots.count)
+        expect(loudMeanParticleRadius > quietMeanParticleRadius * 1.30
+               && loudMeanWhite < quietMeanWhite - 0.09,
+               "symmetric layer expansion gives particles exaggerated mass and a brighter orb")
         let successSymbol = ThinkingOrbSymbolGeometry.frame(success: true, time: 0)
         let failureSymbol = ThinkingOrbSymbolGeometry.frame(success: false, time: 0)
         let copySymbol = ThinkingOrbSymbolGeometry.copyFrame(time: 0)
@@ -779,6 +816,13 @@ enum VoiceInputSelfTest {
         )
         expect(convertedByteCount == 480_000 && conversionMilliseconds < 25,
                "10 seconds of PCM conversion stays below 25 ms")
+
+        expect(VoiceRemoteProbePolicy.firstCursor(baseline: 90_000,
+                                                  producerWasActive: false) == 90_000
+               && VoiceRemoteProbePolicy.firstCursor(baseline: 90_000,
+                                                     producerWasActive: true) == 75_600
+               && VoiceRemoteProbePolicy.maximumWaitNanoseconds == 650_000_000,
+               "new remote producers cannot leak stale pre-roll while live producers retain it")
 
         let appendProbe = Data([0, 1, 2, 3, 254, 255])
         let appendEnvelope = VoiceRealtimeTranscriptionSession.audioAppendMessage(appendProbe)

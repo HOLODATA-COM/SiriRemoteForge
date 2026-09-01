@@ -44,6 +44,22 @@ enum VoiceDictationAdmission: Equatable {
     case unavailable
 }
 
+/// A second native hold may supersede only a turn whose physical capture has already ended. An
+/// in-progress hold still owns the microphone; a second remote pressing the same logical button is
+/// a shared-input handoff, not permission to destroy that live utterance.
+enum VoiceDictationReentryPolicy: Equatable {
+    case fresh
+    case replaceProcessing
+    case busy
+
+    static func route(hasActiveSession: Bool, activeWasReleased: Bool,
+                      hasPendingReplacement: Bool) -> VoiceDictationReentryPolicy {
+        guard !hasPendingReplacement else { return .busy }
+        guard hasActiveSession else { return .fresh }
+        return activeWasReleased ? .replaceProcessing : .busy
+    }
+}
+
 /// Streaming text is already visible at the captured caret, so a successful stream must not open
 /// a second set of result cards after key-up. Final mode keeps the genuinely useful waiting states
 /// and a terminal result, but does not expose a separate Inserting card for a normally millisecond-
@@ -218,9 +234,14 @@ final class VoiceDictationCoordinator {
         var hasFlushedStreamingDelta = false
         var deltaFlushWork: DispatchWorkItem?
         var streamingDeliveryTask: Task<Void, Never>?
+        var processingTask: Task<Void, Never>?
         var streamingInsertionBlocked = false
         var realtimeEventsDrained = false
         var realtimeDrainContinuation: CheckedContinuation<Void, Never>?
+        /// A possible replacement press pauses the last irreversible delivery boundary until the
+        /// normal 200 ms hold discriminator accepts or rejects that replacement.
+        var replacementDecisionPending = false
+        var replacementDecisionContinuation: CheckedContinuation<Void, Never>?
         var metrics = VoiceLatencyMetrics.empty
 
         init(id: UUID, handled: Controller.HandledAction,
@@ -260,6 +281,7 @@ final class VoiceDictationCoordinator {
     private let deliverer = VoiceTextDeliverer()
     private let correctionMonitor = VoiceCorrectionMonitor()
     private var active: Session?
+    private var pendingReplacement: Session?
     private var lastTranscript = ""
     /// Keep one prepared socket for each route the configured layers can actually select. There
     /// are only two output modes, so this removes the first-press-after-layer-switch handshake
@@ -275,7 +297,7 @@ final class VoiceDictationCoordinator {
         self.runtime = runtime
     }
 
-    var isActive: Bool { active != nil }
+    var isActive: Bool { active != nil || pendingReplacement != nil }
 
     /// Uses only explicit bundle mappings. The config's "default" mode is routing fallback, not a
     /// shared writing-style group: otherwise every unmapped app would contaminate one history.
@@ -322,7 +344,7 @@ final class VoiceDictationCoordinator {
                                                          force: forceReconnect)
             }
         }
-        guard active == nil else { return }
+        guard active == nil, pendingReplacement == nil else { return }
         if configuredPrewarmSettings.isEmpty {
             discardAllPreparedRealtime()
             resetAllPrewarmRetryState()
@@ -345,7 +367,12 @@ final class VoiceDictationCoordinator {
         // `contains` is an in-memory lookup after startup (20k reads benchmark below 1 ms). Reject
         // before opening audio when Voice cannot possibly establish its mandatory transcription
         // session, so a missing key never creates a phantom hold or microphone flash.
-        guard active == nil else { return .busy }
+        let reentry = VoiceDictationReentryPolicy.route(
+            hasActiveSession: active != nil,
+            activeWasReleased: active?.releasedNanoseconds != nil,
+            hasPendingReplacement: pendingReplacement != nil
+        )
+        guard reentry != .busy else { return .busy }
         guard VoiceCredentialStore.cachedContains(.openAI) else { return .misconfigured }
         correctionMonitor.cancel()
 
@@ -380,7 +407,13 @@ final class VoiceDictationCoordinator {
         // turn. Final delivery already has a lossless no-target route: generate the text and copy
         // it. Selection detection, when possible, is resolved asynchronously below.
         if targetSeed == nil { session.purpose = .dictation }
-        active = session
+        if reentry == .replaceProcessing {
+            pendingReplacement = session
+            active?.replacementDecisionPending = true
+            rmDebug("🎙 voice replacement primed new=\(session.id) old=\(active?.id.uuidString ?? "none")")
+        } else {
+            active = session
+        }
         // Start the pinned microphone demand and ring reader immediately. The feeder callback is
         // asynchronous, so CoreAudio wakes in parallel with target resolution and networking.
         // This is still visually silent until the existing 200 ms hold promotion.
@@ -396,11 +429,17 @@ final class VoiceDictationCoordinator {
             session.targetTask = targetTask
             Task { [weak self, weak session] in
                 let target = await targetTask.value
-                guard let self, let session, self.active?.id == session.id else { return }
+                guard let self, let session,
+                      self.active?.id == session.id
+                        || self.pendingReplacement?.id == session.id else { return }
                 self.targetDidResolve(target, for: session)
             }
         }
-        transition(.priming, message: L("Preparing voice input…"))
+        // Keep the preceding processing animation truthful during the 200 ms hold discriminator.
+        // A promoted replacement morphs directly from that presentation into Listening.
+        if reentry == .fresh {
+            transition(.priming, message: L("Preparing voice input…"))
+        }
         return .accepted
     }
 
@@ -408,7 +447,7 @@ final class VoiceDictationCoordinator {
     /// this on the coordinator's normal phase channel means the floating surfaces and the
     /// Settings "Last-run" row always report the same actionable message.
     func reportConfigurationError(_ message: String) {
-        guard active == nil else { return }
+        guard active == nil, pendingReplacement == nil else { return }
         runtime.livePreview = ""
         transition(.error, message: message)
         scheduleIdle(after: 2.2)
@@ -416,6 +455,14 @@ final class VoiceDictationCoordinator {
 
     /// Called at +200 ms only if the physical button is still down.
     func beginListening() {
+        if let replacement = pendingReplacement {
+            pendingReplacement = nil
+            if let previous = active {
+                abandonForReplacement(previous)
+            }
+            active = replacement
+            rmDebug("🎙 voice replacement promoted new=\(replacement.id)")
+        }
         guard let session = active, !session.promoted else { return }
         session.promoted = true
         // Quick taps and accidental sub-minimum holds stay entirely inside the local capture ring.
@@ -432,7 +479,7 @@ final class VoiceDictationCoordinator {
     }
 
     private func targetDidResolve(_ target: VoiceTextTarget, for session: Session) {
-        guard active?.id == session.id else { return }
+        guard active?.id == session.id || pendingReplacement?.id == session.id else { return }
         session.target = target
         guard session.settings.selectionEditingEnabled else {
             session.purpose = .dictation
@@ -587,20 +634,69 @@ final class VoiceDictationCoordinator {
 
     /// Raw release before +200 ms. Nothing was visible or inserted, so cancellation is silent.
     func cancelPrime() {
+        if let replacement = pendingReplacement {
+            pendingReplacement = nil
+            cancelResources(replacement)
+            if let previous = active { resolveReplacementDecision(previous) }
+            onMeteringChanged?(false)
+            rmDebug("🎙 voice replacement discarded before hold threshold new=\(replacement.id)")
+            return
+        }
         guard let session = active, !session.promoted else { return }
         active = nil
-        session.deltaFlushWork?.cancel()
-        session.targetTask?.cancel()
-        session.streamingDeliveryTask?.cancel()
-        session.realtimeTask?.cancel()
-        session.pumpTask?.cancel()
-        Task {
-            _ = await session.capture.stop()
-            if let live = try? await session.realtimeTask?.value { await live.cancel() }
-        }
+        cancelResources(session)
         onMeteringChanged?(false)
         transition(.idle, message: "")
         startPrewarmIfNeeded()
+    }
+
+    /// Tear down every asynchronous owner of a session. `active` is deliberately managed by the
+    /// caller so replacement can invalidate the old UUID before any cancelled task resumes.
+    private func cancelResources(_ session: Session) {
+        releaseRealtimeDrainWaiter(session)
+        resolveReplacementDecision(session)
+        session.deltaFlushWork?.cancel()
+        session.targetTask?.cancel()
+        session.streamingDeliveryTask?.cancel()
+        session.processingTask?.cancel()
+        session.realtimeTask?.cancel()
+        session.pumpTask?.cancel()
+        Task { [weak session] in
+            guard let session else { return }
+            _ = await session.capture.stop()
+            if let live = try? await session.realtimeTask?.value { await live.cancel() }
+        }
+    }
+
+    private func abandonForReplacement(_ session: Session) {
+        guard active?.id == session.id else { return }
+        // UUID invalidation comes first. Every post-await delivery guard then rejects the old turn,
+        // even when its HTTP/WebSocket operation ignores cooperative Task cancellation.
+        active = nil
+        cancelResources(session)
+        runtime.livePreview = ""
+        rmDebug("🎙 voice processing cancelled old=\(session.id)")
+    }
+
+    private func resolveReplacementDecision(_ session: Session) {
+        session.replacementDecisionPending = false
+        session.replacementDecisionContinuation?.resume()
+        session.replacementDecisionContinuation = nil
+    }
+
+    /// Do not cross an irreversible paste/replace boundary while a second press is still inside
+    /// the 200 ms tap-vs-hold window. A quick tap resumes this session; a promoted hold invalidates
+    /// its UUID before resuming, so the caller's next guard discards the old result.
+    private func waitForReplacementDecision(_ session: Session) async {
+        guard session.replacementDecisionPending else { return }
+        await withCheckedContinuation { continuation in
+            if session.replacementDecisionPending {
+                precondition(session.replacementDecisionContinuation == nil)
+                session.replacementDecisionContinuation = continuation
+            } else {
+                continuation.resume()
+            }
+        }
     }
 
     /// Physical release after Voice opened. UI/mic demand end immediately; networking finishes in
@@ -624,12 +720,13 @@ final class VoiceDictationCoordinator {
             transition(.idle, message: "")
         }
 
-        Task { [weak self, weak session] in
+        let processingTask = Task { [weak self, weak session] in
             guard let self, let session else { return }
             let audio = await session.capture.stop()
             await MainActor.run { [weak self] in self?.onCaptureStopped?() }
             await self.captureDidStop(session, audio: audio)
         }
+        session.processingTask = processingTask
     }
 
     @discardableResult
@@ -652,6 +749,9 @@ final class VoiceDictationCoordinator {
         guard active?.id == session.id else { return }
         session.metrics.audioSource = audio.source.rawValue
         session.metrics.audioDurationMilliseconds = audio.duration * 1_000
+        rmDebug(String(format: "🎙 voice capture source=%@ duration=%.3fs frames=%d rms=%.6f",
+                       audio.source.rawValue, audio.duration, audio.frameCount,
+                       sqrt(max(0, audio.meanSquare))))
         guard Self.minimumDurationMet(audio.duration,
                                       minimum: session.settings.minimumRecordingSeconds) else {
             await discardShortCapture(session)
@@ -726,6 +826,7 @@ final class VoiceDictationCoordinator {
         }
 
         let historyText = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        await waitForReplacementDecision(session)
         guard active?.id == session.id, !historyText.isEmpty else { return }
         lastTranscript = historyText
         runtime.hasLastTranscript = true
@@ -805,6 +906,7 @@ final class VoiceDictationCoordinator {
         session.metrics.cleanupMilliseconds = Self.milliseconds(
             processingStart, DispatchTime.now().uptimeNanoseconds
         )
+        await waitForReplacementDecision(session)
         guard active?.id == session.id else { return }
 
         let insertionStart = DispatchTime.now().uptimeNanoseconds
@@ -996,6 +1098,7 @@ final class VoiceDictationCoordinator {
         guard active?.id == session.id, session.promoted,
               session.minimumDurationReached,
               session.purpose.isDictation,
+              !session.replacementDecisionPending,
               !session.pendingStreamingDelta.isEmpty,
               session.settings.autoInsert,
               !session.streamingInsertionBlocked,
@@ -1019,7 +1122,7 @@ final class VoiceDictationCoordinator {
     }
 
     private func markFirstAudio(id: UUID, timestamp: UInt64) {
-        guard let session = active, session.id == id,
+        guard let session = sessionOwned(id: id),
               session.metrics.pressToFirstAudioMilliseconds == nil else { return }
         session.metrics.pressToFirstAudioMilliseconds = Self.milliseconds(
             session.pressNanoseconds, timestamp
@@ -1027,15 +1130,15 @@ final class VoiceDictationCoordinator {
     }
 
     private func markMinimumDurationReached(id: UUID) {
-        guard let session = active, session.id == id,
+        guard let session = sessionOwned(id: id),
               !session.minimumDurationReached else { return }
         session.minimumDurationReached = true
-        guard session.promoted else { return }
+        guard active?.id == session.id, session.promoted else { return }
         applyResolvedPurpose(session)
     }
 
     private func markSessionReady(id: UUID, timestamp: UInt64) {
-        guard let session = active, session.id == id,
+        guard let session = sessionOwned(id: id),
               session.metrics.pressToSessionReadyMilliseconds == nil else { return }
         session.metrics.pressToSessionReadyMilliseconds = Self.milliseconds(
             session.pressNanoseconds, timestamp
@@ -1043,8 +1146,19 @@ final class VoiceDictationCoordinator {
     }
 
     private func finishIfCurrent(id: UUID) {
-        guard active?.id == id else { return }
+        guard active?.id == id else {
+            if pendingReplacement?.id == id {
+                cancelPrime()
+            }
+            return
+        }
         finishListening()
+    }
+
+    private func sessionOwned(id: UUID) -> Session? {
+        if active?.id == id { return active }
+        if pendingReplacement?.id == id { return pendingReplacement }
+        return nil
     }
 
     private func fail(_ session: Session, error: Error) async {
@@ -1104,7 +1218,8 @@ final class VoiceDictationCoordinator {
 
     private func startPrewarm(_ settings: Config.DictationSettings) {
         let mode = settings.outputMode
-        guard preparedRealtime[mode] == nil, active == nil, settings.enabled,
+        guard preparedRealtime[mode] == nil, active == nil, pendingReplacement == nil,
+              settings.enabled,
               !blockedPrewarmModes.contains(mode) else { return }
         let router = VoiceRealtimeEventRouter()
         let task = makeRealtimeTask(settings: settings, router: router)
@@ -1147,7 +1262,7 @@ final class VoiceDictationCoordinator {
                     let work = DispatchWorkItem { [weak self] in
                         guard let self else { return }
                         self.prewarmRetryWork.removeValue(forKey: mode)
-                        guard self.active == nil,
+                        guard self.active == nil, self.pendingReplacement == nil,
                               let desired = self.configuredPrewarmSettings[mode],
                               !self.blockedPrewarmModes.contains(mode) else { return }
                         self.startPrewarm(desired)
@@ -1174,7 +1289,7 @@ final class VoiceDictationCoordinator {
     }
 
     private func startPrewarmIfNeeded() {
-        guard active == nil else { return }
+        guard active == nil, pendingReplacement == nil else { return }
         guard !configuredPrewarmSettings.isEmpty,
               VoiceCredentialStore.cachedContains(.openAI) else {
             discardAllPreparedRealtime()
@@ -1263,7 +1378,8 @@ final class VoiceDictationCoordinator {
     private func scheduleIdle(after delay: TimeInterval) {
         let expected = runtime.phase
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.active == nil, self.runtime.phase == expected else { return }
+            guard let self, self.active == nil, self.pendingReplacement == nil,
+                  self.runtime.phase == expected else { return }
             self.transition(.idle, message: "")
         }
     }

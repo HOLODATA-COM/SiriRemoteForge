@@ -515,7 +515,8 @@ class RemoteInputHandler {
         // Normal operation seizes every remote interface to prevent duplicate system handling. The
         // direct-PTT diagnostic is narrower: seize only the audio interface whose raw reports we
         // need, and leave the management/button siblings non-exclusive while report 0x99 is tested.
-        let shouldSeize = !directPushToTalk || (usagePage == 0x0C && usage == 0x04)
+        let shouldSeize = usagePage != 0x20
+            && (!directPushToTalk || (usagePage == 0x0C && usage == 0x04))
         let openOptions = IOOptionBits(
             shouldSeize ? kIOHIDOptionsTypeSeizeDevice : kIOHIDOptionsTypeNone
         )
@@ -819,6 +820,20 @@ class RemoteInputHandler {
             return
         }
 
+        // Re-arm only the physical remote that produced this Siri edge. A source-only edge still
+        // runs this step: when A remains held while B is pressed, logical Voice stays open but B
+        // must be allowed to wake its own microphone and take over the incoming stream. 0xAF is the
+        // evidence-backed gen-3 input-enable byte; unrelated reports remain untouched.
+        if buttonName == "siri", isPressed,
+           activateMic || shouldUseNativeDictation?() == true {
+            let sourceDevices = devices.filter { deviceSources[$0] == source }
+            rmDebug("🎬 activate-mic: Siri down source=\(source) — re-arming "
+                    + "\(sourceDevices.count) interface(s)")
+            for device in sourceDevices {
+                sendMicActivation(device)
+            }
+        }
+
         // A source-only transition is a seamless handoff: another remote is still holding the
         // same logical button, so neither Voice nor any other continuous action should close/open.
         guard transition != .sourceOnly else {
@@ -827,16 +842,6 @@ class RemoteInputHandler {
             return
         }
         onPhysicalButtonStateChanged?(buttonName, isPressed)
-
-        // The remote can sleep between initial enumeration and a later Siri press. Re-send the
-        // gen-3 enable byte at the physical start of every diagnostic trial so a stale activation
-        // cannot explain an otherwise empty voice stream.
-        if activateMic && buttonName == "siri" && isPressed {
-            rmDebug("🎬 activate-mic: Siri down — re-arming all \(devices.count) interfaces")
-            for device in devices {
-                sendMicActivation(device)
-            }
-        }
 
         // Pressing Power opens the input guard FIRST, so the rest of this press — and anything the
         // hand brushes on the way — cannot undo the dim it is about to trigger.
