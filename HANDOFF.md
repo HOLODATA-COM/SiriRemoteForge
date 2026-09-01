@@ -27,10 +27,39 @@ belong in `docs/mic-reverse-engineering.md`.
   **GPL-3.0-or-later** as of 2026-07-22, going public; the paid-release plan was dropped. Upstream's
   MIT notice is retained in `NOTICE` — see the licensing note at the end for why that is mandatory.
 - Local checkout: the repository root (`siriremote-release`).
-- Current committed HEAD: `c39f300` (`docs(release): detail beta.5 UI redesign`; history-rewritten
-  equivalent with Claude co-author trailers removed from public refs).
+- Current branch: `main`. Use `git rev-parse HEAD` for the exact current commit; this living document
+  no longer pins a SHA that becomes stale after every deployment note.
 
-### ⚡ LATEST — 2026-09-02: processing Voice can be replaced by a fresh long hold (uncommitted, tested, deployed)
+### ⚡ LATEST — 2026-09-02: beta.8 published + authenticated update path verified
+
+- Public prerelease **`v0.2.0-beta.8`** is live at
+  `https://github.com/HOLODATA-COM/SiriRemoteForge/releases/tag/v0.2.0-beta.8`. Its annotated tag
+  points to source commit `781a738ef3402c3c5eea5e2faa4ae53c9e4ffbc5`. Release notes explicitly
+  compare beta.8 with beta.7: refined/readable symmetric particle mass, seamless two-remote input,
+  per-remote microphone wake and native capture demand, dynamic ATT layouts, and processing-turn
+  replacement by a fresh long hold. They also state that Sparkle is App-only and Full Setup is
+  required to refresh the separately installed microphone router/daemon.
+- The release contains the app-only arm64 ZIP, native Full Setup PKG, legacy Full Setup ZIP and
+  `SHA256SUMS.txt`. GitHub's computed asset digests matched the local audited files exactly:
+  `b7a3448272081221952f0f45241ada45664322da57b521fe7ffd0e6c1ae9f4bb` (App ZIP),
+  `1d8be982d4b9d15a0289ca2af280c58f60eb51b63e488c755e115b26ff315915` (PKG),
+  `ef5a5bb710711e234dbc2ee6be45171539c57fe86bd11fe0977aae909acc88c6` (Full Setup ZIP) and
+  `0a0220fdadb2aafede4d10b47c55b23af6511dabf80df01eb538eaeec0b4e5eb` (checksums).
+- The generated/signed beta item was published in `appcast.xml` by commit `a30b916`. It uses build
+  `2002008`, channel `beta`, macOS 13 / arm64 requirements and the public App ZIP enclosure. The new
+  reusable `dist/verify-published-update.sh` fetched the online `main` feed, verified its whole-feed
+  Ed25519 signature, proved beta.8 is newer than beta.7 build `2002007`, downloaded the public
+  4,291,681-byte enclosure, verified its declared length and Ed25519 signature, expanded it, and
+  validated the App signature, release/build values, arm64 executable and embedded feed URL:
+  **`PUBLISHED_UPDATE_VERIFY PASS`**.
+- Final verification before publication: local SiriRemoteCore **134/134**; packaged native Voice
+  **122/122**; optimized App build; fixed libopus 1.6.1 router parser and monitor-ring tests; capture
+  daemon `-Werror` build; HAL contract plus three-phase CoreAudio IO simulation; Opus decoder;
+  public release audit; `git diff --check`; and GitHub CI run `33521939891` with both required Core
+  and App jobs successful. The public ad-hoc App was never substituted for the stable-signed local
+  test App.
+
+### 2026-09-02: processing Voice can be replaced by a fresh long hold (published in beta.8)
 
 - A confirmed second Voice long hold while the preceding turn is processing now cancels that turn
   and immediately promotes a fresh listening session. Capture for the replacement starts on the raw
@@ -55,7 +84,8 @@ belong in `docs/mic-reverse-engineering.md`.
   `/Applications/HyperVibe.app` is build **70** / **`1.0.0-local.70`**, signed by the unchanged
   `siriRemote Local Signing` identity and running as exactly one UI process from the required path
   (PID **41833** at verification). local.69 is recoverable at
-  `/private/tmp/HyperVibe-local69-installed-before70-20260902.app`. Nothing was committed or pushed.
+  `/private/tmp/HyperVibe-local69-installed-before70-20260902.app`. Source is included in the
+  beta.8 tag described above.
 
 ### ⚡ LATEST — 2026-08-29: Sci-fi Voice edge cues + transactional personal dictionary (uncommitted, tested, deployed)
 
