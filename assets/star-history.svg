@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="500" viewBox="0 0 960 500" role="img" aria-labelledby="title description">
   <title id="title">Star history for HOLODATA-COM/SiriRemoteForge</title>
-  <desc id="description">59 GitHub stars as of 2026-09-13.</desc>
+  <desc id="description">60 GitHub stars as of 2026-09-13.</desc>
   <defs>
     <linearGradient id="star-area-light" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#ff806b" stop-opacity="0.42"/>
@@ -22,11 +22,11 @@
   <text x="76" y="55" class="title">Star history</text>
   <text x="76" y="82" class="subtitle">HOLODATA-COM/SiriRemoteForge</text>
   <rect x="790" y="36" width="128" height="38" rx="19" fill="#fff1ef"/>
-  <text x="854" y="61" text-anchor="middle" dominant-baseline="middle" class="count">59 stars</text>
+  <text x="854" y="61" text-anchor="middle" dominant-baseline="middle" class="count">60 stars</text>
   <text x="918" y="104" text-anchor="end" class="subtitle">Updated Sep 13, 2026 · UTC</text>
   <line x1="76" y1="436.00" x2="918" y2="436.00" class="grid"/><text x="60" y="440.00" text-anchor="end" class="tick">0</text><line x1="76" y1="380.00" x2="918" y2="380.00" class="grid"/><text x="60" y="384.00" text-anchor="end" class="tick">20</text><line x1="76" y1="324.00" x2="918" y2="324.00" class="grid"/><text x="60" y="328.00" text-anchor="end" class="tick">40</text><line x1="76" y1="268.00" x2="918" y2="268.00" class="grid"/><text x="60" y="272.00" text-anchor="end" class="tick">60</text><line x1="76" y1="212.00" x2="918" y2="212.00" class="grid"/><text x="60" y="216.00" text-anchor="end" class="tick">80</text><line x1="76" y1="156.00" x2="918" y2="156.00" class="grid"/><text x="60" y="160.00" text-anchor="end" class="tick">100</text>
-  <path d="M 76.00 436.00 L 92.19 408.00 L 108.38 391.20 L 124.58 385.60 L 140.77 371.60 L 156.96 366.00 L 221.73 363.20 L 237.92 357.60 L 254.12 354.80 L 270.31 352.00 L 302.69 349.20 L 399.85 346.40 L 416.04 343.60 L 529.38 340.80 L 545.58 338.00 L 561.77 335.20 L 594.15 329.60 L 626.54 324.00 L 675.12 318.40 L 691.31 312.80 L 723.69 310.00 L 739.88 307.20 L 756.08 296.00 L 772.27 290.40 L 820.85 284.80 L 837.04 282.00 L 853.23 279.20 L 901.81 273.60 L 918.00 270.80 L 918.00 436.00 L 76.00 436.00 Z" fill="url(#star-area-light)"/>
-  <path d="M 76.00 436.00 L 92.19 408.00 L 108.38 391.20 L 124.58 385.60 L 140.77 371.60 L 156.96 366.00 L 221.73 363.20 L 237.92 357.60 L 254.12 354.80 L 270.31 352.00 L 302.69 349.20 L 399.85 346.40 L 416.04 343.60 L 529.38 340.80 L 545.58 338.00 L 561.77 335.20 L 594.15 329.60 L 626.54 324.00 L 675.12 318.40 L 691.31 312.80 L 723.69 310.00 L 739.88 307.20 L 756.08 296.00 L 772.27 290.40 L 820.85 284.80 L 837.04 282.00 L 853.23 279.20 L 901.81 273.60 L 918.00 270.80" fill="none" stroke="#ff6b57" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#line-glow)"/>
-  <circle cx="918.00" cy="270.80" r="6" fill="#ffffff" stroke="#ff6b57" stroke-width="3"/>
+  <path d="M 76.00 436.00 L 92.19 408.00 L 108.38 391.20 L 124.58 385.60 L 140.77 371.60 L 156.96 366.00 L 221.73 363.20 L 237.92 357.60 L 254.12 354.80 L 270.31 352.00 L 302.69 349.20 L 399.85 346.40 L 416.04 343.60 L 529.38 340.80 L 545.58 338.00 L 561.77 335.20 L 594.15 329.60 L 626.54 324.00 L 675.12 318.40 L 691.31 312.80 L 723.69 310.00 L 739.88 307.20 L 756.08 296.00 L 772.27 290.40 L 820.85 284.80 L 837.04 282.00 L 853.23 279.20 L 901.81 273.60 L 918.00 268.00 L 918.00 436.00 L 76.00 436.00 Z" fill="url(#star-area-light)"/>
+  <path d="M 76.00 436.00 L 92.19 408.00 L 108.38 391.20 L 124.58 385.60 L 140.77 371.60 L 156.96 366.00 L 221.73 363.20 L 237.92 357.60 L 254.12 354.80 L 270.31 352.00 L 302.69 349.20 L 399.85 346.40 L 416.04 343.60 L 529.38 340.80 L 545.58 338.00 L 561.77 335.20 L 594.15 329.60 L 626.54 324.00 L 675.12 318.40 L 691.31 312.80 L 723.69 310.00 L 739.88 307.20 L 756.08 296.00 L 772.27 290.40 L 820.85 284.80 L 837.04 282.00 L 853.23 279.20 L 901.81 273.60 L 918.00 268.00" fill="none" stroke="#ff6b57" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#line-glow)"/>
+  <circle cx="918.00" cy="268.00" r="6" fill="#ffffff" stroke="#ff6b57" stroke-width="3"/>
   <text x="76.00" y="470" text-anchor="start" class="tick">23 Jul</text><text x="237.92" y="470" text-anchor="middle" class="tick">2 Aug</text><text x="416.04" y="470" text-anchor="middle" class="tick">13 Aug</text><text x="577.96" y="470" text-anchor="middle" class="tick">23 Aug</text><text x="756.08" y="470" text-anchor="middle" class="tick">3 Sep</text><text x="918.00" y="470" text-anchor="end" class="tick">13 Sep</text>
 </svg>
