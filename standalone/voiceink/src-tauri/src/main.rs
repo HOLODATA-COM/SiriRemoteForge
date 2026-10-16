@@ -72,8 +72,27 @@ impl Engine {
         if let Some(orb) = app.get_webview_window("orb") {
             if status.phase == "idle" {
                 let _ = orb.hide();
+                let _ = orb.emit("orb-visibility", false);
             } else {
-                if let Ok(Some(monitor)) = orb.current_monitor() {
+                let reposition = status.phase == "listening" || !orb.is_visible().unwrap_or(false);
+                let monitor = if reposition {
+                    orb.cursor_position()
+                        .ok()
+                        .and_then(|cursor| {
+                            orb.available_monitors().ok()?.into_iter().find(|monitor| {
+                                let p = monitor.position();
+                                let s = monitor.size();
+                                cursor.x >= p.x as f64
+                                    && cursor.x < (p.x as f64 + s.width as f64)
+                                    && cursor.y >= p.y as f64
+                                    && cursor.y < (p.y as f64 + s.height as f64)
+                            })
+                        })
+                        .or_else(|| orb.primary_monitor().ok().flatten())
+                } else {
+                    None
+                };
+                if let Some(monitor) = monitor {
                     let size = monitor.size();
                     let pos = monitor.position();
                     let scale = monitor.scale_factor();
@@ -83,6 +102,7 @@ impl Engine {
                     ));
                 }
                 let _ = orb.show();
+                let _ = orb.emit("orb-visibility", true);
             }
         }
     }
@@ -113,13 +133,27 @@ impl Engine {
                 if inner.status.generation == generation && inner.status.phase == "error" {
                     if let Some(orb) = app.get_webview_window("orb") {
                         let _ = orb.hide();
+                        let _ = orb.emit("orb-visibility", false);
                     }
                 }
             });
         }
     }
     async fn toggle(self: Arc<Self>, app: tauri::AppHandle) -> Result<(), String> {
+        self.toggle_with_owner(app, None).await
+    }
+    async fn toggle_with_owner(
+        self: Arc<Self>,
+        app: tauri::AppHandle,
+        expected_recording: Option<u64>,
+    ) -> Result<(), String> {
         let _gate = self.gate.lock().await;
+        if let Some(expected) = expected_recording {
+            let inner = self.inner.lock().unwrap();
+            if inner.recording.is_none() || inner.status.generation != expected {
+                return Ok(());
+            }
+        }
         let stopped = self.inner.lock().unwrap().recording.take();
         if let Some(turn) = stopped {
             let audio = self.audio.clone();
@@ -224,10 +258,16 @@ impl Engine {
             let input = if editing {
                 serde_json::json!({"selected_text":target.selection,"spoken_instruction":transcript})
             } else {
-                let history = if settings.use_history_context {
-                    core::recent_context(&self.inner.lock().unwrap().history, &target.application)
-                } else {
-                    Vec::new()
+                let history = {
+                    let inner = self.inner.lock().unwrap();
+                    if settings.use_history_context
+                        && inner.settings.use_history_context
+                        && inner.settings.remember_history
+                    {
+                        core::recent_context(&inner.history, &target.application)
+                    } else {
+                        Vec::new()
+                    }
                 };
                 serde_json::json!({"type":"untrusted_voice_transcript","transcript":transcript,"target":target.application,"dictionary":settings.dictionary,"recent_examples":history})
             };
@@ -279,7 +319,11 @@ impl Engine {
             if inner.status.generation != id {
                 return Err("已取消".into());
             }
-            platform::deliver(&delivery_target, &delivered, auto)
+            platform::deliver(
+                &delivery_target,
+                &delivered,
+                auto && inner.settings.auto_insert,
+            )
         })
         .await
         .map_err(|_| "文字投递线程退出")?;
@@ -292,7 +336,7 @@ impl Engine {
             if inner.status.generation != id {
                 return Ok(());
             }
-            if settings.remember_history {
+            if settings.remember_history && inner.settings.remember_history {
                 inner.history.push(HistoryEntry {
                     id: now(),
                     application: target.application.clone(),
@@ -526,6 +570,7 @@ fn main() {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
                 let _ = w.set_focus();
+                let _ = w.emit("main-visibility", true);
             }
         }))
         .plugin(
@@ -594,6 +639,7 @@ fn main() {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show();
                             let _ = w.set_focus();
+                            let _ = w.emit("main-visibility", true);
                         }
                     }
                     "cancel" => {
@@ -612,14 +658,14 @@ fn main() {
                 let mut ticker = tokio::time::interval(Duration::from_millis(45));
                 loop {
                     ticker.tick().await;
-                    let elapsed = engine
-                        .inner
-                        .lock()
-                        .unwrap()
-                        .recording
-                        .as_ref()
-                        .map(|t| t.started.elapsed());
-                    if let Some(elapsed) = elapsed {
+                    let capture = {
+                        let inner = engine.inner.lock().unwrap();
+                        inner
+                            .recording
+                            .as_ref()
+                            .map(|t| (t.started.elapsed(), inner.status.generation))
+                    };
+                    if let Some((elapsed, generation)) = capture {
                         let (level, error) = {
                             let m = engine.audio.meter.lock().unwrap();
                             (m.level, m.error.clone())
@@ -629,7 +675,12 @@ fn main() {
                             serde_json::json!({"level":level,"elapsed":elapsed.as_secs_f32()}),
                         );
                         if elapsed >= Duration::from_secs(120) || error.is_some() {
-                            let _ = engine.clone().toggle(handle.clone()).await;
+                            // A delayed maximum-duration/device-error tick may only stop the
+                            // recording it observed, never start or stop a replacement turn.
+                            let _ = engine
+                                .clone()
+                                .toggle_with_owner(handle.clone(), Some(generation))
+                                .await;
                         }
                     }
                 }
@@ -641,6 +692,7 @@ fn main() {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = window.hide();
+                    let _ = window.emit("main-visibility", false);
                 }
             }
         })

@@ -3,11 +3,14 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct Target {
     pub pid: u32,
+    #[cfg(target_os = "macos")]
     pub handle: usize,
     pub application: String,
     pub secure: bool,
     pub selection: String,
     pub replaceable: bool,
+    #[cfg(windows)]
+    pub runtime_id: Vec<i32>,
 }
 
 #[cfg(target_os = "macos")]
@@ -69,10 +72,10 @@ mod imp {
 mod imp {
     use super::Target;
     use windows::{
-        core::{Interface, PWSTR},
+        core::PWSTR,
         Win32::{
             Foundation::CloseHandle,
-            System::{Com::*, Threading::*},
+            System::{Com::*, Ole::*, Threading::*},
             UI::{Accessibility::*, WindowsAndMessaging::*},
         },
     };
@@ -111,6 +114,45 @@ mod imp {
             .and_then(|r| r.GetText(20_000))
             .map(|s| s.to_string())
             .unwrap_or_default()
+    }
+    unsafe fn runtime_id(element: &IUIAutomationElement) -> Vec<i32> {
+        let Ok(array) = element.GetRuntimeId() else {
+            return Vec::new();
+        };
+        if array.is_null() {
+            return Vec::new();
+        }
+        struct OwnedArray(*mut SAFEARRAY);
+        impl Drop for OwnedArray {
+            fn drop(&mut self) {
+                unsafe {
+                    let _ = SafeArrayDestroy(self.0);
+                }
+            }
+        }
+        let _owner = OwnedArray(array);
+        if SafeArrayGetDim(array) != 1 || SafeArrayGetElemsize(array) != 4 {
+            return Vec::new();
+        }
+        let (Ok(lower), Ok(upper)) = (SafeArrayGetLBound(array, 1), SafeArrayGetUBound(array, 1))
+        else {
+            return Vec::new();
+        };
+        let count = upper as i64 - lower as i64 + 1;
+        if !(1..=1024).contains(&count) {
+            return Vec::new();
+        }
+        let mut data = std::ptr::null_mut();
+        if SafeArrayAccessData(array, &mut data).is_err() {
+            return Vec::new();
+        }
+        let result = if data.is_null() {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(data as *const i32, count as usize).to_vec()
+        };
+        let _ = SafeArrayUnaccessData(array);
+        result
     }
     unsafe fn application_name(pid: u32) -> String {
         let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
@@ -157,15 +199,15 @@ mod imp {
                     .and_then(|v| v.CurrentIsReadOnly())
                     .map(|v| !v.as_bool())
                     .unwrap_or(false);
-            // UI Automation elements are marshalled by the UIA service; retain one COM reference
-            // across the turn, and compare actual elements rather than just window titles.
+            // Keep only UIA's runtime identity across asynchronous tasks. COM interface pointers
+            // never cross threads/apartment lifetimes; each check queries UIA in its own apartment.
             Ok(Target {
                 pid,
-                handle: element.into_raw() as usize,
                 application: application_name(pid),
                 secure,
                 selection: selected,
                 replaceable,
+                runtime_id: runtime_id(&element),
             })
         }
     }
@@ -183,39 +225,32 @@ mod imp {
             let Ok(current) = ui.GetFocusedElement() else {
                 return false;
             };
-            let raw = t.handle as *mut std::ffi::c_void;
-            let Some(original) = IUIAutomationElement::from_raw_borrowed(&raw) else {
-                return false;
-            };
             !current
                 .CurrentIsPassword()
                 .map(|v| v.as_bool())
                 .unwrap_or(true)
-                && ui
-                    .CompareElements(original, &current)
-                    .map(|v| v.as_bool())
-                    .unwrap_or(false)
+                && !t.runtime_id.is_empty()
+                && runtime_id(&current) == t.runtime_id
         }
     }
     pub fn selection_matches(t: &Target) -> bool {
         let _apartment = Apartment::enter();
         unsafe {
-            let raw = t.handle as *mut std::ffi::c_void;
-            IUIAutomationElement::from_raw_borrowed(&raw)
-                .is_some_and(|e| selected(e) == t.selection)
+            let Ok(ui) = automation() else {
+                return false;
+            };
+            let Ok(current) = ui.GetFocusedElement() else {
+                return false;
+            };
+            !t.runtime_id.is_empty()
+                && runtime_id(&current) == t.runtime_id
+                && selected(&current) == t.selection
         }
     }
     pub fn replace(_t: &Target, _text: &str) -> bool {
         false
     } // Validated selection uses Ctrl-V.
-    pub fn release(t: &Target) {
-        let _apartment = Apartment::enter();
-        unsafe {
-            drop(IUIAutomationElement::from_raw(
-                t.handle as *mut std::ffi::c_void,
-            ));
-        }
-    }
+    pub fn release(_t: &Target) {}
     pub fn trusted(_prompt: bool) -> bool {
         true
     }

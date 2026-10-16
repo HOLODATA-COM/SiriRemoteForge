@@ -11,4 +11,4 @@ arboard = { version = "3", default-features = false }
 enigo = "0.3"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Threading"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Threading"] }

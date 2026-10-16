@@ -79,13 +79,16 @@ The real frontend is restricted to packaged local assets; no remote content or r
 
 ```sh
 # macOS local development: always retain the stable signing identity
-APPLE_SIGNING_IDENTITY='siriRemote Local Signing' npm run tauri -- build --bundles app,dmg
+APPLE_SIGNING_IDENTITY='siriRemote Local Signing' npm run package:macos
 
 # Windows, in a Windows build environment with the MSVC toolchain
 npm run tauri -- build --bundles nsis --target x86_64-pc-windows-msvc
 ```
 
-Artifacts are under `src-tauri/target/release/bundle/` (or
+The local macOS script verifies the stable signature and creates a signed, read-only DMG and ZIP
+under `artifacts/`, without Finder Automation permissions. Optionally set
+`VOICEINK_EXPECTED_CERT_SHA1` to enforce the precise certificate fingerprint between builds.
+Other platform artifacts are under `src-tauri/target/release/bundle/` (or
 `src-tauri/target/<target>/release/bundle/` when a target is supplied).
 The repository's `voiceink.yml` workflow builds and tests both platforms and uploads artifacts;
 it does not create public releases. Windows installers produced without a signing certificate
