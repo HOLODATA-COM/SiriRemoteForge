@@ -195,6 +195,13 @@ async function refresh() {
   status(s.status);
 }
 if (!isOrb) {
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !event.repeat &&
+        ["listening", "transcribing", "polishing", "rewriting", "inserting"].includes(current.phase)) {
+      event.preventDefault();
+      void action("cancel");
+    }
+  });
   document.querySelectorAll<HTMLButtonElement>(".nav").forEach(
     (b) =>
       (b.onclick = () => {
@@ -340,7 +347,7 @@ if (preview) {
     orb.setLevel(e.payload.level);
     if (!isOrb && current.phase === "listening")
       $("#message").textContent =
-        `${e.payload.elapsed.toFixed(1)} 秒 · 再按一次快捷键结束`;
+        `${e.payload.elapsed.toFixed(1)} / 600 秒 · 再按一次快捷键结束 · Esc 取消`;
   });
   if (!isOrb) {
     await listen("history-updated", async () => {

@@ -6,9 +6,12 @@ multitouch framework, microphone driver, account, or subscription service is req
 
 ## First version
 
-- System microphone (or a selected input device), up to 120 seconds per turn.
+- System microphone (or a selected input device), up to 10 minutes per turn; the limit ends
+  recording and transcribes the captured speech. Long uploads use 16 kHz PCM to stay below 25 MB.
 - Global shortcut: **Command + Shift + Space** on macOS, **Control + Shift + Space** on Windows.
   Press once to start, again to stop; configure a modifier-plus-key shortcut in Settings.
+- **Esc cancels the entire current turn**, while recording or processing, without delivering its
+  result. Escape is registered globally only during active turns; it keeps its normal use otherwise.
 - Particle sphere with symmetric ring breathing, speech-driven size/brightness, randomized
   simultaneous particle entrance, and smooth per-particle transitions to check/copy/error shapes.
 - OpenAI file transcription (`gpt-transcribe` by default), optional OpenAI or DeepSeek cleanup.

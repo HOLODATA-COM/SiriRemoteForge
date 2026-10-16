@@ -54,6 +54,11 @@ async fn response(request: reqwest::RequestBuilder) -> Result<Value, String> {
         .map_err(|_| "服务返回了无法读取的数据".into())
 }
 pub async fn transcribe(client: &Client, wav: Vec<u8>, s: &Settings) -> Result<String, String> {
+    let rate = wav
+        .get(24..28)
+        .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+        .unwrap_or(0);
+    let duration = wav.len().saturating_sub(44) as f64 / (rate.max(1) as f64 * 2.);
     let mut form = multipart::Form::new()
         .text("model", s.transcription_model.clone())
         .text("response_format", "json")
@@ -70,6 +75,9 @@ pub async fn transcribe(client: &Client, wav: Vec<u8>, s: &Settings) -> Result<S
     let value = response(
         client
             .post("https://api.openai.com/v1/audio/transcriptions")
+            .timeout(Duration::from_secs_f64(
+                (20. + duration * 0.25).clamp(35., 180.),
+            ))
             .bearer_auth(key("openai")?)
             .multipart(form),
     )

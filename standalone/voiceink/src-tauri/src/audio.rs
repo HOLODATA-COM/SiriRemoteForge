@@ -1,3 +1,4 @@
+use crate::core::{CAPTURE_SAMPLE_RATE, MAX_RECORDING_SECONDS};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -121,7 +122,39 @@ fn open(name: &str, shared: Arc<Mutex<Samples>>) -> Result<(cpal::Stream, u32), 
     }
     .map_err(|e| format!("麦克风启动失败（请检查麦克风权限）：{e}"))?;
     stream.play().map_err(|e| e.to_string())?;
-    Ok((stream, rate))
+    Ok((stream, rate.min(CAPTURE_SAMPLE_RATE)))
+}
+
+/// Stateful area-average conversion; callback boundaries never reset the fractional phase.
+struct MonoResampler {
+    from: u32,
+    to: u32,
+    remaining: u32,
+    sum: f64,
+}
+impl MonoResampler {
+    fn new(from: u32, to: u32) -> Self {
+        Self {
+            from,
+            to,
+            remaining: from,
+            sum: 0.,
+        }
+    }
+    fn push(&mut self, sample: f32) -> Option<f32> {
+        let mut left = self.to;
+        let weight = left.min(self.remaining);
+        self.sum += sample as f64 * weight as f64;
+        self.remaining -= weight;
+        left -= weight;
+        if self.remaining != 0 {
+            return None;
+        }
+        let value = (self.sum / self.from as f64) as f32;
+        self.remaining = self.from - left;
+        self.sum = sample as f64 * left as f64;
+        Some(value)
+    }
 }
 fn make_stream<T>(
     device: &cpal::Device,
@@ -135,6 +168,9 @@ where
     f32: cpal::FromSample<T>,
 {
     let errors = shared.clone();
+    let output_rate = rate.min(CAPTURE_SAMPLE_RATE);
+    let limit = output_rate as usize * MAX_RECORDING_SECONDS as usize;
+    let mut resampler = MonoResampler::new(rate, output_rate);
     device.build_input_stream(
         config,
         move |input: &[T], _| {
@@ -152,8 +188,10 @@ where
                 } else {
                     0.
                 };
-                if values.data.len() < rate as usize * 120 {
-                    values.data.push(mono);
+                if values.data.len() < limit {
+                    if let Some(sample) = resampler.push(mono) {
+                        values.data.push(sample);
+                    }
                 }
                 energy += mono * mono;
                 count += 1;
@@ -166,4 +204,32 @@ where
         },
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn resampler_keeps_callback_phase_and_tail() {
+        for rate in [8_000, 16_000, 24_000, 44_100, 48_000, 192_000] {
+            let output_rate = rate.min(CAPTURE_SAMPLE_RATE);
+            let mut converter = MonoResampler::new(rate, output_rate);
+            let mut output = Vec::new();
+            let mut input = vec![0.25; rate as usize];
+            input[rate as usize - 24..].fill(1.);
+            // Uneven input callbacks must not lose fractional source samples or sentence tails.
+            for callback in input.chunks(137) {
+                for &sample in callback {
+                    if let Some(value) = converter.push(sample) {
+                        output.push(value);
+                    }
+                }
+            }
+            assert_eq!(output.len(), output_rate as usize);
+            assert!(output[..output.len() - 24]
+                .iter()
+                .all(|v| (*v - 0.25).abs() < 1e-6));
+            assert_eq!(output.last(), Some(&1.));
+        }
+    }
 }

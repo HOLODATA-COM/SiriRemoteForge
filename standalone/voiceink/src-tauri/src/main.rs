@@ -13,7 +13,11 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
+
+fn escape_shortcut() -> Shortcut {
+    Shortcut::new(None, Code::Escape)
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,11 +58,20 @@ struct Engine {
 }
 impl Engine {
     async fn cancel(&self, app: &tauri::AppHandle) {
+        self.cancel_owned(app, None).await;
+    }
+    async fn cancel_owned(&self, app: &tauri::AppHandle, expected: Option<u64>) {
         let _gate = self.gate.lock().await;
         let id = {
             let mut i = self.inner.lock().unwrap();
+            if expected.is_some_and(|id| {
+                id != i.status.generation || !core::is_active_phase(&i.status.phase)
+            }) {
+                return;
+            }
             i.status.generation += 1;
             i.recording = None;
+            i.retry = None;
             if let Some(job) = i.job.take() {
                 job.abort();
             }
@@ -67,7 +80,20 @@ impl Engine {
         self.audio.cancel();
         self.status(app, id, "idle", "", "已取消");
     }
-    fn publish(app: &tauri::AppHandle, status: Status) {
+    fn publish(app: &tauri::AppHandle, mut status: Status) {
+        // Escape belongs to VoiceInk only while a turn is active, never while idle.
+        let shortcut = escape_shortcut();
+        if core::is_active_phase(&status.phase) {
+            if !app.global_shortcut().is_registered(shortcut)
+                && app.global_shortcut().register(shortcut).is_err()
+            {
+                status
+                    .message
+                    .push_str(" · Esc 被其他程序占用，请用取消按钮");
+            }
+        } else if app.global_shortcut().is_registered(shortcut) {
+            let _ = app.global_shortcut().unregister(shortcut);
+        }
         let _ = app.emit("voice-status", &status);
         if let Some(orb) = app.get_webview_window("orb") {
             if status.phase == "idle" {
@@ -213,7 +239,13 @@ impl Engine {
             settings,
             started: Instant::now(),
         });
-        self.status(&app, id, "listening", "", "再按一次快捷键结束");
+        self.status(
+            &app,
+            id,
+            "listening",
+            "",
+            "再按一次快捷键结束 · Esc 取消 · 最长 10 分钟",
+        );
         Ok(())
     }
     fn process(
@@ -468,6 +500,9 @@ async fn save_settings(
         .shortcut
         .parse()
         .map_err(|_| "快捷键格式无效，例如 CommandOrControl+Shift+Space")?;
+    if new_shortcut == escape_shortcut() {
+        return Err("Esc 专用于取消，请选择其他开始快捷键".into());
+    }
     if old.shortcut != settings.shortcut {
         app.global_shortcut()
             .register(new_shortcut)
@@ -575,7 +610,18 @@ fn main() {
         }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _, event| {
+                .with_handler(|app, shortcut, event| {
+                    if *shortcut == escape_shortcut() {
+                        if event.state() == ShortcutState::Pressed {
+                            let app = app.clone();
+                            let engine = app.state::<Arc<Engine>>().inner().clone();
+                            let id = engine.inner.lock().unwrap().status.generation;
+                            tauri::async_runtime::spawn(async move {
+                                engine.cancel_owned(&app, Some(id)).await;
+                            });
+                        }
+                        return;
+                    }
                     // Release commits one clean press and avoids auto-repeat and held modifiers at paste.
                     if event.state() == ShortcutState::Released {
                         let app = app.clone();
@@ -674,7 +720,9 @@ fn main() {
                             "voice-meter",
                             serde_json::json!({"level":level,"elapsed":elapsed.as_secs_f32()}),
                         );
-                        if elapsed >= Duration::from_secs(120) || error.is_some() {
+                        if elapsed >= Duration::from_secs(core::MAX_RECORDING_SECONDS)
+                            || error.is_some()
+                        {
                             // A delayed maximum-duration/device-error tick may only stop the
                             // recording it observed, never start or stop a replacement turn.
                             let _ = engine

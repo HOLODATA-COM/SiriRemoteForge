@@ -1,5 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+pub const MAX_RECORDING_SECONDS: u64 = 600;
+pub const CAPTURE_SAMPLE_RATE: u32 = 24_000;
+
+pub fn is_active_phase(phase: &str) -> bool {
+    matches!(
+        phase,
+        "listening" | "transcribing" | "polishing" | "rewriting" | "inserting"
+    )
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -107,15 +117,21 @@ pub fn safe_rewrite(original: &str, proposed: &str) -> bool {
 }
 
 pub fn wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, String> {
-    if !(8_000..=192_000).contains(&sample_rate) || samples.len() > sample_rate as usize * 120 {
+    if !(8_000..=192_000).contains(&sample_rate)
+        || samples.len() > sample_rate as usize * MAX_RECORDING_SECONDS as usize
+    {
         return Err("录音格式或时长无效".into());
     }
-    // Area-average downsampling keeps a 120 s high-rate microphone recording well below the
-    // upload size limit, including fractional input/output ratios and the last audio frame.
+    // Preserve 24 kHz for short turns; keep ten-minute WAV uploads below the 25 MB file limit.
+    let target_rate = if samples.len() as u64 * 24_000 / sample_rate as u64 * 2 > 24_000_000 {
+        16_000
+    } else {
+        CAPTURE_SAMPLE_RATE
+    };
     let converted;
-    let (samples, sample_rate) = if sample_rate > 24_000 {
-        converted = resample_mono(samples, sample_rate, 24_000);
-        (converted.as_slice(), 24_000)
+    let (samples, sample_rate) = if sample_rate > target_rate {
+        converted = resample_mono(samples, sample_rate, target_rate);
+        (converted.as_slice(), target_rate)
     } else {
         (samples, sample_rate)
     };
@@ -203,6 +219,40 @@ mod tests {
     fn responses_skip_reasoning_and_collect_text() {
         let value = serde_json::json!({"output":[{"type":"reasoning"},{"type":"message","content":[{"type":"output_text","text":"你好"},{"type":"output_text","text":"世界"}]}]});
         assert_eq!(output_text(&value).as_deref(), Some("你好世界"));
+    }
+    #[test]
+    fn ten_minute_wav_fits_upload_and_rejects_over_limit() {
+        let mut samples = vec![0.; 600 * 24_000];
+        let end = samples.len();
+        samples[end - 3..].fill(1.);
+        let bytes = wav(&samples, 24_000).unwrap();
+        assert_eq!(bytes.len(), 44 + 600 * 16_000 * 2);
+        assert!(bytes.len() < 25_000_000);
+        assert_eq!(
+            u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
+            16_000
+        );
+        assert_eq!(
+            i16::from_le_bytes(bytes[bytes.len() - 2..].try_into().unwrap()),
+            32767
+        );
+        samples.push(0.);
+        assert!(wav(&samples, 24_000).is_err());
+    }
+    #[test]
+    fn escape_is_reserved_only_for_active_turns() {
+        for phase in [
+            "listening",
+            "transcribing",
+            "polishing",
+            "rewriting",
+            "inserting",
+        ] {
+            assert!(is_active_phase(phase));
+        }
+        for phase in ["idle", "error", "inserted", "copied", "replaced"] {
+            assert!(!is_active_phase(phase));
+        }
     }
     #[test]
     fn context_is_app_scoped_and_bounded() {
