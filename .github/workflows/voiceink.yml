@@ -1,0 +1,50 @@
+name: VoiceInk desktop packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [voiceink-standalone]
+    paths: ['standalone/voiceink/**', '.github/workflows/voiceink.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: standalone/voiceink
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: standalone/voiceink/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: node scripts/collect-notices.mjs
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - run: npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voiceink-${{ matrix.target }}
+          path: |
+            standalone/voiceink/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            standalone/voiceink/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+          if-no-files-found: error

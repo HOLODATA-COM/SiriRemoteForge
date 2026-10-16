@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VoiceInk",
+  "version": "0.1.0",
+  "identifier": "com.holodata.voiceink",
+  "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://127.0.0.1:5197", "beforeBuildCommand": "node scripts/collect-notices.mjs && npm run build", "frontendDist": "../dist" },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      { "label": "main", "title": "VoiceInk", "width": 980, "height": 760, "minWidth": 740, "minHeight": 600, "center": true },
+      { "label": "orb", "title": "VoiceInk Voice", "url": "index.html?orb", "width": 240, "height": 250, "decorations": false, "transparent": true, "alwaysOnTop": true, "skipTaskbar": true, "focus": false, "focusable": false, "visible": false, "resizable": false, "shadow": false }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; connect-src ipc: http://ipc.localhost http://127.0.0.1:5197 ws://127.0.0.1:5197; object-src 'none'; frame-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "active": true, "targets": "all", "category": "Productivity",
+    "shortDescription": "Your voice, beautifully written.",
+    "longDescription": "Open-source voice typing with your own API key. Toggle recording from any app, polish speech, and insert into the focused editor.",
+    "copyright": "Copyright © 2026 Wenqian Zhang",
+    "resources": ["../LICENSE", "../NOTICE", "THIRD_PARTY_NOTICES.txt"],
+    "license": "GPL-3.0-or-later",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": { "minimumSystemVersion": "13.0", "infoPlist": "Info.plist", "entitlements": "Entitlements.plist" },
+    "windows": { "nsis": { "installMode": "currentUser", "languages": ["English", "SimpChinese"], "displayLanguageSelector": true } }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "voiceink-local",
+  "description": "Local packaged UI only; no remote pages or arbitrary shell/filesystem access.",
+  "windows": ["main", "orb"],
+  "permissions": ["core:default"]
+}

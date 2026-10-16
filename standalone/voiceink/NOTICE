@@ -1,0 +1,18 @@
+VoiceInk
+Copyright (C) 2026 Wenqian Zhang
+
+This program is free software: you can redistribute it and/or modify it under
+the GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version.
+See LICENSE for its full text.
+
+VoiceInk's transcription, transcript-cleanup policy, selection editing workflow,
+bounded history context, retry and guarded delivery behavior originate in
+SiriRemoteForge's Voice functionality by Wenqian Zhang. They have been adapted
+into a separate cross-platform Rust/Tauri application.
+
+Dependencies are listed and version-locked in package-lock.json and
+src-tauri/Cargo.lock. Their copyright and license notices are collected in
+src-tauri/THIRD_PARTY_NOTICES.txt by scripts/collect-notices.mjs before packaging.
+No BlackHole driver, Siri Remote router, private Apple framework, or Thinking
+Orbs library is included in this independent application.

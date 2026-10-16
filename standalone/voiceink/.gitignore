@@ -1,0 +1,11 @@
+node_modules/
+dist/
+src-tauri/target/
+checks/platform/target/
+src-tauri/gen/
+src-tauri/THIRD_PARTY_NOTICES.txt
+src-tauri/icons/ios/
+src-tauri/icons/android/
+artifacts/
+.DS_Store
+.env*
