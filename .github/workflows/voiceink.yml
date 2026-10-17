@@ -35,6 +35,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            standalone/voiceink/src-tauri/target
+          key: voiceink-${{ runner.os }}-${{ hashFiles('standalone/voiceink/src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            voiceink-${{ runner.os }}-${{ hashFiles('standalone/voiceink/src-tauri/Cargo.lock') }}-
       - run: npm ci
       - run: npm run build
       - run: npm test

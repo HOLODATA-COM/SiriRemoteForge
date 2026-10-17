@@ -8,9 +8,22 @@ $install = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D
 if ($install.ExitCode -ne 0) { throw "Silent installation failed: $($install.ExitCode)" }
 $executable = Join-Path $destination 'voiceink.exe'
 if (!(Test-Path $executable)) { throw 'Installed app executable is missing.' }
-if ((Get-FileHash $executable).Hash -ne (Get-FileHash (Join-Path $release 'voiceink.exe')).Hash) {
-    throw 'Installed executable differs from the packaged build.'
+# Tauri patches only this bundle-type token for NSIS, then restores the original release EXE.
+# Compare against that exact expected payload, not against the restored unpatched executable.
+# https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.3/crates/tauri-bundler/src/bundle.rs
+$expected = [System.IO.File]::ReadAllBytes((Join-Path $release 'voiceink.exe'))
+$token = '__TAURI_BUNDLE_TYPE_VAR_UNK'
+$offset = [System.Text.Encoding]::ASCII.GetString($expected).IndexOf($token, [StringComparison]::Ordinal)
+if ($offset -lt 0) { throw 'Expected Tauri bundle metadata marker is missing.' }
+$nsis = [System.Text.Encoding]::ASCII.GetBytes('__TAURI_BUNDLE_TYPE_VAR_NSS')
+[Array]::Copy($nsis, 0, $expected, $offset, $nsis.Length)
+$expectedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($expected))
+$installedHash = (Get-FileHash $executable).Hash
+if ($installedHash -ne $expectedHash) {
+    throw "Installed executable differs beyond the expected NSIS metadata: $installedHash vs $expectedHash"
 }
+Write-Output "Installed app SHA256: $installedHash"
+Write-Output "Installer SHA256: $((Get-FileHash $installer.FullName).Hash)"
 $notices = Get-ChildItem $destination -Recurse -Filter 'THIRD_PARTY_NOTICES.txt'
 if (!$notices) { throw 'Dependency license notices are missing from the installation.' }
 $app = $null
@@ -27,7 +40,7 @@ try {
     if (!$second.WaitForExit(10000)) { throw 'Second launch did not converge on the existing instance.' }
     $running = @(Get-Process -Name 'voiceink' -ErrorAction SilentlyContinue)
     if ($running.Count -ne 1) { throw "Expected one app process, found $($running.Count)." }
-    Write-Output 'WINDOWS_SMOKE_PASS: silent install, executable equality, bundled notices, window startup, single instance.'
+    Write-Output 'WINDOWS_SMOKE_PASS: silent install, exact NSIS-payload equality, bundled notices, window startup, single instance.'
     Write-Output 'Microphone, provider transcription and editor insertion still require real-user acceptance.'
 } finally {
     Get-Process -Name 'voiceink' -ErrorAction SilentlyContinue | Stop-Process -Force
