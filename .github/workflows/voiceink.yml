@@ -41,6 +41,10 @@ jobs:
       - run: node scripts/collect-notices.mjs
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - run: npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - name: Install and launch Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke-windows.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: voiceink-${{ matrix.target }}
