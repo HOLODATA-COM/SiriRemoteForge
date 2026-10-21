@@ -30,7 +30,34 @@ belong in `docs/mic-reverse-engineering.md`.
 - Current branch: `main`. Use `git rev-parse HEAD` for the exact current commit; this living document
   no longer pins a SHA that becomes stale after every deployment note.
 
-### ⚡ LATEST — 2026-10-22: Verified delivery and clipboard retention (local build 75)
+### ⚡ LATEST — 2026-10-22: beta.9 published after user acceptance
+
+- User confirmed build 75 dictation works and authorized GitHub push and a new package. Public
+  prerelease `v0.2.0-beta.9` is live at
+  `https://github.com/HOLODATA-COM/SiriRemoteForge/releases/tag/v0.2.0-beta.9`.
+  Annotated tag points to source commit `1ae40edae7bda7ab8913a08e2729d7e7efcff582`;
+  signed feed publication is commit `26fa3a1`. The release notes compare beta.9 with beta.8.
+- Built from a clean detached worktree `/private/tmp/hypervibe-beta9.RaBn4n`, never from the dirty
+  standalone tree. Published only the three audited macOS assets and SHA256SUMS.txt; copies remain
+  under ignored `dist/build/0.2.0-beta.9/`. The separate VoiceInk/Windows branch and local untracked
+  files were preserved, not merged into main or included in these packages.
+- Verification: core **136/136**, actual public candidate Voice **175/175**, router parser/ring,
+  HAL contract/offline IO simulation, capture daemon build, and full release audit all pass.
+  GitHub CI `39626477841` passed both Core and App checks on the exact tagged source. The audit's
+  recursive diff emitted framework alias/directory-loop warnings; a separate checksum/links-aware
+  rsync dry-run confirmed ZIP and PKG payload bytes and symlink targets are identical.
+- App-only ZIP SHA256: `802da5c57af6c9da85136bab2aa42a99244ac48bcfe6f12283fab62438aa1b20`.
+  GitHub's asset digests match all three local packages. Public feed/download verification passed
+  for beta.9 build **2002009**, **4383017 bytes**, newer than beta.8 build 2002008. An independent
+  CryptoKit check using the candidate's embedded SUPublicEDKey accepted the archive and rejected
+  a one-byte mutation. This verifies discovery metadata/authentication/download, not a live
+  replacement installation; the stable-signed local App was deliberately not replaced.
+- Local `/Applications/HyperVibe.app` remains **1.0.0-local.75**, exactly one UI process (PID 9523),
+  with the original certificate requirement verified after publication. Public packages retain
+  the established ad-hoc/non-notarized beta workflow. Existing beta.8 installs need only the App
+  update; there are no microphone-service source changes in this release.
+
+### 2026-10-22: Verified delivery and clipboard retention (local build 75)
 
 - User approved fixing the diagnosed delivery chain. Local native HyperVibe only: standalone
   VoiceInk/Windows branch and packages were not changed or pushed in this task.
