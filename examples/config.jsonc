@@ -91,12 +91,13 @@
       "autoInsert": true,
       "copyOnFailure": true, // compatibility field; failed delivery is always copied
       "restoreClipboardAfterInsert": true,
-      "copyLastOnSideButtonDouble": true,
+      "pasteLastOnSideButtonDouble": true,
+      "keyboardShortcut": "",
       "feedbackSoundsEnabled": true,
       "feedbackSoundVolume": 0.55,
       "pipelineOverlayEnabled": true, // temporary draggable Voice capsule (independent of status widget)
       "minimumRecordingSeconds": 1, // shorter turns stay local and are discarded without output
-      "maxRecordingSeconds": 120,
+      "maxRecordingSeconds": 600,
       "dictionary": [
         { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] },
         { "term": "hypergraph", "aliases": ["hyper graph"] },

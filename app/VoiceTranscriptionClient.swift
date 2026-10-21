@@ -29,14 +29,33 @@ enum VoiceTranscriptionError: LocalizedError {
     }
 }
 
+/// `URLSessionWebSocketTask.sendPing` can invoke its completion more than once while a socket is
+/// being torn down. A checked continuation must be resumed exactly once, so claim the callback
+/// atomically before touching it.
+final class VoiceOneShotCompletionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !claimed else { return false }
+        claimed = true
+        return true
+    }
+}
+
 final class VoiceTranscriptionClient {
+    static func finalRequestTimeout(duration: TimeInterval) -> TimeInterval {
+        min(180, max(25, 20 + duration * 0.25))
+    }
     private let session: URLSession
     private let realtimeSession: URLSession
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 20
-        configuration.timeoutIntervalForResource = 45
+        configuration.timeoutIntervalForResource = 180
         // Voice input is interactive. Waiting silently for connectivity is worse than returning a
         // useful failure immediately, and a later press can use the coordinator's fresh prewarm.
         configuration.waitsForConnectivity = false
@@ -81,7 +100,7 @@ final class VoiceTranscriptionClient {
 
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/transcriptions")!)
         request.httpMethod = "POST"
-        request.timeoutInterval = 25
+        request.timeoutInterval = Self.finalRequestTimeout(duration: audio.duration)
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)",
                          forHTTPHeaderField: "Content-Type")
@@ -487,11 +506,20 @@ final class VoiceRealtimeTranscriptionSession {
             + pcm16.base64EncodedString() + #""}"#
     }
 
+    /// How long the live socket may take to answer a commit before the caller falls back to
+    /// REST with the complete buffer it already holds. A healthy socket answers in about a
+    /// second. This was 15 s: a socket that had silently stalled made every turn wait out the full
+    /// 15 s before REST even started, so the text landed ~20 s after release -- long after the
+    /// user had moved on, which is how slow turns also became undelivered ones.
+    static let commitResultTimeoutNanoseconds: UInt64 = 5_000_000_000
+
     func finish() async throws -> String {
         guard !isClosed else { throw VoiceTranscriptionError.cancelled }
         try await webSocket.send(.string(#"{"type":"input_audio_buffer.commit"}"#))
         do {
-            let text = try await state.waitForResult(timeoutNanoseconds: 15_000_000_000)
+            let text = try await state.waitForResult(
+                timeoutNanoseconds: Self.commitResultTimeoutNanoseconds
+            )
             close(code: .normalClosure)
             return text
         } catch {
@@ -506,9 +534,11 @@ final class VoiceRealtimeTranscriptionSession {
 
     func ping() async throws {
         guard !isClosed else { throw VoiceTranscriptionError.cancelled }
+        let completionGate = VoiceOneShotCompletionGate()
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, Error>) in
             webSocket.sendPing { error in
+                guard completionGate.claim() else { return }
                 if let error { continuation.resume(throwing: error) }
                 else { continuation.resume() }
             }
@@ -542,13 +572,18 @@ final class VoiceRealtimeTranscriptionSession {
 
 enum WAVEncoder {
     static func encode(_ audio: VoiceCapturedAudio) -> Data {
+        // Keep ordinary dictation at 24 kHz. Only long REST uploads need 16 kHz to stay below
+        // the 25 MB file limit; the live socket and retained original audio remain untouched.
+        let shouldDownsample = audio.pcm16.count > 24_000_000 && audio.sampleRate > 16_000
+        let pcm = shouldDownsample ? downsample(audio.pcm16, from: audio.sampleRate, to: 16_000) : audio.pcm16
+        let rate = shouldDownsample ? 16_000 : audio.sampleRate
         let bytesPerSample: UInt16 = 2
         let channels: UInt16 = 1
-        let dataSize = UInt32(clamping: audio.pcm16.count)
-        let byteRate = UInt32(audio.sampleRate) * UInt32(channels) * UInt32(bytesPerSample)
+        let dataSize = UInt32(clamping: pcm.count)
+        let byteRate = UInt32(rate) * UInt32(channels) * UInt32(bytesPerSample)
         let blockAlign = channels * bytesPerSample
 
-        var data = Data(capacity: 44 + audio.pcm16.count)
+        var data = Data(capacity: 44 + pcm.count)
         data.appendASCII("RIFF")
         data.appendLE(UInt32(36) + dataSize)
         data.appendASCII("WAVE")
@@ -556,14 +591,37 @@ enum WAVEncoder {
         data.appendLE(UInt32(16))
         data.appendLE(UInt16(1)) // linear PCM
         data.appendLE(channels)
-        data.appendLE(UInt32(audio.sampleRate))
+        data.appendLE(UInt32(rate))
         data.appendLE(byteRate)
         data.appendLE(blockAlign)
         data.appendLE(UInt16(16))
         data.appendASCII("data")
         data.appendLE(dataSize)
-        data.append(audio.pcm16)
+        data.append(pcm)
         return data
+    }
+
+    static func downsample(_ pcm: Data, from: Int, to: Int) -> Data {
+        guard from > to, to > 0 else { return pcm }
+        let count = (pcm.count / 2) * to / from
+        var result = Data(count: count * 2)
+        pcm.withUnsafeBytes { (input: UnsafeRawBufferPointer) in
+            result.withUnsafeMutableBytes { (output: UnsafeMutableRawBufferPointer) in
+                for i in 0..<count {
+                    // Integer interval overlap avoids drift at fractional sample-rate ratios.
+                    let start = i * from, end = (i + 1) * from
+                    var weighted: Int64 = 0
+                    for j in (start / to)..<((end + to - 1) / to) {
+                        let weight = min(end, (j + 1) * to) - max(start, j * to)
+                        let sample = Int16(littleEndian: input.loadUnaligned(fromByteOffset: j * 2, as: Int16.self))
+                        weighted += Int64(sample) * Int64(weight)
+                    }
+                    output.storeBytes(of: Int16(clamping: weighted / Int64(from)).littleEndian,
+                                      toByteOffset: i * 2, as: Int16.self)
+                }
+            }
+        }
+        return result
     }
 }
 

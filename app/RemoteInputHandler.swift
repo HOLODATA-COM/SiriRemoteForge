@@ -257,8 +257,9 @@ class RemoteInputHandler {
     /// Fired only after a misconfigured native hold crosses the normal 200 ms promotion boundary.
     /// Quick Side taps remain ordinary taps and never flash an error surface.
     var onNativeDictationMisconfigured: (() -> Void)?
-    var shouldCopyLastNativeDictationOnDouble: (() -> Bool)?
-    var onCopyLastNativeDictation: (() -> Bool)?
+    /// Side-button double press re-delivers the previous dictation (paste, clipboard as fallback).
+    var shouldPasteLastNativeDictationOnDouble: (() -> Bool)?
+    var onPasteLastNativeDictation: (() -> Void)?
     /// Hold Mute and tap the side button to advance the global Voice mode. The App owns the actual
     /// mode value and presentation; this raw handler only guarantees a side-effect-free chord.
     var shouldUseVoiceModeCycleChord: (() -> Bool)?
@@ -1031,24 +1032,23 @@ class RemoteInputHandler {
             // that base remains the single-tap fallback so enabling Voice does not erase an action.
             let now = CACurrentMediaTime()
             let configuredDouble = controller.hasBinding(for: tapVariant(tapKey, 2))
-            let nativeCopyDouble = shouldCopyLastNativeDictationOnDouble?() == true
+            let nativePasteDouble = shouldPasteLastNativeDictationOnDouble?() == true
             let singleTapKey: String? = {
                 let explicit = tapKey + ".tap"
                 if controller.hasBinding(for: explicit) { return explicit }
                 if nativeUsesBaseTap, controller.hasBinding(for: tapKey) { return tapKey }
                 return nil
             }()
-            if configuredDouble || nativeCopyDouble {
+            if configuredDouble || nativePasteDouble {
                 // Reserving a double necessarily delays this ONE key's single by one tap window.
                 // Unlike the old mutually-exclusive path, a lone explicit `.tap` is preserved.
                 if let last = pushToTalkTapTime[buttonName], now - last < doubleTapWindow {
                     pushToTalkTapTime[buttonName] = nil
                     pushToTalkSecondTapCandidate.remove(buttonName)
                     pushToTalkSingleTapPending.removeValue(forKey: buttonName)?.cancel()
-                    if nativeCopyDouble {
-                        if onCopyLastNativeDictation?() == true {
-                            print("🔘 \(tapKey).double → copy previous native dictation")
-                        }
+                    if nativePasteDouble {
+                        rmDebug("🔘 \(tapKey).double → paste previous dictation")
+                        onPasteLastNativeDictation?()
                     } else if configuredDouble {
                         let dbl = tapVariant(tapKey, 2)
                         if controller.handle(InputEvent(key: dbl)) {

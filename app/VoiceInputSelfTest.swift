@@ -8,6 +8,7 @@
 //
 
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 
 enum VoiceInputSelfTest {
@@ -824,6 +825,46 @@ enum VoiceInputSelfTest {
                && VoiceRemoteProbePolicy.maximumWaitNanoseconds == 650_000_000,
                "new remote producers cannot leak stale pre-roll while live producers retain it")
 
+        let completionGate = VoiceOneShotCompletionGate()
+        let completionCountLock = NSLock()
+        var completionCount = 0
+        DispatchQueue.concurrentPerform(iterations: 128) { _ in
+            if completionGate.claim() {
+                completionCountLock.lock()
+                completionCount += 1
+                completionCountLock.unlock()
+            }
+        }
+        expect(completionCount == 1 && !completionGate.claim(),
+               "duplicate WebSocket ping callbacks resume their continuation exactly once")
+
+        let remoteTailStart: UInt64 = 1_000_000_000
+        expect(VoiceRemoteTailDrainPolicy.shouldDrain(
+            source: .remote, capturedFrames: 24_000, minimumFrames: 24_000
+        )
+               && !VoiceRemoteTailDrainPolicy.shouldDrain(
+                   source: .builtIn, capturedFrames: 24_000, minimumFrames: 24_000
+               )
+               && !VoiceRemoteTailDrainPolicy.shouldDrain(
+                   source: .remote, capturedFrames: 23_999, minimumFrames: 24_000
+               )
+               && !VoiceRemoteTailDrainPolicy.shouldFinish(
+                   now: remoteTailStart + 119_999_999,
+                   startedAt: remoteTailStart,
+                   lastAdvanceAt: remoteTailStart
+               )
+               && VoiceRemoteTailDrainPolicy.shouldFinish(
+                   now: remoteTailStart + 120_000_000,
+                   startedAt: remoteTailStart,
+                   lastAdvanceAt: remoteTailStart
+               )
+               && VoiceRemoteTailDrainPolicy.shouldFinish(
+                   now: remoteTailStart + 320_000_000,
+                   startedAt: remoteTailStart,
+                   lastAdvanceAt: remoteTailStart + 300_000_000
+               ),
+               "remote release drains a quiet 120 ms tail with a strict 320 ms ceiling")
+
         let appendProbe = Data([0, 1, 2, 3, 254, 255])
         let appendEnvelope = VoiceRealtimeTranscriptionSession.audioAppendMessage(appendProbe)
         let appendJSON = try? JSONSerialization.jsonObject(with: Data(appendEnvelope.utf8))
@@ -862,6 +903,22 @@ enum VoiceInputSelfTest {
         let decoded = try? decodePCM16WAV(wav)
         expect(decoded?.sampleRate == 24_000 && decoded?.frameCount == 4
                && decoded?.pcm16 == samples, "WAV encode/decode")
+
+        var longPCM = Data(repeating: 0, count: 600 * 24_000 * 2)
+        longPCM.replaceSubrange((longPCM.count - 6)..<longPCM.count,
+                                with: [0xFF, 0x7F, 0xFF, 0x7F, 0xFF, 0x7F])
+        let longWAV = WAVEncoder.encode(VoiceCapturedAudio(
+            pcm16: longPCM, sampleRate: 24_000, source: .remote,
+            frameCount: 600 * 24_000, meanSquare: 0
+        ))
+        let longDecoded = try? decodePCM16WAV(longWAV)
+        expect(longWAV.count == 44 + 600 * 16_000 * 2 && longWAV.count < 25_000_000
+               && longDecoded?.sampleRate == 16_000 && longDecoded?.frameCount == 600 * 16_000
+               && longWAV.suffix(2) == Data([0xFF, 0x7F]),
+               "ten-minute WAV preserves duration and final speech within upload limit")
+        expect(VoiceTranscriptionClient.finalRequestTimeout(duration: 2) == 25
+               && VoiceTranscriptionClient.finalRequestTimeout(duration: 600) == 170,
+               "long transcription has a bounded duration-aware deadline")
 
         let unicode = "中A🙂文B"
         let chunks = VoiceTextDeliverer.unicodeChunks(unicode, maximumUTF16Units: 3)
@@ -904,7 +961,9 @@ enum VoiceInputSelfTest {
                "another field in the same app is not mistaken for the original target")
         expect(identifiedReplacement.isCompatibleReplacement(for: identifiedOriginal),
                "stable accessibility identifier survives a rebuilt editor role wrapper")
-        let delivery = VoiceTextDeliverer()
+        let deliveryPasteboard = NSPasteboard.withUniqueName()
+        defer { deliveryPasteboard.releaseGlobally() }
+        let delivery = VoiceTextDeliverer(pasteboard: deliveryPasteboard)
         let secureTarget = VoiceTextTarget(
             pid: getpid(), bundleIdentifier: nil, applicationName: "self-test",
             focusedElement: nil, focusSignature: nil,
@@ -966,7 +1025,7 @@ enum VoiceInputSelfTest {
                "detected selections include non-settable custom editors with an editable role")
         expect(readOnlySelectionTarget.selectionState == .readOnly(text: "source"),
                "a readable non-empty read-only selection remains a rewrite-to-clipboard source")
-        let clipboardBeforeStrictReplacement = NSPasteboard.general.string(forType: .string)
+        let clipboardBeforeStrictReplacement = deliveryPasteboard.string(forType: .string)
         let strictReplacementOutcome = await delivery.replaceSelection("replacement", in: VoiceTextTarget(
             pid: -1, bundleIdentifier: nil, applicationName: "self-test",
             focusedElement: syntheticAXElement, focusSignature: nil,
@@ -974,9 +1033,9 @@ enum VoiceInputSelfTest {
             selectedTextSettable: true, isSecure: false
         ))
         expect(strictReplacementOutcome == .focusChanged
-               && NSPasteboard.general.string(forType: .string) == clipboardBeforeStrictReplacement,
+               && deliveryPasteboard.string(forType: .string) == clipboardBeforeStrictReplacement,
                "strict AX selection replacement itself never mutates the clipboard")
-        let fallbackSnapshot = VoicePasteboardSnapshot(NSPasteboard.general)
+        let fallbackSnapshot = VoicePasteboardSnapshot(deliveryPasteboard)
         let mandatoryFallbackText = "HyperVibe mandatory clipboard recovery"
         let mandatoryFallbackOutcome = await delivery.deliverFinal(
             mandatoryFallbackText,
@@ -988,11 +1047,133 @@ enum VoiceInputSelfTest {
             ),
             settings: Config.DictationSettings(copyOnFailure: false)
         )
-        let mandatoryFallbackValue = NSPasteboard.general.string(forType: .string)
-        fallbackSnapshot.restore(to: NSPasteboard.general)
+        let mandatoryFallbackValue = deliveryPasteboard.string(forType: .string)
+        fallbackSnapshot.restore(to: deliveryPasteboard)
         expect(mandatoryFallbackOutcome == .copied
                && mandatoryFallbackValue == mandatoryFallbackText,
                "failed final delivery always preserves generated text on the clipboard")
+
+        let insertion = VoiceInsertionSnapshot(value: "a🙂b", selection: CFRange(location: 3, length: 0))
+        expect(insertion.confirms("你", after: "a🙂你b")
+               && !insertion.confirms("你", after: "你a🙂b")
+               && !insertion.confirms("你", after: "a🙂b"),
+               "insertion confirmation requires the exact expected UTF-16 edit, not a matching substring")
+        expect(VoiceInsertionSnapshot(value: "a🙂b", selection: CFRange(location: 1, length: 2))
+                .confirms("你", after: "a你b")
+               && !VoiceInsertionSnapshot(value: "abc", selection: CFRange(location: -1, length: 1))
+                .confirms("x", after: "xbc"),
+               "selection readback handles emoji and rejects invalid AX ranges")
+        expect(VoiceInsertionSnapshot(value: "aa", selection: nil).confirms("a", after: "aaa")
+               && !VoiceInsertionSnapshot(value: "ab", selection: nil).confirms("x", after: "xba"),
+               "missing-caret verification permits only one exact insertion with original text preserved")
+        expect(VoiceDictationPresentationPolicy.completionPhase(for: .final, outcome: .pasteSent) == .copied
+               && VoiceDictationPresentationPolicy.completionPhase(for: .final, outcome: .unconfirmed) == .error
+               && !VoiceTextDeliveryOutcome.unconfirmed.wasDelivered,
+               "unconfirmed clipboard loss never reports Copied or Done")
+
+        // Exercise the production transaction on a separate pasteboard, with no real key events.
+        let testPasteboard = NSPasteboard.withUniqueName()
+        defer { testPasteboard.releaseGlobally() }
+        let transaction = VoiceTextDeliverer(pasteboard: testPasteboard)
+        testPasteboard.clearContents()
+        let unconfirmedPaste = await transaction.performPasteTransaction(
+            "本轮语音", restore: true, restoreDelay: 20_000_000,
+            dispatch: { .sent }, confirm: { false }
+        )
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        expect(unconfirmedPaste == .pasteSent
+               && testPasteboard.string(forType: .string) == "本轮语音",
+               "unacknowledged paste retains this turn instead of restoring an empty or old clipboard")
+        let confirmedPaste = await transaction.performPasteTransaction(
+            "confirmed", restore: true, restoreDelay: 20_000_000,
+            dispatch: { .sent }, confirm: { true }
+        )
+        // Async timer continuations are not guaranteed to run before a fixed-duration test sleep
+        // under load. Poll for the observable restoration, still with a strict test deadline.
+        var restoredConfirmedClipboard = false
+        for _ in 0..<25 {
+            if testPasteboard.string(forType: .string) == "本轮语音" {
+                restoredConfirmedClipboard = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        expect(confirmedPaste == .inserted && restoredConfirmedClipboard,
+               "only confirmed insertion may restore the previous clipboard")
+        _ = await transaction.performPasteTransaction(
+            "preserved", restore: false, restoreDelay: 20_000_000,
+            dispatch: { .sent }, confirm: { true }
+        )
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        expect(testPasteboard.string(forType: .string) == "preserved",
+               "disabling clipboard restoration keeps even a confirmed transcript")
+        _ = await transaction.performPasteTransaction(
+            "older", restore: true, restoreDelay: 30_000_000,
+            dispatch: { .sent }, confirm: { true }
+        )
+        testPasteboard.clearContents()
+        testPasteboard.setString("user copied later", forType: .string)
+        try? await Task.sleep(nanoseconds: 70_000_000)
+        expect(testPasteboard.string(forType: .string) == "user copied later",
+               "deferred restore never overwrites a newer user clipboard write")
+        _ = await transaction.performPasteTransaction(
+            "older again", restore: true, restoreDelay: 30_000_000,
+            dispatch: { .sent }, confirm: { true }
+        )
+        let newerCopy = transaction.copy("new voice result")
+        try? await Task.sleep(nanoseconds: 70_000_000)
+        expect(newerCopy == .copied && testPasteboard.string(forType: .string) == "new voice result",
+               "verified fallback copy invalidates every older scheduled restore")
+        let overlapping = await transaction.performPasteTransaction(
+            "in flight", restore: true, restoreDelay: 20_000_000,
+            dispatch: { .sent }, confirm: {
+                _ = transaction.copy("newer during confirmation")
+                return false
+            }
+        )
+        expect(overlapping == .unconfirmed
+               && testPasteboard.string(forType: .string) == "newer during confirmation",
+               "an old confirmation cannot restore over a newer voice transaction")
+        let changedExternally = await transaction.performPasteTransaction(
+            "in flight external", restore: true, dispatch: { .sent }, confirm: {
+                testPasteboard.clearContents()
+                testPasteboard.setString("external", forType: .string)
+                return false
+            }
+        )
+        expect(changedExternally == .unconfirmed && testPasteboard.string(forType: .string) == "external",
+               "clipboard readback refuses a false Copied claim after external overwrite")
+        var cancelledDispatches = 0
+        let cancelledPaste = Task { @MainActor in
+            await transaction.performPasteTransaction(
+                "cancelled", restore: true,
+                dispatch: { cancelledDispatches += 1; return .sent }, confirm: { false }
+            )
+        }
+        await Task.yield()
+        cancelledPaste.cancel()
+        _ = await cancelledPaste.value
+        expect(cancelledDispatches == 0 && testPasteboard.string(forType: .string) == "external",
+               "Escape during staging prevents key dispatch and restores only its owned snapshot")
+        let rejectedDispatch = await transaction.performPasteTransaction(
+            "replaced session", restore: true, admit: { false },
+            dispatch: { cancelledDispatches += 1; return .sent }, confirm: { false }
+        )
+        expect(rejectedDispatch == .unavailable && cancelledDispatches == 0
+               && testPasteboard.string(forType: .string) == "external",
+               "replaced session ownership is rechecked immediately before irreversible dispatch")
+        let secretError = NSError(domain: "PRIVATE_DOMAIN_SENTINEL", code: 77,
+                                  userInfo: [NSLocalizedDescriptionKey: "PRIVATE_BODY_SENTINEL"])
+        let safeError = VoiceDictationCoordinator.failureDiagnostic(secretError)
+        expect(!safeError.contains("PRIVATE_") && safeError.contains("77")
+               && VoiceDictationCoordinator.failureDiagnostic(
+                VoiceTranscriptionError.service("PRIVATE_API_SENTINEL")
+               ) == "kind=provider-service",
+               "terminal error diagnostics never print provider messages, credentials or transcript bodies")
+        let fingerprint = VoiceTextDeliverer.diagnosticFingerprint("PRIVATE_TRANSCRIPT_SENTINEL")
+        expect(!fingerprint.contains("PRIVATE_TRANSCRIPT_SENTINEL")
+               && fingerprint == VoiceTextDeliverer.diagnosticFingerprint("PRIVATE_TRANSCRIPT_SENTINEL"),
+               "salted fingerprints correlate content without logging its text")
         expect(VoiceStreamingReconciliation.missingSuffix(
             committed: "你好，世界", inserted: "你好"
         ) == "，世界", "streaming suffix reconciliation")
@@ -1107,6 +1288,245 @@ enum VoiceInputSelfTest {
         // This is a regression alarm, not a microbenchmark. Local dictionary work must remain far
         // below one interactive frame on the target Apple Silicon machine.
         expect(dictionaryMilliseconds < 16, "500-term dictionary stays under one frame")
+
+        // ---- 2026-10-16: no silent loss, bounded latency, paste-previous, keyboard trigger ----
+
+        // A busy editor that misses the AX deadline is not an editor the user left.
+        expect(VoiceFocusQueryPolicy.outcome(for: .cannotComplete) == nil,
+               "an unanswered focus query does not reject delivery")
+        expect(VoiceFocusQueryPolicy.outcome(for: .noValue) == .focusChanged
+               && VoiceFocusQueryPolicy.outcome(for: .failure) == .focusChanged,
+               "a definite 'no focused element' still rejects delivery")
+        // A slow Command-V must read the transcript, not the restored clipboard.
+        expect(VoiceTextDeliverer.clipboardRestoreDelayNanoseconds >= 1_000_000_000,
+               "clipboard restore waits long enough for a busy editor to paste")
+        // A stalled live socket hands over to REST quickly instead of after 15 s.
+        expect(VoiceRealtimeTranscriptionSession.commitResultTimeoutNanoseconds <= 6_000_000_000,
+               "live result wait is bounded well below the old 15 s")
+        expect(VoiceCleanupBudget.seconds(forCharacterCount: 0) == 3
+               && VoiceCleanupBudget.seconds(forCharacterCount: 250) == 4
+               && VoiceCleanupBudget.seconds(forCharacterCount: 100_000) == 8,
+               "polish budget grows with length and is capped")
+
+        let fastStarted = DispatchTime.now().uptimeNanoseconds
+        let fast = await VoiceDeadline.value(within: 1) { 42 }
+        expect(fast == 42 && milliseconds(fastStarted, DispatchTime.now().uptimeNanoseconds) < 500,
+               "deadline returns a prompt result without waiting for the timer")
+        // This operation ignores cancellation, like a stalled HTTP request.
+        let slowStarted = DispatchTime.now().uptimeNanoseconds
+        let slow: Int? = await VoiceDeadline.value(within: 0.1) {
+            await withCheckedContinuation { (done: CheckedContinuation<Int, Never>) in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) { done.resume(returning: 7) }
+            }
+        }
+        let slowElapsed = milliseconds(slowStarted, DispatchTime.now().uptimeNanoseconds)
+        expect(slow == nil && slowElapsed < 600,
+               "deadline abandons work that ignores cancellation instead of awaiting it")
+
+        var timed = VoiceLatencyMetrics.empty
+        timed.audioSource = "remote"
+        timed.audioDurationMilliseconds = 11_120
+        timed.releaseToTranscriptMilliseconds = 6_400
+        timed.cleanupMilliseconds = 3_000
+        timed.insertionMilliseconds = 40
+        let summary = VoiceDictationCoordinator.turnSummary(
+            timed, outcome: .copied, restFallback: true, cleanupTimedOut: true, characters: 88
+        )
+        expect(summary.contains("outcome=copied") && summary.contains("spoke=11.1s")
+               && summary.contains("transcript=6400ms(rest)")
+               && summary.contains("polish=3000ms(over-budget)") && summary.contains("chars=88"),
+               "every turn logs which stage it spent its time in")
+
+        let freshVoice = Config.DictationSettings()
+        expect(freshVoice.maxRecordingSeconds == 600,
+               "new Voice settings default to a ten-minute maximum")
+        var escape = VoiceEscapeClassifier()
+        expect(!escape.handle(key: CGKeyCode(kVK_Escape), down: true, repeatKey: false).swallow,
+               "idle Escape keeps the focused application's normal behavior")
+        escape.active = true
+        let escapeDown = escape.handle(key: CGKeyCode(kVK_Escape), down: true, repeatKey: false)
+        let escapeRepeat = escape.handle(key: CGKeyCode(kVK_Escape), down: true, repeatKey: true)
+        escape.active = false
+        let escapeUp = escape.handle(key: CGKeyCode(kVK_Escape), down: false, repeatKey: false)
+        expect(escapeDown.cancel && escapeDown.swallow && !escapeRepeat.cancel && escapeRepeat.swallow
+               && !escapeUp.cancel && escapeUp.swallow,
+               "active Escape cancels exactly once and consumes its matching release")
+        expect(!escape.handle(key: CGKeyCode(kVK_Escape), down: true, repeatKey: true).cancel
+               && !escape.handle(key: CGKeyCode(kVK_Space), down: true, repeatKey: false).swallow,
+               "Escape cancellation ignores repeats after release and unrelated typing")
+        expect(freshVoice.pasteLastOnSideButtonDouble && freshVoice.keyboardShortcut.isEmpty,
+               "side-button double pastes by default; the keyboard trigger is opt-in")
+
+        // Shortcut parsing.
+        let rightOption = KeyboardDictationShortcut("ropt")
+        expect(rightOption?.isModifierOnly == true
+               && rightOption?.modifierKeys == [CGKeyCode(kVK_RightOption)],
+               "a lone right Option parses as a side-specific modifier-only shortcut")
+        let voiceChord = KeyboardDictationShortcut("ctrl+opt+space")
+        expect(voiceChord?.mainKey == CGKeyCode(kVK_Space)
+               && voiceChord?.modifierKeys == [CGKeyCode(kVK_Control), CGKeyCode(kVK_Option)],
+               "a chord parses into modifiers plus one main key")
+        expect(KeyboardDictationShortcut("space") == nil && KeyboardDictationShortcut("") == nil
+               && KeyboardDictationShortcut("  ") == nil,
+               "a bare key or an empty value never becomes a global shortcut")
+
+        // Modifier-only classification: the device bits decide the side.
+        let rightOptionDown = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x40)
+        let leftOptionDown = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x20)
+        let rightOptionAndCommand = CGEventFlags(rawValue: rightOptionDown.rawValue
+                                                 | CGEventFlags.maskCommand.rawValue | 0x08)
+        if let rightOption {
+            var lone = KeyboardDictationClassifier(shortcut: rightOption)
+            let press = lone.modifiersChanged(rightOptionDown)
+            let release = lone.modifiersChanged([])
+            expect(press == .init(edge: .pressed, swallow: false)
+                   && release == .init(edge: .released, swallow: false),
+                   "holding then releasing right Option is a press and a release, never swallowed")
+
+            var wrongSide = KeyboardDictationClassifier(shortcut: rightOption)
+            expect(wrongSide.modifiersChanged(leftOptionDown).edge == nil,
+                   "left Option does not trigger a right-Option shortcut")
+
+            var tabbed = KeyboardDictationClassifier(shortcut: rightOption)
+            _ = tabbed.modifiersChanged(rightOptionDown)
+            expect(tabbed.keyDown(CGKeyCode(kVK_Tab), flags: rightOptionDown, isRepeat: false)
+                   == .init(edge: .interrupted, swallow: false),
+                   "a key pressed under a modifier-only shortcut interrupts it and still types")
+            expect(tabbed.modifiersChanged([]).edge == nil
+                   && tabbed.modifiersChanged(rightOptionDown).edge == .pressed
+                   && tabbed.modifiersChanged([]).edge == .released,
+                   "an ordinary chord cannot toggle Voice on release; the next clean press works")
+
+            var widened = KeyboardDictationClassifier(shortcut: rightOption)
+            _ = widened.modifiersChanged(rightOptionDown)
+            expect(widened.modifiersChanged(rightOptionAndCommand).edge == .interrupted,
+                   "another modifier joining makes it an ordinary chord")
+            expect(widened.modifiersChanged(rightOptionDown).edge == nil
+                   && widened.modifiersChanged([]).edge == nil,
+                   "removing the extra modifier cannot re-arm an interrupted shortcut")
+        }
+
+        if let triple = KeyboardDictationShortcut("rctrl+rcmd+ropt") {
+            var gesture = KeyboardDictationClassifier(shortcut: triple)
+            let all = CGEventFlags(rawValue: 0x2000 | 0x10 | 0x40)
+            let partial = CGEventFlags(rawValue: 0x2000 | 0x10)
+            expect(gesture.modifiersChanged(all).edge == .pressed
+                   && gesture.modifiersChanged(partial).edge == .released
+                   && gesture.modifiersChanged(all).edge == nil
+                   && gesture.modifiersChanged([]).edge == nil
+                   && gesture.modifiersChanged(all).edge == .pressed,
+                   "the three-right-modifier shortcut requires full release before another toggle")
+        }
+
+        // Chord classification: the main key is swallowed only while the exact chord is held.
+        let controlOption = CGEventFlags([.maskControl, .maskAlternate])
+        if let voiceChord {
+            var held = KeyboardDictationClassifier(shortcut: voiceChord)
+            let down = held.keyDown(CGKeyCode(kVK_Space), flags: controlOption, isRepeat: false)
+            let autoRepeat = held.keyDown(CGKeyCode(kVK_Space), flags: controlOption, isRepeat: true)
+            let up = held.keyUp(CGKeyCode(kVK_Space))
+            expect(down == .init(edge: .pressed, swallow: true)
+                   && autoRepeat == .init(edge: nil, swallow: true)
+                   && up == .init(edge: .released, swallow: true),
+                   "the chord's main key is swallowed from press through auto-repeat to release")
+
+            var partial = KeyboardDictationClassifier(shortcut: voiceChord)
+            let missingOption = partial.keyDown(CGKeyCode(kVK_Space), flags: .maskControl,
+                                                isRepeat: false)
+            let extraShift = partial.keyDown(CGKeyCode(kVK_Space),
+                                             flags: controlOption.union(.maskShift),
+                                             isRepeat: false)
+            expect(missingOption == .init(edge: nil, swallow: false)
+                   && extraShift == .init(edge: nil, swallow: false),
+                   "a different modifier set leaves the key untouched")
+        }
+
+        // Toggle lifecycle: one clean press starts, the next stops; typing never stops capture.
+        final class TriggerProbe {
+            var primes = 0, begins = 0, cancels = 0, ends = 0, abandons = 0
+            func attach(_ trigger: KeyboardDictationTrigger, accept: Bool) {
+                trigger.onPrime = { self.primes += 1; return accept }
+                trigger.onBegin = { self.begins += 1 }
+                trigger.onCancel = { self.cancels += 1 }
+                trigger.onEnd = { self.ends += 1 }
+                trigger.onAbandon = { self.abandons += 1 }
+            }
+        }
+        do {
+            let trigger = KeyboardDictationTrigger(), probe = TriggerProbe()
+            probe.attach(trigger, accept: true)
+            trigger.handle(.pressed)
+            trigger.handle(.released)
+            trigger.handle(.released)
+            expect(probe.primes == 1 && probe.begins == 1 && probe.ends == 0
+                   && trigger.state == .listening,
+                   "one quick completed press starts hands-free capture and release leaves it open")
+            trigger.handle(.pressed)
+            trigger.handle(.pressed)
+            trigger.handle(.released)
+            trigger.handle(.released)
+            expect(probe.primes == 1 && probe.begins == 1 && probe.ends == 1
+                   && trigger.state == .idle,
+                   "the second completed press stops capture exactly once despite duplicate edges")
+        }
+        do {
+            let trigger = KeyboardDictationTrigger(), probe = TriggerProbe()
+            probe.attach(trigger, accept: true)
+            trigger.handle(.pressed)
+            trigger.handle(.interrupted)
+            trigger.handle(.released)
+            expect(probe.cancels == 1 && probe.begins == 0 && trigger.state == .idle,
+                   "an ordinary modifier chord cancels speculative capture before Voice opens")
+        }
+        do {
+            let trigger = KeyboardDictationTrigger(), probe = TriggerProbe()
+            probe.attach(trigger, accept: true)
+            trigger.handle(.pressed)
+            trigger.handle(.released)
+            trigger.handle(.pressed)
+            trigger.handle(.interrupted)
+            trigger.handle(.released)
+            expect(probe.abandons == 0 && probe.ends == 0 && trigger.state == .listening,
+                   "ordinary chords during hands-free capture cannot stop or abandon the utterance")
+            trigger.handle(.pressed)
+            trigger.handle(.released)
+            expect(probe.ends == 1 && trigger.state == .idle,
+                   "a clean stop shortcut still works after typing during recording")
+        }
+        do {
+            let trigger = KeyboardDictationTrigger(), probe = TriggerProbe()
+            probe.attach(trigger, accept: false)
+            trigger.handle(.pressed)
+            trigger.handle(.released)
+            expect(probe.begins == 0 && probe.ends == 0 && probe.cancels == 0
+                   && trigger.state == .idle,
+                   "a press Voice refused (busy or unconfigured) leaves nothing to undo")
+            probe.attach(trigger, accept: true)
+            trigger.handle(.pressed)
+            trigger.handle(.released)
+            expect(probe.begins == 1 && trigger.state == .listening,
+                   "a previously refused shortcut can start Voice on the next accepted press")
+        }
+        do {
+            let trigger = KeyboardDictationTrigger(), probe = TriggerProbe()
+            probe.attach(trigger, accept: true)
+            trigger.handle(.pressed)
+            trigger.handle(.released)
+            trigger.handle(.pressed)
+            trigger.captureEnded()
+            trigger.handle(.released)
+            trigger.handle(.pressed)
+            trigger.handle(.released)
+            expect(probe.primes == 2 && probe.begins == 2 && probe.ends == 0
+                   && trigger.state == .listening,
+                   "automatic capture end clears an armed stop so the next press starts a new turn")
+            trigger.captureEnded()
+            trigger.handle(.pressed)
+            trigger.captureEnded()
+            trigger.handle(.released)
+            expect(probe.begins == 2 && trigger.state == .idle,
+                   "target rejection during prime cannot resurrect capture on shortcut release")
+        }
 
         if failures.isEmpty {
             print(String(format: "VOICE_SELF_TEST PASS dictionary=%.2fms pcm10s=%.2fms packet10s=%.2fms checks=%d",

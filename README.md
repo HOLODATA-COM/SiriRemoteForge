@@ -368,12 +368,13 @@ the signed-in user. Every non-secret behavior remains JSON-controlled under `set
   "autoInsert": true,
   "copyOnFailure": true, // compatibility field; failed delivery is always copied
   "restoreClipboardAfterInsert": true,
-  "copyLastOnSideButtonDouble": true,
+  "pasteLastOnSideButtonDouble": true,
+  "keyboardShortcut": "", // press once to start Voice, again to stop; empty disables
   "feedbackSoundsEnabled": true,
   "feedbackSoundVolume": 0.55,
   "pipelineOverlayEnabled": true, // temporary draggable Voice capsule
   "minimumRecordingSeconds": 1,   // shorter turns stay local and produce no text
-  "maxRecordingSeconds": 120,
+  "maxRecordingSeconds": 600, // ten-minute default and hard ceiling
   "dictionary": [
     { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] }
   ]
@@ -394,6 +395,20 @@ returns to an available screen if a monitor disappears. Set
 
 The Voice settings page exposes the same fields, credential connection tests, and the most recent
 press-to-audio, session-ready, first-delta, release-to-transcript, cleanup, and insertion timings.
+
+Press **Esc** during native recording or processing to cancel the entire current turn (including
+any pending replacement). No later result from that turn will be inserted. Idle Escape retains its
+normal application behavior. At the recording limit, Voice ends capture and transcribes normally;
+this is different from Escape cancellation. Live mode cannot retract text already inserted before
+Escape, but stops delivering further text. Long Final uploads retain the original 24 kHz recording
+and use a 16 kHz WAV only when needed to fit the service's upload limit.
+
+Final delivery distinguishes shortcut dispatch from observed editor insertion. Clipboard restoration
+requires an exact Accessibility value readback; if a custom editor cannot confirm the insertion,
+Voice keeps the result copied and reports that insertion is unconfirmed, without retrying a second
+route and risking duplicate text. Every clipboard write is read back. A newer user copy or voice
+transaction invalidates older restores. Turn diagnostics include terminal failure/cancellation,
+stage, turn ID, and process-salted content fingerprints, never transcript or clipboard bodies.
 
 ---
 

@@ -338,14 +338,28 @@ struct SettingsView: View {
                 Toggle(isOn: $model.tune.dictation.restoreClipboardAfterInsert) {
                     rowLabel(L("Restore clipboard after compatibility paste"), "clipboard")
                 }
-                Toggle(isOn: $model.tune.dictation.copyLastOnSideButtonDouble) {
-                    rowLabel(L("Double-click side button to copy previous dictation"),
+                Toggle(isOn: $model.tune.dictation.pasteLastOnSideButtonDouble) {
+                    rowLabel(L("Double-click side button to paste previous dictation"),
                              "rectangle.on.rectangle.angled")
                 }
             } header: {
                 Text(L("Delivery"))
             } footer: {
                 Text(L("HyperVibe captures the frontmost app and focused editor before showing its HUD. It never types into a changed or secure target. Whenever generated text cannot be inserted or replaced, the complete result is placed on the clipboard."))
+            }
+
+            Section {
+                HStack(spacing: 10) {
+                    rowLabel(L("Keyboard shortcut"), "keyboard")
+                    Spacer()
+                    ShortcutRecorderField(value: model.tune.dictation.keyboardShortcut) { recorded in
+                        model.tune.dictation.keyboardShortcut = recorded
+                    }
+                }
+            } header: {
+                Text(L("Keyboard Trigger"))
+            } footer: {
+                Text(L("Press the shortcut once to start dictation, then again to stop. You can release the keys while speaking. A modifier on its own, such as right Option, works too; ordinary keyboard shortcuts do not toggle recording. The remote side button still uses hold-to-talk. Clear the shortcut to turn the keyboard trigger off."))
             }
 
             Section {

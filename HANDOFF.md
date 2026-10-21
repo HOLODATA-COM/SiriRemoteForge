@@ -1,6 +1,6 @@
 # SiriRemoteForge — living handoff
 
-Last updated: 2026-09-02 (Australia/Sydney)
+Last updated: 2026-10-22 (Australia/Sydney)
 
 This document is the concise source of truth for continuing development. Keep it updated whenever
 the architecture, user-facing mappings, build/run workflow, or microphone investigation changes.
@@ -29,6 +29,279 @@ belong in `docs/mic-reverse-engineering.md`.
 - Local checkout: the repository root (`siriremote-release`).
 - Current branch: `main`. Use `git rev-parse HEAD` for the exact current commit; this living document
   no longer pins a SHA that becomes stale after every deployment note.
+
+### ⚡ LATEST — 2026-10-22: Verified delivery and clipboard retention (local build 75)
+
+- User approved fixing the diagnosed delivery chain. Local native HyperVibe only: standalone
+  VoiceInk/Windows branch and packages were not changed or pushed in this task.
+- Shortcut dispatch has a distinct sent result, never insertion success by itself. Final paste
+  reads a fresh bounded AX value/caret snapshot and confirms an exact UTF-16 insertion/replacement
+  after dispatch. Unavailable readback or a mismatching edit is unconfirmed, with no second mutation
+  route after a sent paste. Positive clipboard readback is required before showing Copied; if the
+  clipboard changed meanwhile, the UI reports an unconfirmed delivery rather than a false copy.
+- Existing restoreClipboardAfterInsert is preserved, but only a positively observed insertion can
+  schedule the two-second restore. Unconfirmed generated text remains copied for recovery. Both
+  plain fallback copies and probe/paste operations invalidate older restore ownership; cancelled
+  probes cannot restore over a newer own transaction, and user clipboard changes keep priority.
+- Cancellation crosses the GCD event worker via a lock-protected gate, checked immediately before
+  AX/Unicode/shortcut mutation. Session admission is rechecked at the last paste boundary, including
+  pending replacement decisions. Post-await UUID guards prevent old delivery/failure tasks from
+  clearing a new session. Error/cancel/discard/reject terminal logs have turn ID, stage and elapsed
+  time. Clipboard logs include readback, ownership and per-process-salted hashes/counts, not bodies.
+  rmDebug serializes within the App so concurrent threads do not overwrite each other's log lines.
+- Verification: optimized App build; core **136/136**; final stable-signed candidate **175/175**
+  Voice checks on **three consecutive runs**; diff whitespace checks. New regression transactions
+  use named isolated pasteboards and synthetic dispatch/confirmation closures, no real key events
+  or provider API calls. A first fixed-60-ms restoration observation flaked once; it was retained
+  and changed to bounded polling for actual restoration (500 ms deadline), then rerun three times.
+  Existing fallback tests were also moved off the general clipboard. The user subsequently tested
+  dictation and confirmed it works; unobservable custom-editor insertion intentionally stays
+  unconfirmed.
+- Installed `/Applications/HyperVibe.app`: **75 / 1.0.0-local.75**, single normal-launch UI PID
+  **9523**. Deep/strict signature and exact original certificate requirement pass; credential broker
+  CDHash remains `13d5c95754534f4fcc26799385d9f48b8ac8c544`. Candidate/installed executable equality
+  verified; SHA256 `0dc8309117c3765a6b3260dedc02ad9d1ab5062c6b5d6feb0363ae701c11af07`.
+  Startup confirms keyboard and media event taps installed, Input Monitoring granted. Build 74 is
+  recoverable at `/private/tmp/hypervibe-before75.s6GXN9/HyperVibe.app`. No active config reset.
+
+### 2026-10-22: Clipboard/partial-dictation investigation (diagnosis only)
+
+- User reports "copied" but an empty/unrelated clipboard after partial speech; asked to inspect logs,
+  not to deploy a fix. No product source, active settings, signatures or processes were changed.
+  Installed binary still equals workspace packaged binary, build 74, single UI PID 85660.
+- /tmp/hypervibe.log on Oct 21 UTC has two actual copied outcomes: 07:50:34 (58 chars; Chrome
+  AXGroup -> AXTextArea) and 12:36:02 (33 chars; Chrome AXButton -> AXWebArea). These are 18:50:34
+  and 23:36:02 Sydney Oct 21. Both rejected insertion on focus change and called copy(text).
+  History contains the latter completed result. copy() checks setString's return value but has no
+  readback or later ownership/content diagnostics; subsequent loss is not proven by these logs.
+- Confirmed delivery-observability flaw: postCommandShortcut returns inserted after posting events,
+  without proving editor consumption (VoiceTextDelivery.swift:336). Several Chrome AXButton,
+  AXGroup and AXWebArea targets logged inserted. The active restoreClipboardAfterInsert=true
+  restores the old clipboard after two seconds following that assumed success (:898). If paste
+  was ignored/delayed, this can remove the sole accessible result. It does NOT establish that the
+  two genuine copied outcomes above were overwritten by that same restore; their fallback uses
+  an unmarked new write, which should invalidate the older restore's marker/changeCount guard.
+- Oct 22 Sydney 01:02:56 (9.090 s), 01:03:14 (1.510 s), 01:03:44 (21.020 s) have capture records
+  but no matching delivery summary/history entry. All exceed the one-second minimum. fail() has
+  no persistent error log, so failure vs cancellation and the actual cause cannot be reconstructed.
+  The unified log adds no matching transcription transport error. 01:04:16 Warp and 01:04:45 Chrome
+  subsequently completed normally. Raw speech/clipboard contents were not added to diagnostics.
+- Recommended next implementation (requires user request): preserve every unconfirmed result;
+  distinguish shortcut dispatch from confirmed insertion; verify clipboard writes and record only
+  turn ID, content hash/length and ownership changes; add terminal failure/cancellation logging.
+
+### 2026-10-17: Windows installer built and verified
+
+- User explicitly authorized pushing the isolated standalone source and CI workflow to
+  `HOLODATA-COM/SiriRemoteForge:voiceink-standalone` and running Windows packaging. Branch pushed
+  successfully; no unrelated dirty main changes were committed or uploaded. No public release,
+  merge to main, credentials upload, or modification of the installed HyperVibe was performed.
+- Standalone commit `48cf533` adds a Windows CI installer/startup smoke test: silent
+  per-user install, installed executable equality, bundled dependency notices, a real main window,
+  and second-launch convergence on one process. This does not test microphone/API transcription.
+- Run `39024880549`: macOS succeeded; Windows native tests **11/11**, release build and silent
+  install succeeded, but the first exact-executable comparison incorrectly compared the installed
+  NSIS-patched file with Tauri's restored unpatched release EXE. Official CLI **2.12.3** bundle.rs
+  confirms it replaces `__TAURI_BUNDLE_TYPE_VAR_UNK` with `__TAURI_BUNDLE_TYPE_VAR_NSS` and then
+  restores the original. Commit `cacdf91` adjusts only that known marker in the expected payload,
+  preserving full SHA256 verification of all other content. It also adds dependency/build caching.
+- Run `https://github.com/HOLODATA-COM/SiriRemoteForge/actions/runs/39025648399` succeeded on
+  **both macOS and Windows**, commit `cacdf9143447b82661351325b4dfb26086c7089f`. Windows native
+  tests **11/11** and frontend/animation checks passed. Windows installer smoke test passed:
+  silent install, exact expected NSIS payload SHA256, dependency notices, real main window and
+  single-instance second launch. No real microphone/provider/editor-insertion acceptance yet.
+- Windows artifact:
+  `https://github.com/HOLODATA-COM/SiriRemoteForge/actions/runs/39025648399/artifacts/12098258956`.
+  Downloaded archive SHA256 matches GitHub's digest:
+  `f264d07739d69dddbe056af883ef554e69e98c94af9166f12def2cf8e04e7db2`.
+  Extracted installer `standalone/voiceink/artifacts/VoiceInk_0.1.0_x64-setup.exe` is **1,931,936
+  bytes**; SHA256 `fba8438ad496b54ad64c9fca2f449706b622719f95fa2f4f8e7ba4866a094184`.
+  NSIS's bootstrap PE is 32-bit, while its installed app payload is the tested x64 MSVC build.
+  Artifact expires 2027-01-15; it requires GitHub access and is not a permanent Release asset.
+- Windows package is an **unsigned test build**, not a signed commercial release. Installer/source
+  archive and SHA256SUMS are available locally; source ZIP reflects `cacdf91`. No public release
+  or main merge was performed. Installed HyperVibe remains build 74, single normal-launch process
+  PID 85660, unchanged by this task. Superseded first run `39024831385` was cancelled to avoid
+  duplicate CI use; run `39024880549` failed only due to the now-corrected test expectation.
+
+### 2026-10-16: Escape cancellation and ten-minute recording (both apps; local build 74)
+
+- Both HyperVibe and standalone VoiceInk cancel an entire recording/processing turn with Escape.
+  HyperVibe invalidates active and pending-replacement UUIDs before cancelling tasks, resets the
+  keyboard toggle, mic demand and HUD, and discards late results. Its event tap handles Escape even
+  with no keyboard start shortcut configured. Idle Escape passes through, repeat presses cannot
+  re-cancel, and the matching key-up is consumed. Live text inserted before Escape is not undone.
+  VoiceInk registers global Escape only during active phases, ignores its release as a start key,
+  generation-guards delayed cancellation, and removes the cancelled audio retry buffer.
+- Recording defaults are 600 seconds with a strict 600-second capture ceiling. The active local
+  config's maxRecordingSeconds was changed from 120 to 600 without touching other settings.
+  A timeout finishes and transcribes; Escape discards. Original 24 kHz audio is preserved for short
+  turns/live streaming; long REST WAVs use area-average 16 kHz conversion (600 s = 19,200,044 bytes,
+  below 25 MB), with bounded duration-aware HTTP deadlines. VoiceInk resamples microphone input
+  incrementally to at most 24 kHz, maintaining fractional phase across callbacks and bounding RAM.
+- Verification: HyperVibe optimized build and packaged Voice self-test **160/160**; core **136/136**;
+  standalone native/local simulated HTTP **11/11**, animation **3/3**, production frontend build,
+  warning-free Clippy, Windows platform cross-target check. Native HTTP tests require a sandbox
+  exception for local loopback listeners. Use `CC=/usr/bin/clang` here: this user's `cc` executable
+  is an unrelated session-management command. No paid API call was used for these tests.
+- Stable-signed **build 74 / 1.0.0-local.74** installed at `/Applications/HyperVibe.app`;
+  signature leaf remains `80f746bd1de5a7ceb835a200ce4e43705f01aee6`. The credential broker's CDHash
+  remains `13d5c95754534f4fcc26799385d9f48b8ac8c544` (CMS signature bytes can differ without changing
+  its code identity). Backup: `/private/tmp/hypervibe-before74.CYat3P/HyperVibe.app`.
+  Launch via `open /Applications/HyperVibe.app`, not a terminal-owned background binary: the latter
+  was observed to have incorrect TCC attribution and lost its event taps. Final normal-launch
+  process **85660** has keyboard tap and Input Monitoring granted. No permissions were reset.
+- VoiceInk signed DMG/ZIP rebuilt; standalone app still not installed/launched. Windows packaging
+  and GitHub push remain pending the specific repository/branch authorization described below.
+  Isolated local standalone branch commit: `4fecf7a`; regenerated source ZIP and SHA256SUMS match
+  the updated signed DMG/ZIP. The read-only mounted DMG's signature and binary equality also pass.
+  Physical Escape during speech/processing and real ten-minute provider transcription still need
+  user acceptance; generated ten-minute PCM, tail preservation and limits are tested locally.
+
+### 2026-10-16: Independent open-source BYOK Voice app (macOS package; Windows pending CI approval)
+
+- User approved an independent lightweight app for macOS and Windows, open-source distribution,
+  and end-user API keys. Implementation is isolated under `standalone/voiceink/` (working name
+  VoiceInk, identifier `com.holodata.voiceink`, GPL-3.0-or-later). It does not replace or modify the
+  installed HyperVibe. HyperVibe build 73 remains the only live local test App.
+- Tauri 2 / vanilla TypeScript canvas frontend and a Rust backend: CPAL microphone worker,
+  system credential storage (Keychain / Windows Credential Manager, no plaintext fallback),
+  global toggle shortcut, OpenAI file transcription and optional OpenAI/DeepSeek cleanup,
+  selection editing, guarded delivery, cancellation/replacement, and in-memory audio retry.
+  macOS delivery uses a small public AppKit/AX bridge; Windows uses UI Automation runtime IDs
+  and password checks without passing COM interfaces across threads. The sphere pauses rendering
+  in hidden windows. No remote driver, private Apple framework, or Thinking Orbs library is bundled.
+- History is opt-in (100 local records). Same-application context is a second opt-in (20 recent
+  examples); manual history corrections feed it. Turning off history takes effect even for a
+  previously admitted processing turn. Timer-driven stops are bound to the observed generation
+  and cannot start/stop a replacement recording.
+- First version implements the Final pipeline, not Live WebSocket transcription or automatic
+  monitoring of edits in other apps. The README records these boundaries and API/OS acceptance
+  tests still required with a user's own keys. No personal HyperVibe credentials/config were
+  imported, packaged or sent to a provider for testing.
+- Local verification: TypeScript/Vite production build, **3/3** animation checks, **8/8** native
+  and local simulated HTTP checks, warning-free Clippy, and a cross-target type check of the actual
+  Windows platform adapter. Public dependency notices are generated from locked dependencies
+  and bundled into artifacts rather than committed as generated source.
+- `scripts/package-macos.sh` requires an explicit non-ad-hoc signing identity, verifies the bundle,
+  optionally enforces the precise leaf fingerprint, and builds/verifies a signed read-only DMG plus
+  ZIP under `standalone/voiceink/artifacts/`. It uses hdiutil directly because Tauri's default DMG
+  layout tool required Finder Automation access. The local certificate is unchanged; Developer ID
+  notarization and public Windows signing are not configured for this test release.
+- The isolated local branch `voiceink-standalone` exists in
+  `/private/tmp/voiceink-build-branch.iU8lFx`; only standalone code and `.github/workflows/voiceink.yml`
+  are committed there. The requested Windows installer needs a Windows runner. A push to
+  `HOLODATA-COM/SiriRemoteForge:voiceink-standalone` was blocked by automatic approval review because
+  this exact upload destination was not explicitly authorized. No push or public release occurred.
+  Ask the user to authorize that specific branch upload and CI build; do not push all dirty main
+  changes or imply that a Windows installer already exists.
+
+### 2026-10-16: Keyboard Voice toggles on successive presses (local build 73)
+
+- The user's global keyboard binding is `rctrl+rcmd+ropt` (right Control + Command + Option).
+  It now starts hands-free dictation on one completed press and stops on the next; releasing the
+  first gesture leaves recording open. The remote side button retains hold-to-talk, and External
+  mode and its existing remote binding remain available.
+- Capture is primed on the first press edge and promoted when that gesture is released, without
+  a hold timer. Modifier-only gestures joined by another key/modifier are invalidated and cannot
+  re-arm until the shortcut modifiers fully release. Ordinary typing/chords during recording
+  cannot stop or abandon the utterance. Unchanged config reloads preserve the classifier's held
+  state. Coordinator capture termination clears the keyboard toggle, including maximum-duration
+  stops and target rejection, so the next gesture can start again.
+- Updated Settings help (English/Chinese), config documentation, and keyboard lifecycle regression
+  checks. Optimized build and packaged Voice self-test **154/154** passed; `git diff --check` clean.
+- Stable-signed **build 73 / `1.0.0-local.73`** is installed at `/Applications/HyperVibe.app`.
+  Candidate and installed deep/strict checks passed with the original leaf requirement
+  `80f746bd1de5a7ceb835a200ce4e43705f01aee6`; executables compare byte-for-byte equal. Exactly one
+  UI process runs from the required path (PID **71598** at verification), the keyboard tap is
+  installed, and all seven remote HID interfaces reconnected. Build 72 is recoverable at
+  `/private/tmp/hypervibe-before73.Dt1fqM/HyperVibe.app`. Source remains uncommitted.
+
+### 2026-10-16: Voice delivery no longer loses text; paste-previous; keyboard trigger (build 72)
+
+**Status: build 72 / `1.0.0-local.72` installed and running** (PID 75301 at verification, exactly
+one UI process from `/Applications/HyperVibe.app/Contents/MacOS/HyperVibe`). Deep/strict valid,
+Authority `siriRemote Local Signing`, designated requirement unchanged (leaf `80f746bd…`), installed
+executable byte-identical to the verified candidate. Build 71 is recoverable at
+`/private/tmp/hypervibe-before72/HyperVibe.app`.
+
+The signing keychain had locked itself and the user does not know its password -- it was never
+theirs. It is the development value hard-coded in early `create_app_bundle.sh` revisions and is
+still in git history. It was unlocked in-process through `SecKeychainUnlock`, reading the value from
+git inside the process, so it never appeared in argv. Consider rotating it, since it is in history.
+
+Self-test caveat: two delivery checks (`ordered delivery worker rejects changed focus`, `strict AX
+selection replacement…`) fail whenever *another* app holds Secure Event Input -- the worker then
+correctly answers `.secureField` first. Seen while Chrome (a focused password field) held it; with
+Secure Input released, build 71 passed 124/124 and build 72 146/146 side by side. Check
+`ioreg -l -w 0 | grep kCGSSessionSecureInputPID` before treating those two as regressions. The
+500-term dictionary frame check is similarly load-sensitive (failed once at load average 30).
+
+What the log showed (93 Voice turns, 2026-09-24 → 10-15): 88 logged `inserted`, 5 did not. The
+two worst were also the slowest -- **21 s** between release and delivery, after which the user had
+moved on and the guard rejected the paste as `focusChanged`; the text went to the clipboard with a
+one-second HUD note and was effectively lost. Two of the other three were rejected with a normal
+2 s wait, consistent with the AX focus check timing out (2 ms / 8 ms budgets on a machine with a
+load average above 20). Nothing recorded which stage the 21 s went to.
+
+Changes:
+- **AX timeout is not a focus change.** `kAXErrorCannotComplete` on the focused-element query now
+  defers to the PID and Secure Input checks that already passed (`VoiceFocusQueryPolicy`); budgets
+  raised to 100 ms / 50 ms on the delivery worker. Every rejection now logs its reason.
+- **Clipboard restore race.** The pasted transcript was restored away after 180 ms; a slow
+  Command-V then read the old clipboard while the turn logged `inserted`. Now 2 s, and every new
+  clipboard transaction first flushes a pending restore so it never snapshots the previous
+  transcript as "the user's clipboard".
+- **Bounded latency.** Live-socket commit wait 15 s → 5 s before the existing REST fallback; LLM
+  polish bounded by `VoiceCleanupBudget` (3 s + 1 s per 250 chars, max 8 s) via `VoiceDeadline`,
+  which abandons rather than awaits work that ignores cancellation. Past the budget the
+  dictionary-corrected transcript is delivered with a warning.
+- **Every turn logs one line** (`🎙 voice turn …`): outcome, source, transcript/polish/insert
+  milliseconds, `(rest)` and `(over-budget)` markers.
+- **Clipboard-only outcome is visible:** 3.2 s instead of 1 s, and says how to recover.
+- **Side-button double press pastes the previous dictation** (was copy-only). Config key renamed
+  `copyLastOnSideButtonDouble` → `pasteLastOnSideButtonDouble`; the old key still decodes.
+- **Keyboard trigger:** `dictation.keyboardShortcut` (empty = off), recorded in Settings → Voice →
+  Keyboard Trigger. Hold to dictate, release to finish -- the same prime/+200 ms/finish sequence as
+  the side button. Chords swallow their main key; modifier-only shortcuts (`ropt`) are
+  side-specific, never swallowed, and abandoned untranscribed if another key joins. The tap runs on
+  its own thread and ignores HyperVibe's own synthetic events. Only active while native Voice owns
+  dictation.
+
+Verification: SiriRemoteCore **136/136**; packaged native Voice self-test **146/146** (22 new);
+`git diff --check` clean. The uncommitted 2026-09-22 changes below are still uncommitted and are
+included in this build.
+
+### ⚡ LATEST — 2026-09-22: Voice socket crash and release-tail loss fixed locally
+
+- The repeated “App/voice orb disappeared” failure was a real build 70 crash, not a HUD rendering
+  failure. Crash reports consistently ended in `CheckedContinuation.resume(throwing:)` from
+  `VoiceRealtimeTranscriptionSession.ping()`: during WebSocket teardown, the URLSession ping
+  completion could arrive more than once. The callback now passes through a lock-protected
+  one-shot gate, so its checked continuation is resumed exactly once even under concurrent or
+  duplicate callbacks.
+- Releasing the remote immediately after speaking no longer closes capture before the final
+  BLE/logger frames reach the shared audio ring. Established valid remote utterances now drain
+  until the ring has been quiet for 120 ms, with a strict 320 ms ceiling. Short/cancelled turns and
+  built-in microphone capture still stop immediately, so the existing minimum-duration behavior
+  and local-microphone latency are unchanged.
+- Local build **71** / **`1.0.0-local.71`** is installed at `/Applications/HyperVibe.app`. The
+  candidate and installed bundles passed deep/strict verification and retain the unchanged stable
+  Designated Requirement leaf fingerprint
+  `80F746BD1DE5A7CEB835A200CE4E43705F01AEE6`; their main executables compare byte-for-byte equal.
+  The dedicated signing keychain was recovered and unlocked without exposing, logging, or
+  persisting its password.
+- Verification: optimized App build; SiriRemoteCore **134/134**; packaged native Voice
+  **124/124**, including concurrent one-shot completion and remote-tail timing boundaries; and
+  `git diff --check`. At final verification there was exactly one UI process, PID **61851**, at
+  `/Applications/HyperVibe.app/Contents/MacOS/HyperVibe`, and no new HyperVibe crash report.
+  Build 70 remains recoverable under
+  `/private/tmp/hypervibe-before71.QvUmGw/InstalledBuild70.app` (with an additional untouched copy
+  at `/private/tmp/hypervibe-before71.QvUmGw/HyperVibe.app`).
+- LaunchServices had retained a workspace-bundle registration and initially activated
+  `app/HyperVibe.app` when given a non-fresh open request. That stray process was stopped; use
+  `open -n /Applications/HyperVibe.app` for local handoff and always confirm the executable path,
+  as required by `AGENTS.md`.
 
 ### ⚡ LATEST — 2026-09-02: beta.8 published + authenticated update path verified
 

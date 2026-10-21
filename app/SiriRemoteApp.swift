@@ -41,6 +41,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var builtinMicFeeder: BuiltinMicFeeder?
     /// App-native low-latency speech-to-text. Separate from the legacy external PTT hotkey route.
     private var voiceDictation: VoiceDictationCoordinator?
+    /// Optional global shortcut that drives Voice like holding the side button.
+    private var keyboardDictation: KeyboardDictationTrigger?
     /// Pre-rendered, paired native-Voice edge sounds. The existing Layer 1 external workflow keeps
     /// owning its own feedback, so HyperVibe plays these only for native Layer 2/3 sessions.
     private var voiceFeedbackSound: VoiceFeedbackSound?
@@ -1512,13 +1514,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         remoteInputHandler?.onNativeDictationMisconfigured = { [weak dictation] in
             dictation?.reportConfigurationError(VoiceAPIError.missingOpenAIKeyMessage)
         }
-        remoteInputHandler?.shouldCopyLastNativeDictationOnDouble = { [weak model] in
+        remoteInputHandler?.shouldPasteLastNativeDictationOnDouble = { [weak model] in
             guard let settings = model?.tune.dictation else { return false }
-            return settings.copyLastOnSideButtonDouble
+            return settings.pasteLastOnSideButtonDouble
                 && settings.resolvedOutputMode(for: nil) != nil
         }
-        remoteInputHandler?.onCopyLastNativeDictation = { [weak dictation] in
-            dictation?.copyLastTranscript() == true
+        remoteInputHandler?.onPasteLastNativeDictation = { [weak dictation, weak model] in
+            guard let settings = model?.tune.dictation.resolvedSettings(for: nil) else { return }
+            dictation?.pasteLastTranscript(settings: settings)
+        }
+
+        // The keyboard toggles hands-free capture; the remote retains hold-to-talk. Both use the
+        // same coordinator, HUD and delivery path.
+        let keyboard = KeyboardDictationTrigger()
+        keyboardDictation = keyboard
+        keyboard.onPrime = { [weak dictation, weak model] in
+            guard let dictation,
+                  let settings = model?.tune.dictation.resolvedSettings(for: nil) else { return false }
+            let handled = Controller.HandledAction(
+                key: "keyboard.voice", action: .pushToTalk(keys: ""),
+                presentation: .init(label: L("Voice Input"), icon: "keyboard")
+            )
+            switch dictation.prime(handled, settings: settings) {
+            case .accepted:
+                return true
+            case .misconfigured:
+                dictation.reportConfigurationError(VoiceAPIError.missingOpenAIKeyMessage)
+                return false
+            case .busy, .unavailable:
+                return false
+            }
+        }
+        keyboard.onBegin = { [weak dictation] in dictation?.beginListening() }
+        keyboard.onCancel = { [weak dictation] in dictation?.cancelPrime() }
+        keyboard.onEnd = { [weak dictation] in dictation?.finishListening() }
+        keyboard.onAbandon = { [weak dictation] in dictation?.abandonListening() }
+        keyboard.onEscape = { [weak dictation] in dictation?.cancelCurrentTurn() }
+        dictation.onActivityChanged = { [weak keyboard] active in
+            keyboard?.setCancellationActive(active)
         }
         remoteInputHandler?.shouldUseVoiceModeCycleChord = { [weak model] in
             model?.tune.dictation.enabled == true
@@ -1539,8 +1572,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             pipelineHUD?.showVoiceModeSwitch(next)
             print("🎙 Voice mode → \(next.rawValue) (Mute + Side)")
         }
-        dictation.onMeteringChanged = { [weak self] active in
+        dictation.onMeteringChanged = { [weak self, weak keyboard] active in
             self?.builtinMicFeeder?.setVoiceMetering(active)
+            if !active { keyboard?.captureEnded() }
         }
         dictation.onListeningBegan = {
             [weak persistentStatus, weak pipelineHUD, weak model, weak voiceFeedback] handled in
@@ -1743,6 +1777,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Push cursor-feel settings from config into the touch handler (also called on hot reload).
     /// Push UI tuning values into the running touch handler (initial + on every settings change).
     private func applyTune(_ t: TuneSettings) {
+        // Only claim the keyboard while native Voice actually owns dictation; an external route
+        // (another dictation app's hotkey) must not have its keys swallowed by an idle trigger.
+        let nativeVoice = t.dictation.resolvedOutputMode(for: nil) != nil
+        keyboardDictation?.setShortcut(nativeVoice ? t.dictation.keyboardShortcut : "")
         prepareVoiceDictionary(t.dictation.dictionary)
         if t.dictation.enabled { builtinMicFeeder?.prepareVoiceCapture() }
         // Settings callbacks are intentionally plain closures, while the latency state machine is

@@ -10,7 +10,11 @@ import IOKit
 import IOKit.hid
 
 /// Append diagnostic line to /tmp/hypervibe.log (unified-log redacts NSLog under hardened runtime).
+private let rmDebugLock = NSLock()
+
 func rmDebug(_ msg: String) {
+    rmDebugLock.lock()
+    defer { rmDebugLock.unlock() }
     let line = "\(Date()) \(msg)\n"
     if let data = line.data(using: .utf8) {
         let path = "/tmp/hypervibe.log"

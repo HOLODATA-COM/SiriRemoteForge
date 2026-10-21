@@ -85,9 +85,9 @@ enum VoiceDictationPresentationPolicy {
         switch outcome {
         case .inserted:
             return mode == .final ? .inserted : nil
-        case .copied:
+        case .copied, .pasteSent:
             return .copied
-        case .focusChanged, .secureField, .unavailable:
+        case .focusChanged, .secureField, .unavailable, .unconfirmed:
             return .error
         }
     }
@@ -104,6 +104,44 @@ struct VoiceLatencyMetrics: Equatable {
     var insertionMilliseconds: Double?
 
     static let empty = VoiceLatencyMetrics()
+}
+
+/// How long the optional LLM polish may hold a finished transcript before it is delivered as-is.
+/// Polishing refines text; it is never a reason to keep text from the caret. Without a budget a
+/// stalled cleanup provider held every turn for its full 20 s request timeout, by which point the
+/// user had usually moved focus and the turn ended on the clipboard instead of in the editor.
+/// Longer dictations get proportionally longer, up to a fixed ceiling.
+enum VoiceCleanupBudget {
+    static func seconds(forCharacterCount count: Int) -> Double {
+        min(8, 3 + Double(max(0, count)) / 250)
+    }
+}
+
+/// Await an operation for at most `seconds`. On timeout it is cancelled and abandoned rather than
+/// awaited, so work that ignores cooperative cancellation -- a stalled HTTP request -- still cannot
+/// hold the caller past the deadline. Returns nil on timeout.
+enum VoiceDeadline {
+    static func value<T>(within seconds: Double,
+                         _ operation: @escaping () async -> T) async -> T? {
+        let work = Task { await operation() }
+        let gate = VoiceOneShotCompletionGate()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+            let timer = Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+                if gate.claim() {
+                    work.cancel()
+                    continuation.resume(returning: nil)
+                }
+            }
+            Task {
+                let value = await work.value
+                if gate.claim() {
+                    timer.cancel()
+                    continuation.resume(returning: value)
+                }
+            }
+        }
+    }
 }
 
 final class VoiceRuntimeModel: ObservableObject {
@@ -243,6 +281,12 @@ final class VoiceDictationCoordinator {
         var replacementDecisionPending = false
         var replacementDecisionContinuation: CheckedContinuation<Void, Never>?
         var metrics = VoiceLatencyMetrics.empty
+        /// Recorded for the per-turn log line, so a slow turn says which stage was slow.
+        var usedRESTFallback = false
+        var cleanupTimedOut = false
+        var diagnosticStage = "priming"
+        var terminalLogged = false
+        var recoveryText = ""
 
         init(id: UUID, handled: Controller.HandledAction,
              settings: Config.DictationSettings, target: VoiceTextTarget?,
@@ -280,8 +324,9 @@ final class VoiceDictationCoordinator {
     private let processor = VoiceTextProcessor()
     private let deliverer = VoiceTextDeliverer()
     private let correctionMonitor = VoiceCorrectionMonitor()
-    private var active: Session?
-    private var pendingReplacement: Session?
+    var onActivityChanged: ((Bool) -> Void)?
+    private var active: Session? { didSet { onActivityChanged?(isActive) } }
+    private var pendingReplacement: Session? { didSet { onActivityChanged?(isActive) } }
     private var lastTranscript = ""
     /// Keep one prepared socket for each route the configured layers can actually select. There
     /// are only two output modes, so this removes the first-press-after-layer-switch handshake
@@ -403,6 +448,7 @@ final class VoiceDictationCoordinator {
         let session = Session(id: id, handled: handled, settings: settings,
                               target: nil, promptContext: promptContext,
                               pressNanoseconds: pressedAt, capture: capture)
+        rmDebug("🎙 voice turn begin id=\(id) trigger=\(handled.key) mode=\(settings.outputMode.rawValue)")
         // A temporarily unavailable frontmost target is not a reason to discard a whole Voice
         // turn. Final delivery already has a lossless no-target route: generate the text and copy
         // it. Selection detection, when possible, is resolved asynchronously below.
@@ -559,6 +605,7 @@ final class VoiceDictationCoordinator {
     /// same turn as a paired failure, but never wait for key-up and never reinterpret it as dictation.
     private func rejectVisibleSession(_ session: Session, message: String) {
         guard active?.id == session.id else { return }
+        recordTerminal(session, outcome: "rejected", reason: "target-or-configuration")
         active = nil
         releaseRealtimeDrainWaiter(session)
         session.deltaFlushWork?.cancel()
@@ -652,7 +699,8 @@ final class VoiceDictationCoordinator {
 
     /// Tear down every asynchronous owner of a session. `active` is deliberately managed by the
     /// caller so replacement can invalidate the old UUID before any cancelled task resumes.
-    private func cancelResources(_ session: Session) {
+    private func cancelResources(_ session: Session, reason: String = "cancelled") {
+        recordTerminal(session, outcome: "cancelled", reason: reason)
         releaseRealtimeDrainWaiter(session)
         resolveReplacementDecision(session)
         session.deltaFlushWork?.cancel()
@@ -673,7 +721,7 @@ final class VoiceDictationCoordinator {
         // UUID invalidation comes first. Every post-await delivery guard then rejects the old turn,
         // even when its HTTP/WebSocket operation ignores cooperative Task cancellation.
         active = nil
-        cancelResources(session)
+        cancelResources(session, reason: "replaced")
         runtime.livePreview = ""
         rmDebug("🎙 voice processing cancelled old=\(session.id)")
     }
@@ -729,6 +777,87 @@ final class VoiceDictationCoordinator {
         session.processingTask = processingTask
     }
 
+    /// Re-deliver the most recent dictation into whatever has focus now. This is the recovery path
+    /// for a turn that did not land -- focus moved, the editor was busy, the text went to the
+    /// clipboard: one double-press puts it where the user is looking, through the same guarded
+    /// paste → AX → Unicode chain as a normal turn, and only falls back to the clipboard if all
+    /// of those fail. It never interleaves with a live turn.
+    func pasteLastTranscript(settings: Config.DictationSettings) {
+        guard active == nil, pendingReplacement == nil else { return }
+        guard !lastTranscript.isEmpty else {
+            transition(.error, message: L("There is no previous dictation to paste."))
+            scheduleIdle(after: 1.6)
+            return
+        }
+        let text = lastTranscript
+        guard let seed = deliverer.captureTargetSeed() else {
+            reportPasteLast(deliverer.copy(text))
+            return
+        }
+        var delivery = settings
+        delivery.autoInsert = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let target = await self.deliverer.resolveTargetForVoice(seed, detectSelection: false)
+            let outcome = await self.deliverer.deliverFinal(text, to: target, settings: delivery,
+                beforeDispatch: { self.active == nil && self.pendingReplacement == nil && !Task.isCancelled })
+            rmDebug("📝 voice paste-previous outcome=\(outcome) chars=\(text.count)")
+            self.reportPasteLast(outcome)
+        }
+    }
+
+    private func reportPasteLast(_ outcome: VoiceTextDeliveryOutcome) {
+        // A new turn may have started while this delivery was in flight; its HUD wins.
+        guard active == nil, pendingReplacement == nil else { return }
+        switch outcome {
+        case .pasteSent:
+            transition(.copied, message: L("Insertion unconfirmed · result kept on clipboard"))
+            scheduleIdle(after: 3.2)
+        case .inserted:
+            transition(.inserted, message: L("Previous dictation pasted"))
+            scheduleIdle(after: 1.0)
+        case .copied:
+            transition(.copied, message: L("Couldn't paste here · previous dictation copied"))
+            scheduleIdle(after: 2.6)
+        case .focusChanged, .secureField, .unavailable, .unconfirmed:
+            transition(.error, message: L("The previous dictation couldn't be pasted."))
+            scheduleIdle(after: 2.2)
+        }
+    }
+
+    /// End a promoted turn that turned out not to be dictation -- a keyboard shortcut whose
+    /// modifier was really the start of an ordinary chord such as Command-Tab. Nothing captured is
+    /// transcribed or delivered. Before promotion this is exactly `cancelPrime`.
+    func abandonListening() {
+        guard let session = active, session.promoted, session.releasedNanoseconds == nil else {
+            cancelPrime()
+            return
+        }
+        active = nil
+        cancelResources(session)
+        onMeteringChanged?(false)
+        onListeningEnded?(session.handled.key)
+        runtime.livePreview = ""
+        transition(.idle, message: "")
+        startPrewarmIfNeeded()
+        rmDebug("🎙 voice turn abandoned before release (shortcut joined another chord)")
+    }
+
+    /// Escape invalidates both generations before any cancelled network task can deliver text.
+    func cancelCurrentTurn() {
+        let sessions = [active, pendingReplacement].compactMap { $0 }
+        guard !sessions.isEmpty else { return }
+        active = nil
+        pendingReplacement = nil
+        for session in sessions { cancelResources(session, reason: "escape") }
+        onMeteringChanged?(false)
+        for session in sessions where session.promoted { onListeningEnded?(session.handled.key) }
+        runtime.livePreview = ""
+        transition(.idle, message: L("Dictation was cancelled."))
+        startPrewarmIfNeeded()
+        rmDebug("🎙 voice turn cancelled by Escape")
+    }
+
     @discardableResult
     func copyLastTranscript() -> Bool {
         guard !lastTranscript.isEmpty else {
@@ -749,6 +878,7 @@ final class VoiceDictationCoordinator {
         guard active?.id == session.id else { return }
         session.metrics.audioSource = audio.source.rawValue
         session.metrics.audioDurationMilliseconds = audio.duration * 1_000
+        session.diagnosticStage = "capture-ended"
         rmDebug(String(format: "🎙 voice capture source=%@ duration=%.3fs frames=%d rms=%.6f",
                        audio.source.rawValue, audio.duration, audio.frameCount,
                        sqrt(max(0, audio.meanSquare))))
@@ -758,6 +888,7 @@ final class VoiceDictationCoordinator {
             return
         }
         session.minimumDurationReached = true
+        session.diagnosticStage = "transcribing"
         if case .resolvingSelection = session.purpose,
            let targetTask = session.targetTask {
             targetDidResolve(await targetTask.value, for: session)
@@ -798,6 +929,7 @@ final class VoiceDictationCoordinator {
             await fail(session, error: VoiceTranscriptionError.invalidAudio)
             return
         }
+        if session.purpose.isDictation { session.recoveryText = transcript }
 
         if case .selectionEdit(let original, let canReplace) = session.purpose {
             await completeSelectionEdit(session, selectedText: original,
@@ -808,12 +940,11 @@ final class VoiceDictationCoordinator {
         let finalText: String
         var warning: String?
         if session.settings.outputMode == .final {
+            session.diagnosticStage = "polishing"
             transition(.polishing, message: session.settings.cleanupProvider == .none
                        ? L("Applying dictionary…") : L("Polishing transcript…"))
             let cleanupStart = DispatchTime.now().uptimeNanoseconds
-            let result = await processor.processFinal(
-                transcript, settings: session.settings, context: session.promptContext
-            )
+            let result = await boundedCleanup(transcript, session: session)
             let cleanupEnd = DispatchTime.now().uptimeNanoseconds
             session.metrics.cleanupMilliseconds = Self.milliseconds(cleanupStart, cleanupEnd)
             finalText = result.text
@@ -829,6 +960,7 @@ final class VoiceDictationCoordinator {
         await waitForReplacementDecision(session)
         guard active?.id == session.id, !historyText.isEmpty else { return }
         lastTranscript = historyText
+        session.recoveryText = historyText
         runtime.hasLastTranscript = true
         if VoiceDictationPresentationPolicy.showsInsertionProgress(
             for: session.settings.outputMode
@@ -842,15 +974,28 @@ final class VoiceDictationCoordinator {
         }
         guard active?.id == session.id else { return }
         let insertionStart = DispatchTime.now().uptimeNanoseconds
+        session.diagnosticStage = "inserting"
         let outcome: VoiceTextDeliveryOutcome
         if session.settings.outputMode == .streaming {
             outcome = await finishStreamingDelivery(finalText, session: session)
         } else {
             outcome = await deliverer.deliverFinal(finalText, to: session.target,
-                                                   settings: session.settings)
+                settings: session.settings, deliveryID: session.id,
+                beforeDispatch: { [weak self, weak session] in
+                    guard let self, let session else { return false }
+                    await self.waitForReplacementDecision(session)
+                    return self.active?.id == session.id && !Task.isCancelled
+                })
         }
+        guard active?.id == session.id, !Task.isCancelled else { return }
         let insertionEnd = DispatchTime.now().uptimeNanoseconds
         session.metrics.insertionMilliseconds = Self.milliseconds(insertionStart, insertionEnd)
+        rmDebug(Self.turnSummary(session.metrics, outcome: outcome,
+                                 restFallback: session.usedRESTFallback,
+                                 cleanupTimedOut: session.cleanupTimedOut,
+                                 characters: historyText.count))
+        recordTerminal(session, outcome: "\(outcome)",
+                       reason: VoiceTextDeliverer.diagnosticFingerprint(historyText))
         if outcome.wasDelivered {
             let recordID = processor.remember(
                 sourceTranscript: transcript, finalText: historyText,
@@ -870,8 +1015,13 @@ final class VoiceDictationCoordinator {
 
         let baseMessage: String
         switch outcome {
+        case .pasteSent: baseMessage = L("Insertion unconfirmed · result kept on clipboard")
+        case .unconfirmed: baseMessage = L("Insertion unconfirmed · use Voice to copy the result")
         case .inserted: baseMessage = L("Dictation inserted")
-        case .copied: baseMessage = L("Insertion was unavailable · copied instead")
+        case .copied:
+            baseMessage = session.settings.pasteLastOnSideButtonDouble
+                ? L("Not inserted · copied · double-press the side button to paste")
+                : L("Insertion was unavailable · copied instead")
         case .focusChanged: baseMessage = L("Target changed before insertion")
         case .secureField: baseMessage = L("Secure fields are not modified")
         case .unavailable: baseMessage = L("Text could not be delivered")
@@ -881,15 +1031,56 @@ final class VoiceDictationCoordinator {
         ) {
             let message = warning.map { "\(baseMessage) · \($0)" } ?? baseMessage
             transition(phase, message: message)
-            scheduleIdle(after: outcome.wasDelivered ? 1.0 : 2.2)
+            // `.copied` counts as delivered, but the user still has to act on it. One second was
+            // easy to miss, which is how a clipboard-only turn came to feel like a lost one.
+            scheduleIdle(after: outcome == .inserted ? 1.0 : 3.2)
         }
         startPrewarmIfNeeded()
+    }
+
+    /// One line per finished turn. Before this, a 21 s turn left no trace between "capture ended"
+    /// and "delivery began", so live-socket stalls and slow polishing were indistinguishable.
+    static func turnSummary(_ m: VoiceLatencyMetrics, outcome: VoiceTextDeliveryOutcome,
+                            restFallback: Bool, cleanupTimedOut: Bool, characters: Int) -> String {
+        func ms(_ value: Double?) -> String { value.map { String(format: "%.0fms", $0) } ?? "-" }
+        let spoke = m.audioDurationMilliseconds.map { String(format: "%.1fs", $0 / 1_000) } ?? "-"
+        return "🎙 voice turn outcome=\(outcome) source=\(m.audioSource ?? "-") spoke=\(spoke) "
+            + "transcript=\(ms(m.releaseToTranscriptMilliseconds))\(restFallback ? "(rest)" : "") "
+            + "polish=\(ms(m.cleanupMilliseconds))\(cleanupTimedOut ? "(over-budget)" : "") "
+            + "insert=\(ms(m.insertionMilliseconds)) chars=\(characters)"
+    }
+
+    /// Polish within `VoiceCleanupBudget`; past it, deliver the dictionary-corrected transcript now.
+    private func boundedCleanup(_ transcript: String, session: Session) async -> VoiceCleanupResult {
+        let settings = session.settings
+        let context = session.promptContext
+        let processor = self.processor
+        guard settings.cleanupProvider != .none else {
+            return await processor.processFinal(transcript, settings: settings, context: context)
+        }
+        let budget = VoiceCleanupBudget.seconds(forCharacterCount: transcript.count)
+        if let polished = await VoiceDeadline.value(within: budget, {
+            await processor.processFinal(transcript, settings: settings, context: context)
+        }) {
+            return polished
+        }
+        session.cleanupTimedOut = true
+        rmDebug(String(format: "🎙 voice polish exceeded %.1fs budget; delivering the unpolished transcript",
+                       budget))
+        var local = settings
+        local.cleanupProvider = .none
+        let plain = await processor.processFinal(transcript, settings: local, context: context)
+        return VoiceCleanupResult(
+            text: plain.text, usedCloudCleanup: false,
+            warning: L("Polishing was slow, so the unpolished transcript was used")
+        )
     }
 
     private func completeSelectionEdit(_ session: Session, selectedText: String,
                                        instruction: String, canReplace: Bool) async {
         guard active?.id == session.id, let target = session.target else { return }
         transition(.rewriting, message: L("Applying your instruction to the selection…"))
+        session.diagnosticStage = "rewriting"
         let processingStart = DispatchTime.now().uptimeNanoseconds
         let replacement: String
         do {
@@ -910,6 +1101,7 @@ final class VoiceDictationCoordinator {
         guard active?.id == session.id else { return }
 
         let insertionStart = DispatchTime.now().uptimeNanoseconds
+        session.diagnosticStage = "replacing"
         let outcome: VoiceSelectionReplacementOutcome?
         if session.settings.autoInsert, canReplace {
             outcome = await deliverer.replaceSelection(
@@ -919,6 +1111,8 @@ final class VoiceDictationCoordinator {
         } else {
             outcome = nil
         }
+        guard active?.id == session.id, !Task.isCancelled else { return }
+        recordTerminal(session, outcome: "selection-\(outcome.map { String(describing: $0) } ?? "copy")")
         session.metrics.insertionMilliseconds = Self.milliseconds(
             insertionStart, DispatchTime.now().uptimeNanoseconds
         )
@@ -946,10 +1140,11 @@ final class VoiceDictationCoordinator {
                 case .readOnly?: reason = L("The selected text became read-only")
                 case .secureField?: reason = L("The target became a secure field")
                 case .accessibilityUnavailable?: reason = L("Accessibility replacement failed")
+                case .unconfirmed?: reason = L("Insertion unconfirmed · check the selection")
                 case .replaced?, nil: reason = L("Selection replacement was unavailable")
                 }
             }
-            if deliverer.copy(replacement) == .copied {
+            if deliverer.copy(replacement, deliveryID: session.id) == .copied {
                 transition(.copied, message: L("%@ · rewrite copied", reason))
                 scheduleIdle(after: 1.4)
             } else {
@@ -985,6 +1180,8 @@ final class VoiceDictationCoordinator {
             // after a transient WebSocket failure rather than asking the user to repeat it. Start
             // the REST request immediately, cancel the live socket, and reconcile only after the
             // receive loop has drained every callback. Network latency and draining overlap.
+            rmDebug("🎙 voice live result unavailable id=\(session.id) \(Self.failureDiagnostic(error)); REST fallback with the full buffer")
+            let fallbackStart = DispatchTime.now().uptimeNanoseconds
             let fallback = Task { [transcription] in
                 try await transcription.transcribeFinal(
                     audio,
@@ -999,7 +1196,16 @@ final class VoiceDictationCoordinator {
                 session.realtimeTask?.cancel()
             }
             await waitForRealtimeDrain(session)
-            return try await fallback.value
+            do {
+                let text = try await fallback.value
+                session.usedRESTFallback = true
+                rmDebug(String(format: "🎙 voice REST fallback answered in %.0f ms",
+                               Self.milliseconds(fallbackStart, DispatchTime.now().uptimeNanoseconds)))
+                return text
+            } catch {
+                rmDebug("🎙 voice REST fallback failed id=\(session.id) \(Self.failureDiagnostic(error))")
+                throw error
+            }
         }
     }
 
@@ -1163,6 +1369,7 @@ final class VoiceDictationCoordinator {
 
     private func fail(_ session: Session, error: Error) async {
         guard active?.id == session.id else { return }
+        recordTerminal(session, outcome: "failed", reason: Self.failureDiagnostic(error))
         releaseRealtimeDrainWaiter(session)
         session.deltaFlushWork?.cancel()
         session.targetTask?.cancel()
@@ -1170,6 +1377,12 @@ final class VoiceDictationCoordinator {
         session.realtimeTask?.cancel()
         session.pumpTask?.cancel()
         if let live = try? await session.realtimeTask?.value { await live.cancel() }
+        guard active?.id == session.id else { return }
+        if !session.recoveryText.isEmpty, session.purpose.isDictation {
+            lastTranscript = session.recoveryText
+            runtime.hasLastTranscript = true
+            _ = deliverer.copy(session.recoveryText, deliveryID: session.id)
+        }
         runtime.lastMetrics = session.metrics
         runtime.livePreview = ""
         active = nil
@@ -1181,6 +1394,7 @@ final class VoiceDictationCoordinator {
 
     private func discardShortCapture(_ session: Session) async {
         guard active?.id == session.id else { return }
+        recordTerminal(session, outcome: "discarded", reason: "below-minimum")
         releaseRealtimeDrainWaiter(session)
         session.deltaFlushWork?.cancel()
         session.targetTask?.cancel()
@@ -1188,6 +1402,7 @@ final class VoiceDictationCoordinator {
         session.realtimeTask?.cancel()
         session.pumpTask?.cancel()
         if let live = try? await session.realtimeTask?.value { await live.cancel() }
+        guard active?.id == session.id else { return }
         runtime.lastMetrics = session.metrics
         runtime.livePreview = ""
         active = nil
@@ -1195,6 +1410,29 @@ final class VoiceDictationCoordinator {
         onShortCaptureDiscarded?()
         transition(.idle, message: "")
         startPrewarmIfNeeded()
+    }
+
+    static func failureDiagnostic(_ error: Error) -> String {
+        // Never log provider response bodies, spoken text, URLs, API keys or NSError userInfo.
+        if let voice = error as? VoiceTranscriptionError {
+            switch voice {
+            case .missingCredential: return "kind=missing-credential"
+            case .invalidAudio: return "kind=invalid-audio"
+            case .invalidResponse: return "kind=invalid-response"
+            case .service: return "kind=provider-service"
+            case .timedOut: return "kind=timeout"
+            case .cancelled: return "kind=cancelled"
+            }
+        }
+        return "kind=\(String(reflecting: type(of: error))) code=\((error as NSError).code)"
+    }
+
+    private func recordTerminal(_ session: Session, outcome: String, reason: String = "") {
+        guard !session.terminalLogged else { return }
+        session.terminalLogged = true
+        let elapsed = Self.milliseconds(session.pressNanoseconds, DispatchTime.now().uptimeNanoseconds)
+        rmDebug("🎙 voice terminal id=\(session.id) outcome=\(outcome) stage=\(session.diagnosticStage) "
+                + "elapsed=\(Int(elapsed))ms source=\(session.metrics.audioSource ?? "-") " + reason)
     }
 
     private func makeRealtimeTask(

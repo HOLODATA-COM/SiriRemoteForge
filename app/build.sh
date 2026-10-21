@@ -26,6 +26,7 @@ SWIFT_FILES=(
     "VoiceTextProcessing.swift"
     "VoiceTextDelivery.swift"
     "VoiceDictationCoordinator.swift"
+    "KeyboardDictationTrigger.swift"
     "VoicePipelinePresentation.swift"
     "VoicePipelineHUD.swift"
     "ThinkingOrbEngine.swift"

@@ -167,12 +167,13 @@ enum ConfigStore {
           "autoInsert": true,
           "copyOnFailure": true, // compatibility field; failed delivery is always copied
           "restoreClipboardAfterInsert": true,
-          "copyLastOnSideButtonDouble": true,
+          "pasteLastOnSideButtonDouble": true,
+          "keyboardShortcut": "",
           "feedbackSoundsEnabled": true,
           "feedbackSoundVolume": 0.55,
           "pipelineOverlayEnabled": true,
           "minimumRecordingSeconds": 1,
-          "maxRecordingSeconds": 120,
+          "maxRecordingSeconds": 600,
           "dictionary": [
             { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] },
             { "term": "layer", "aliases": [] },

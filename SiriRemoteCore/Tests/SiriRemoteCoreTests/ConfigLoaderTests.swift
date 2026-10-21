@@ -174,7 +174,7 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(defaults.settings.dictation.cleanupProvider, .deepSeek)
         XCTAssertTrue(defaults.settings.dictation.selectionEditingEnabled)
         XCTAssertEqual(defaults.settings.dictation.selectionEditProvider, .deepSeek)
-        XCTAssertTrue(defaults.settings.dictation.copyLastOnSideButtonDouble)
+        XCTAssertTrue(defaults.settings.dictation.pasteLastOnSideButtonDouble)
         XCTAssertTrue(defaults.settings.dictation.feedbackSoundsEnabled)
         XCTAssertEqual(defaults.settings.dictation.feedbackSoundVolume, 0.55)
         XCTAssertTrue(defaults.settings.dictation.pipelineOverlayEnabled)
@@ -192,7 +192,7 @@ final class ConfigLoaderTests: XCTestCase {
             "openAICleanupModel": "clean-a", "deepSeekCleanupModel": "clean-d",
             "autoInsert": false, "copyOnFailure": false,
             "restoreClipboardAfterInsert": false,
-            "copyLastOnSideButtonDouble": false,
+            "pasteLastOnSideButtonDouble": false,
             "feedbackSoundsEnabled": false, "feedbackSoundVolume": 0.32,
             "pipelineOverlayEnabled": false,
             "minimumRecordingSeconds": 1.5,
@@ -211,7 +211,7 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertFalse(voice.autoInsert)
         XCTAssertTrue(voice.copyOnFailure, "failed delivery is always recovered to the clipboard")
         XCTAssertFalse(voice.restoreClipboardAfterInsert)
-        XCTAssertFalse(voice.copyLastOnSideButtonDouble)
+        XCTAssertFalse(voice.pasteLastOnSideButtonDouble)
         XCTAssertFalse(voice.feedbackSoundsEnabled)
         XCTAssertEqual(voice.feedbackSoundVolume, 0.32)
         XCTAssertFalse(voice.pipelineOverlayEnabled)
@@ -257,6 +257,33 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertTrue(voice.pipelineOverlayEnabled)
         XCTAssertEqual(voice.minimumRecordingSeconds, 1)
         XCTAssertEqual(voice.resolvedOutputMode(for: "BASE"), .streaming)
+        XCTAssertTrue(voice.pasteLastOnSideButtonDouble)
+        XCTAssertEqual(voice.keyboardShortcut, "") // keyboard trigger is opt-in
+    }
+
+    func testSideButtonDoubleMigratesFromLegacyCopyKey() throws {
+        func load(_ fields: String) throws -> Config.DictationSettings {
+            try ConfigLoader.load("""
+            { "settings": { "defaultMode": "g", "dictation": { \(fields) } },
+              "modes": { "g": {} } }
+            """).settings.dictation
+        }
+        // Configs written before the rename keep the user's choice.
+        XCTAssertFalse(try load(#""copyLastOnSideButtonDouble": false"#).pasteLastOnSideButtonDouble)
+        XCTAssertTrue(try load(#""copyLastOnSideButtonDouble": true"#).pasteLastOnSideButtonDouble)
+        // The new key wins when both are present.
+        XCTAssertTrue(try load(#""copyLastOnSideButtonDouble": false, "pasteLastOnSideButtonDouble": true"#)
+            .pasteLastOnSideButtonDouble)
+    }
+
+    func testRenamedSideButtonKeyIsWrittenBackUnderItsNewName() throws {
+        var voice = Config.DictationSettings()
+        voice.pasteLastOnSideButtonDouble = false
+        voice.keyboardShortcut = "rcmd"
+        let json = String(decoding: try JSONEncoder().encode(voice), as: UTF8.self)
+        XCTAssertTrue(json.contains("\"pasteLastOnSideButtonDouble\":false"))
+        XCTAssertTrue(json.contains("\"keyboardShortcut\":\"rcmd\""))
+        XCTAssertFalse(json.contains("copyLastOnSideButtonDouble"))
     }
 
     func testDictationValidationRejectsUnsafeOrAmbiguousValues() {

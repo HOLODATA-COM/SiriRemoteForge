@@ -39,6 +39,32 @@ enum VoiceRemoteProbePolicy {
     }
 }
 
+/// A Siri Remote releases its physical microphone before the final BLE/logger frames necessarily
+/// reach the shared audio ring. Keep only an established, valid remote utterance open until the
+/// ring has stayed quiet briefly, with a hard cap so a broken producer can never stall dictation.
+enum VoiceRemoteTailDrainPolicy {
+    static let quietWindowNanoseconds: UInt64 = 120_000_000
+    static let maximumWaitNanoseconds: UInt64 = 320_000_000
+
+    static func shouldDrain(
+        source: VoiceCapturedAudio.Source?,
+        capturedFrames: Int,
+        minimumFrames: Int
+    ) -> Bool {
+        source == .remote && capturedFrames >= minimumFrames
+    }
+
+    static func shouldFinish(
+        now: UInt64,
+        startedAt: UInt64,
+        lastAdvanceAt: UInt64
+    ) -> Bool {
+        guard now >= startedAt, now >= lastAdvanceAt else { return false }
+        return now - startedAt >= maximumWaitNanoseconds
+            || now - lastAdvanceAt >= quietWindowNanoseconds
+    }
+}
+
 /// All mutable state is confined to `queue`; public methods only enqueue work or consume the
 /// single-producer AsyncStream.
 final class VoiceAudioCaptureSession: @unchecked Sendable {
@@ -59,6 +85,9 @@ final class VoiceAudioCaptureSession: @unchecked Sendable {
     private var startedAtNanoseconds: UInt64 = 0
     private var stopped = false
     private var source: VoiceCapturedAudio.Source?
+    private var stopWaiters: [CheckedContinuation<VoiceCapturedAudio, Never>] = []
+    private var tailDrainStartedAtNanoseconds: UInt64?
+    private var lastRemoteAdvanceAtNanoseconds: UInt64?
 
     private var builtinCursor: UInt64 = 0
     private var remoteCursor: UInt64 = 0
@@ -96,12 +125,12 @@ final class VoiceAudioCaptureSession: @unchecked Sendable {
          onMaximumDuration: @escaping () -> Void,
          onFirstAudioChunk: @escaping () -> Void = {}) {
         self.minimumDuration = max(0, minimumDuration)
-        self.maxDuration = max(1, maxDuration)
+        self.maxDuration = maxDuration.isFinite ? min(600, max(1, maxDuration)) : 600
         self.onMinimumDurationReached = onMinimumDurationReached
         self.onMaximumDuration = onMaximumDuration
         self.onFirstAudioChunk = onFirstAudioChunk
         var localContinuation: AsyncStream<Data>.Continuation!
-        // At the 120 s hard limit this is still only ~5.8 MB of PCM. Unbounded buffering avoids
+        // At the 600 s hard limit this is still only ~28.8 MB of PCM. Unbounded buffering avoids
         // dropping the beginning of an utterance if TLS/WebSocket setup is unusually slow.
         chunks = AsyncStream<Data>(bufferingPolicy: .unbounded) {
             localContinuation = $0
@@ -126,7 +155,12 @@ final class VoiceAudioCaptureSession: @unchecked Sendable {
                     ))
                     return
                 }
-                continuation.resume(returning: self.stopOnQueue())
+                if self.stopped {
+                    continuation.resume(returning: self.snapshotOnQueue())
+                    return
+                }
+                self.stopWaiters.append(continuation)
+                self.requestStopOnQueue()
             }
         }
     }
@@ -166,14 +200,18 @@ final class VoiceAudioCaptureSession: @unchecked Sendable {
     private func poll() {
         guard !stopped else { return }
         let now = DispatchTime.now().uptimeNanoseconds
+        if tailDrainStartedAtNanoseconds != nil {
+            drainRemoteTailOnQueue(now: now)
+            return
+        }
         if now >= startedAtNanoseconds,
            Double(now - startedAtNanoseconds) / 1_000_000_000 >= maxDuration {
-            _ = stopOnQueue()
+            finishStopOnQueue()
             DispatchQueue.main.async { [onMaximumDuration] in onMaximumDuration() }
             return
         }
 
-        // Once a source wins the 120 ms probe, stop touching the other ring entirely. This halves
+        // Once a source wins the bounded probe, stop touching the other ring entirely. This halves
         // ring reads and removes two transient Array allocations from every steady-state tick.
         if source == .builtIn {
             let count = readBuiltin()
@@ -269,7 +307,9 @@ final class VoiceAudioCaptureSession: @unchecked Sendable {
 
     private func append48k(_ samples: UnsafeBufferPointer<Float>) {
         guard !samples.isEmpty else { return }
-        let chunk = downsampler.convert(samples)
+        let converted = downsampler.convert(samples)
+        let remainingFrames = max(0, Int(maxDuration * Double(Self.outputSampleRate)) - capturedFrames)
+        let chunk = Data(converted.prefix(remainingFrames * MemoryLayout<Int16>.size))
         guard !chunk.isEmpty else { return }
         exclusionLock.lock()
         let excluded = DispatchTime.now().uptimeNanoseconds < excludeUntilNanoseconds
@@ -306,17 +346,71 @@ final class VoiceAudioCaptureSession: @unchecked Sendable {
         }
     }
 
-    @discardableResult
-    private func stopOnQueue() -> VoiceCapturedAudio {
-        if !stopped {
-            stopped = true
-            timer?.cancel()
-            timer = nil
-            if source == nil {
-                select(remoteWasLive && remoteAdvancedFrames >= 480 ? .remote : .builtIn)
-            }
-            continuation.finish()
+    private func requestStopOnQueue() {
+        guard !stopped else {
+            resolveStopWaitersOnQueue(with: snapshotOnQueue())
+            return
         }
+
+        if source == nil {
+            select(remoteWasLive && remoteAdvancedFrames >= 480 ? .remote : .builtIn)
+        }
+
+        let minimumFrames = Int(ceil(minimumDuration * Double(Self.outputSampleRate)))
+        guard VoiceRemoteTailDrainPolicy.shouldDrain(
+            source: source,
+            capturedFrames: capturedFrames,
+            minimumFrames: minimumFrames
+        ) else {
+            finishStopOnQueue()
+            return
+        }
+
+        let now = DispatchTime.now().uptimeNanoseconds
+        if tailDrainStartedAtNanoseconds == nil {
+            tailDrainStartedAtNanoseconds = now
+            lastRemoteAdvanceAtNanoseconds = now
+        }
+        // Read once on the release edge rather than waiting for the next 20 ms timer tick.
+        drainRemoteTailOnQueue(now: now)
+    }
+
+    private func drainRemoteTailOnQueue(now: UInt64) {
+        guard let drainStartedAt = tailDrainStartedAtNanoseconds else { return }
+        let count = readRemoteIfLive()
+        if count > 0 {
+            append48k(remoteBuffer, count: count)
+            lastRemoteAdvanceAtNanoseconds = now
+        }
+        let lastAdvanceAt = lastRemoteAdvanceAtNanoseconds ?? drainStartedAt
+        if VoiceRemoteTailDrainPolicy.shouldFinish(
+            now: now,
+            startedAt: drainStartedAt,
+            lastAdvanceAt: lastAdvanceAt
+        ) {
+            finishStopOnQueue()
+        }
+    }
+
+    private func finishStopOnQueue() {
+        guard !stopped else { return }
+        stopped = true
+        timer?.cancel()
+        timer = nil
+        if source == nil {
+            select(remoteWasLive && remoteAdvancedFrames >= 480 ? .remote : .builtIn)
+        }
+        continuation.finish()
+        resolveStopWaitersOnQueue(with: snapshotOnQueue())
+    }
+
+    private func resolveStopWaitersOnQueue(with audio: VoiceCapturedAudio) {
+        let waiters = stopWaiters
+        stopWaiters.removeAll(keepingCapacity: false)
+        for waiter in waiters { waiter.resume(returning: audio) }
+    }
+
+    private func snapshotOnQueue() -> VoiceCapturedAudio {
         let selected = source ?? .builtIn
         return VoiceCapturedAudio(
             pcm16: capturedPCM,

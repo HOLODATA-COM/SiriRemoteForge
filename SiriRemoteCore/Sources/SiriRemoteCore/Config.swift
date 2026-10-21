@@ -256,7 +256,15 @@ public struct Config: Equatable {
         /// delivery fails, so decoded/constructed false values are intentionally normalised true.
         public var copyOnFailure: Bool
         public var restoreClipboardAfterInsert: Bool
-        public var copyLastOnSideButtonDouble: Bool
+        /// A double press of the side button re-delivers the most recent dictation into whatever
+        /// now has focus, falling back to the clipboard only when it cannot be typed. This is the
+        /// user's recovery path when a turn did not land, so it pastes rather than merely copying.
+        /// Decoded from the legacy `copyLastOnSideButtonDouble` key when the new one is absent.
+        public var pasteLastOnSideButtonDouble: Bool
+        /// Global keyboard shortcut: press once to start Voice, again to stop. The remote side
+        /// button retains hold-to-talk. Canonical ShortcutCodec spelling, for example `rcmd`
+        /// (right Command) or `ctrl+opt+space`. Empty disables it.
+        public var keyboardShortcut: String
         /// A short, paired acoustic cue when native Voice actually opens and after capture closes.
         /// Quick side-button taps never play it because they never promote into dictation.
         public var feedbackSoundsEnabled: Bool
@@ -287,12 +295,13 @@ public struct Config: Equatable {
             autoInsert: Bool = true,
             copyOnFailure: Bool = true,
             restoreClipboardAfterInsert: Bool = true,
-            copyLastOnSideButtonDouble: Bool = true,
+            pasteLastOnSideButtonDouble: Bool = true,
+            keyboardShortcut: String = "",
             feedbackSoundsEnabled: Bool = true,
             feedbackSoundVolume: Double = 0.55,
             pipelineOverlayEnabled: Bool = true,
             minimumRecordingSeconds: Double = 1,
-            maxRecordingSeconds: Double = 120,
+            maxRecordingSeconds: Double = 600,
             dictionary: [DictationTerm] = []
         ) {
             self.enabled = enabled
@@ -311,7 +320,8 @@ public struct Config: Equatable {
             _ = copyOnFailure
             self.copyOnFailure = true
             self.restoreClipboardAfterInsert = restoreClipboardAfterInsert
-            self.copyLastOnSideButtonDouble = copyLastOnSideButtonDouble
+            self.pasteLastOnSideButtonDouble = pasteLastOnSideButtonDouble
+            self.keyboardShortcut = keyboardShortcut
             self.feedbackSoundsEnabled = feedbackSoundsEnabled
             self.feedbackSoundVolume = feedbackSoundVolume
             self.pipelineOverlayEnabled = pipelineOverlayEnabled
@@ -325,8 +335,14 @@ public struct Config: Equatable {
             case cleanupProvider, selectionEditingEnabled, selectionEditProvider
             case openAICleanupModel, deepSeekCleanupModel
             case autoInsert, copyOnFailure, restoreClipboardAfterInsert
-            case copyLastOnSideButtonDouble, feedbackSoundsEnabled, feedbackSoundVolume
+            case pasteLastOnSideButtonDouble, keyboardShortcut
+            case feedbackSoundsEnabled, feedbackSoundVolume
             case pipelineOverlayEnabled, minimumRecordingSeconds, maxRecordingSeconds, dictionary
+        }
+
+        /// Keys that are read for migration but never written back.
+        private enum LegacyCodingKeys: String, CodingKey {
+            case copyLastOnSideButtonDouble
         }
 
         /// New voice options are additive. Decode each field independently so an older or hand-
@@ -376,9 +392,14 @@ public struct Config: Equatable {
             restoreClipboardAfterInsert = try container.decodeIfPresent(
                 Bool.self, forKey: .restoreClipboardAfterInsert
             ) ?? defaults.restoreClipboardAfterInsert
-            copyLastOnSideButtonDouble = try container.decodeIfPresent(
-                Bool.self, forKey: .copyLastOnSideButtonDouble
-            ) ?? defaults.copyLastOnSideButtonDouble
+            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            pasteLastOnSideButtonDouble = try container.decodeIfPresent(
+                Bool.self, forKey: .pasteLastOnSideButtonDouble
+            ) ?? legacy.decodeIfPresent(Bool.self, forKey: .copyLastOnSideButtonDouble)
+                ?? defaults.pasteLastOnSideButtonDouble
+            keyboardShortcut = try container.decodeIfPresent(
+                String.self, forKey: .keyboardShortcut
+            ) ?? defaults.keyboardShortcut
             feedbackSoundsEnabled = try container.decodeIfPresent(
                 Bool.self, forKey: .feedbackSoundsEnabled
             ) ?? defaults.feedbackSoundsEnabled

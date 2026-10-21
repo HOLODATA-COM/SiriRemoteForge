@@ -13,6 +13,7 @@ import AppKit
 import ApplicationServices
 import Carbon
 import CoreGraphics
+import CryptoKit
 import Foundation
 
 struct VoiceTextTarget: @unchecked Sendable {
@@ -93,6 +94,7 @@ enum VoiceSelectionReplacementOutcome: Equatable {
     case readOnly
     case secureField
     case accessibilityUnavailable
+    case unconfirmed
 }
 
 /// Long-lived AX element references are not stable in every editor. React/Electron applications
@@ -175,12 +177,63 @@ struct VoiceTextTargetSeed: Sendable {
 enum VoiceTextDeliveryOutcome: Equatable {
     case inserted
     case copied
+    /// Paste was dispatched but editor consumption is unproven; verified text remains copied.
+    case pasteSent
+    /// Paste may have happened, but neither insertion nor clipboard retention is confirmed.
+    case unconfirmed
     case focusChanged
     case secureField
     case unavailable
 
     var wasDelivered: Bool {
-        self == .inserted || self == .copied
+        self == .inserted || self == .copied || self == .pasteSent
+    }
+}
+
+enum VoiceShortcutDispatchOutcome: Equatable {
+    case sent, focusChanged, secureField, unavailable, cancelled
+}
+
+/// Cross-thread cancellation must be checked on the event worker, immediately before dispatch.
+private final class VoiceDeliveryCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+}
+
+struct VoiceInsertionSnapshot {
+    let value: String
+    let selection: CFRange?
+
+    func confirms(_ text: String, after: String) -> Bool {
+        guard !text.isEmpty, after != value else { return false }
+        let original = value as NSString
+        if let selection {
+            guard selection.location >= 0, selection.length >= 0,
+                  selection.location <= original.length,
+                  selection.length <= original.length - selection.location else { return false }
+            return original.replacingCharacters(
+                in: NSRange(location: selection.location, length: selection.length), with: text
+            ) == after
+        }
+        // Without a caret range accept only one exact insertion, never a coincidental substring.
+        let old = Array(value.utf16), new = Array(after.utf16), inserted = Array(text.utf16)
+        guard new.count == old.count + inserted.count else { return false }
+        var prefix = 0
+        while prefix < old.count, old[prefix] == new[prefix] { prefix += 1 }
+        return Array(new[prefix..<(prefix + inserted.count)]) == inserted
+            && Array(new[(prefix + inserted.count)...]) == Array(old[prefix...])
+    }
+}
+
+/// What a failed focused-element query means for delivery. A query that merely timed out
+/// (`cannotComplete`: the app is busy or slow to answer) says nothing about where focus is; the PID
+/// and Secure Input checks that run before it have already passed, so it must not discard the
+/// dictation. Only a definite answer -- there is no focused element -- still rejects.
+enum VoiceFocusQueryPolicy {
+    static func outcome(for error: AXError) -> VoiceTextDeliveryOutcome? {
+        error == .cannotComplete ? nil : .focusChanged
     }
 }
 
@@ -236,7 +289,7 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
 
     func insertStreamingDelta(_ delta: String,
                               into target: VoiceTextTarget) async -> VoiceTextDeliveryOutcome {
-        await perform {
+        await performCancellable(cancelled: .unavailable) { cancellation in
             guard !delta.isEmpty else { return .inserted }
             if let rejection = Self.targetRejection(
                 target, currentPID: Self.currentFrontmostPID()
@@ -247,16 +300,18 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
                 if let rejection = Self.immediateMutationRejection(
                     target, verifyFocusedElement: true
                 ) { return rejection }
+                guard !cancellation.isCancelled else { return .unavailable }
                 if Self.setSelectedText(delta, target: target) { return .inserted }
             }
-            return self.postUnicode(delta, target: target)
+            return self.postUnicode(delta, target: target, cancellation: cancellation)
         }
     }
 
     /// Returns nil only when the target is still safe but does not expose settable AX text.
     func insertSelectedText(_ text: String,
                             into target: VoiceTextTarget) async -> VoiceTextDeliveryOutcome? {
-        await perform {
+        let cancelled: VoiceTextDeliveryOutcome? = .unavailable
+        return await performCancellable(cancelled: cancelled) { cancellation in
             if let rejection = Self.targetRejection(
                 target, currentPID: Self.currentFrontmostPID()
             ) {
@@ -266,38 +321,42 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
             if let rejection = Self.immediateMutationRejection(
                 target, verifyFocusedElement: true
             ) { return rejection }
+            guard !cancellation.isCancelled else { return .unavailable }
             return Self.setSelectedText(text, target: target) ? .inserted : nil
         }
     }
 
     func insertUnicode(_ text: String,
                        into target: VoiceTextTarget) async -> VoiceTextDeliveryOutcome {
-        await perform {
+        await performCancellable(cancelled: .unavailable) { cancellation in
             if let rejection = Self.targetRejection(
                 target, currentPID: Self.currentFrontmostPID()
             ) {
                 return rejection
             }
-            return self.postUnicode(text, target: target)
+            return self.postUnicode(text, target: target, cancellation: cancellation)
         }
     }
 
-    func postPasteShortcut(into target: VoiceTextTarget) async -> VoiceTextDeliveryOutcome {
+    func postPasteShortcut(into target: VoiceTextTarget) async -> VoiceShortcutDispatchOutcome {
         await postCommandShortcut(keyCode: Self.pasteKeyCode, into: target)
     }
 
-    func postCopyShortcut(into target: VoiceTextTarget) async -> VoiceTextDeliveryOutcome {
+    func postCopyShortcut(into target: VoiceTextTarget) async -> VoiceShortcutDispatchOutcome {
         await postCommandShortcut(keyCode: Self.copyKeyCode, into: target)
     }
 
     private func postCommandShortcut(keyCode: CGKeyCode,
                                      into target: VoiceTextTarget) async
-        -> VoiceTextDeliveryOutcome {
+        -> VoiceShortcutDispatchOutcome {
+        let cancellation = VoiceDeliveryCancellation()
+        return await withTaskCancellationHandler(operation: {
         await perform {
+            guard !cancellation.isCancelled else { return .cancelled }
             if let rejection = Self.targetRejection(
                 target, currentPID: Self.currentFrontmostPID()
             ) {
-                return rejection
+                return rejection == .secureField ? .secureField : .focusChanged
             }
             guard AXIsProcessTrusted(), let eventSource = self.eventSource,
                   let commandDown = CGEvent(keyboardEventSource: eventSource,
@@ -314,7 +373,8 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
             // newly focused app. It closes the AX-query-to-paste TOCTOU window.
             if let rejection = Self.immediateMutationRejection(
                 target, verifyFocusedElement: true
-            ) { return rejection }
+            ) { return rejection == .secureField ? .secureField : .focusChanged }
+            guard !cancellation.isCancelled else { return .cancelled }
             commandDown.flags = .maskCommand
             keyDown.flags = .maskCommand
             keyUp.flags = .maskCommand
@@ -323,8 +383,53 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
             keyDown.post(tap: .cghidEventTap)
             keyUp.post(tap: .cghidEventTap)
             commandUp.post(tap: .cghidEventTap)
-            return .inserted
+            return .sent
         }
+        }, onCancel: { cancellation.cancel() })
+    }
+
+    func insertionSnapshot(in target: VoiceTextTarget) async -> VoiceInsertionSnapshot? {
+        await perform {
+            guard Self.targetRejection(target, currentPID: Self.currentFrontmostPID()) == nil,
+                  let element = Self.currentEditableElement(target),
+                  let value = Self.attributeString(element, kAXValueAttribute),
+                  value.utf16.count <= 100_000 else { return nil }
+            return VoiceInsertionSnapshot(value: value, selection: Self.selectedRange(element))
+        }
+    }
+
+    private static func selectedRange(_ element: AXUIElement) -> CFRange? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString,
+                                          &raw) == .success, let raw,
+              CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        return AXValueGetValue(raw as! AXValue, .cfRange, &range) ? range : nil
+    }
+
+    private static func currentEditableElement(_ target: VoiceTextTarget) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(target.pid)
+        AXUIElementSetMessagingTimeout(app, mutationCheckTimeout)
+        var current: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString,
+                                          &current) == .success, let current else { return nil }
+        let element = current as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, mutationCheckTimeout)
+        let signature = focusSignature(element, selectedTextSettable: selectedTextIsSettable(element))
+        guard signature.role != "AXSecureTextField", signature.subrole != "AXSecureTextField",
+              !IsSecureEventInputEnabled(), signature.isEditableText
+        else { return nil }
+        if let original = target.focusedElement, !CFEqual(original, current) {
+            guard let previous = target.focusSignature,
+                  signature.isCompatibleReplacement(for: previous) else { return nil }
+        }
+        return element
+    }
+
+    func confirmsInsertion(_ text: String, in target: VoiceTextTarget,
+                           before: VoiceInsertionSnapshot) async -> Bool {
+        guard let after = await insertionSnapshot(in: target) else { return false }
+        return before.confirms(text, after: after.value)
     }
 
     func rejection(of target: VoiceTextTarget) async -> VoiceTextDeliveryOutcome? {
@@ -339,7 +444,7 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
 /// preserves every completed rewrite on the clipboard if all replacement routes fail.
     func replaceSelection(with replacement: String,
                           in target: VoiceTextTarget) async -> VoiceSelectionReplacementOutcome {
-        await perform {
+        await performCancellable(cancelled: .unconfirmed) { cancellation in
             guard !replacement.isEmpty else { return .accessibilityUnavailable }
             if target.isSecure || IsSecureEventInputEnabled() { return .secureField }
             guard Self.currentFrontmostPID() == target.pid else { return .focusChanged }
@@ -381,9 +486,18 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
             }
             guard currentText == capturedText else { return .selectionChanged }
             guard Self.selectedTextIsSettable(currentElement) else { return .readOnly }
-            return AXUIElementSetAttributeValue(
+            let before = Self.attributeString(currentElement, kAXValueAttribute)
+            let selection = Self.selectedRange(currentElement)
+            guard !cancellation.isCancelled else { return .unconfirmed }
+            let changed = AXUIElementSetAttributeValue(
                 currentElement, kAXSelectedTextAttribute as CFString, replacement as CFTypeRef
-            ) == .success ? .replaced : .accessibilityUnavailable
+            ) == .success
+            guard changed else { return .accessibilityUnavailable }
+            guard let before, before.utf16.count <= 100_000,
+                  let after = Self.attributeString(currentElement, kAXValueAttribute),
+                  VoiceInsertionSnapshot(value: before, selection: selection).confirms(replacement, after: after)
+            else { return .unconfirmed }
+            return .replaced
         }
     }
 
@@ -393,23 +507,37 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
         }
     }
 
+    private func performCancellable<T>(cancelled: T,
+                                      _ operation: @escaping (VoiceDeliveryCancellation) -> T) async -> T {
+        let cancellation = VoiceDeliveryCancellation()
+        return await withTaskCancellationHandler(operation: {
+            await perform { cancellation.isCancelled ? cancelled : operation(cancellation) }
+        }, onCancel: { cancellation.cancel() })
+    }
+
     private static func targetRejection(
         _ target: VoiceTextTarget, currentPID: pid_t?
     ) -> VoiceTextDeliveryOutcome? {
         if target.isSecure || IsSecureEventInputEnabled() { return .secureField }
-        guard currentPID == target.pid else { return .focusChanged }
+        guard currentPID == target.pid else {
+            rmDebug("📝 voice-delivery check: frontmost app changed "
+                    + "pid=\(currentPID.map(String.init) ?? "none") expected=\(target.pid)")
+            return .focusChanged
+        }
         // Some web views expose no focused AX element. PID stability is the strongest available
         // signal there; sparse accessibility alone must not make those editors unusable.
         guard let original = target.focusedElement else { return nil }
         let appElement = AXUIElementCreateApplication(target.pid)
-        AXUIElementSetMessagingTimeout(appElement, 0.008)
+        AXUIElementSetMessagingTimeout(appElement, focusCheckTimeout)
         var currentValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
+        let query = AXUIElementCopyAttributeValue(
             appElement, kAXFocusedUIElementAttribute as CFString, &currentValue
-        ) == .success,
-              let currentValue else { return .focusChanged }
+        )
+        guard query == .success, let currentValue else {
+            return focusQueryFailure(query, stage: "check")
+        }
         let current = currentValue as! AXUIElement
-        AXUIElementSetMessagingTimeout(current, 0.008)
+        AXUIElementSetMessagingTimeout(current, focusCheckTimeout)
         let role = attributeString(current, kAXRoleAttribute)
         let subrole = attributeString(current, kAXSubroleAttribute)
         if role == "AXSecureTextField" || subrole == "AXSecureTextField"
@@ -421,8 +549,26 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
         let currentSignature = focusSignature(
             current, selectedTextSettable: selectedTextIsSettable(current)
         )
-        return currentSignature.isCompatibleReplacement(for: originalSignature)
-            ? nil : .focusChanged
+        guard currentSignature.isCompatibleReplacement(for: originalSignature) else {
+            rmDebug("📝 voice-delivery check: focused element changed "
+                    + "role=\(currentSignature.role ?? "none") expected=\(originalSignature.role ?? "none")")
+            return .focusChanged
+        }
+        return nil
+    }
+
+    /// Cross-process AX budgets. These run on the delivery worker, never on main, so a slow editor
+    /// only delays its own insertion. The former 8 ms / 2 ms budgets were below what a busy Chrome,
+    /// Electron or terminal process answers in on a loaded machine, and every miss was reported as
+    /// a focus change -- the text then went to the clipboard instead of the caret.
+    private static let focusCheckTimeout: Float = 0.1
+    private static let mutationCheckTimeout: Float = 0.05
+
+    static func focusQueryFailure(_ error: AXError, stage: String) -> VoiceTextDeliveryOutcome? {
+        let outcome = VoiceFocusQueryPolicy.outcome(for: error)
+        rmDebug("📝 voice-delivery \(stage): focus query ax=\(error.rawValue) -> "
+                + (outcome.map { "\($0)" } ?? "unanswered; the unchanged PID decides"))
+        return outcome
     }
 
     /// Fetch the frontmost PID immediately before the AX check/write, on the same ordered worker.
@@ -444,15 +590,18 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
         guard currentFrontmostPID() == target.pid else { return .focusChanged }
         guard verifyFocusedElement, let original = target.focusedElement else { return nil }
         let appElement = AXUIElementCreateApplication(target.pid)
-        AXUIElementSetMessagingTimeout(appElement, 0.002)
+        AXUIElementSetMessagingTimeout(appElement, mutationCheckTimeout)
         var focusedValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
+        let query = AXUIElementCopyAttributeValue(
             appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue
-        ) == .success, let focusedValue else { return .focusChanged }
+        )
+        guard query == .success, let focusedValue else {
+            return focusQueryFailure(query, stage: "mutation")
+        }
         if CFEqual(original, focusedValue) { return nil }
         guard let originalSignature = target.focusSignature else { return .focusChanged }
         let current = focusedValue as! AXUIElement
-        AXUIElementSetMessagingTimeout(current, 0.002)
+        AXUIElementSetMessagingTimeout(current, mutationCheckTimeout)
         let currentSignature = focusSignature(
             current, selectedTextSettable: selectedTextIsSettable(current)
         )
@@ -468,7 +617,7 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
     }
 
     private func postUnicode(
-        _ text: String, target: VoiceTextTarget
+        _ text: String, target: VoiceTextTarget, cancellation: VoiceDeliveryCancellation
     ) -> VoiceTextDeliveryOutcome {
         guard AXIsProcessTrusted(), let eventSource else { return .unavailable }
         for chunk in VoiceTextDeliverer.unicodeChunks(text, maximumUTF16Units: 20) {
@@ -487,6 +636,7 @@ private final class VoiceTextDeliveryWorker: @unchecked Sendable {
             if let rejection = Self.immediateMutationRejection(
                 target, verifyFocusedElement: true
             ) { return rejection }
+            guard !cancellation.isCancelled else { return .unavailable }
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
         }
@@ -546,6 +696,25 @@ final class VoiceTextDeliverer {
         "com.hypervibe.voice-input.clipboard-transaction"
     )
     private let worker = VoiceTextDeliveryWorker()
+    private let pasteboard: NSPasteboard
+    private var clipboardOperation = UUID()
+    private static let diagnosticSalt = UUID().uuidString
+
+    static func diagnosticFingerprint(_ text: String) -> String {
+        let digest = SHA256.hash(data: Data((diagnosticSalt + text).utf8))
+        let hash = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+        return "chars=\(text.count) hash=\(hash)"
+    }
+
+    /// After positive editor readback only, how long to wait before restoring the user's clipboard.
+    /// It was 180 ms, which is shorter than a busy editor's Command-V latency on a loaded machine:
+    /// the editor then read the already-restored clipboard, the transcript was gone, and the turn
+    /// still logged `inserted`. Restoration is asynchronous, so the longer window costs no
+    /// perceived latency, and the marker/changeCount guard still lets any copy made meanwhile win.
+    static let clipboardRestoreDelayNanoseconds: UInt64 = 2_000_000_000
+
+    /// The one restore that is scheduled but has not run yet.
+    private var pendingRestore: (id: UUID, restore: () -> Void)?
 
     /// Final Voice values compatibility over microbenchmarks: native AX writes can return success
     /// for Chromium contenteditable nodes without dispatching the DOM input event. A guarded paste
@@ -555,7 +724,8 @@ final class VoiceTextDeliverer {
         .clipboardPaste, .accessibilitySelectedText, .unicodeEvents,
     ]
 
-    init() {}
+    @MainActor
+    init(pasteboard: NSPasteboard = .general) { self.pasteboard = pasteboard }
 
     @MainActor
     func captureTargetSeed() -> VoiceTextTargetSeed? {
@@ -669,60 +839,100 @@ final class VoiceTextDeliverer {
     @MainActor
     func deliverFinal(_ text: String,
                       to target: VoiceTextTarget?,
-                      settings: Config.DictationSettings) async -> VoiceTextDeliveryOutcome {
-        guard !text.isEmpty else { return .unavailable }
+                      settings: Config.DictationSettings,
+                      deliveryID: UUID = UUID(),
+                      beforeDispatch: @MainActor () async -> Bool = { !Task.isCancelled }) async -> VoiceTextDeliveryOutcome {
+        guard !text.isEmpty, !Task.isCancelled else { return .unavailable }
         guard settings.autoInsert, let target else {
             rmDebug("📝 voice-delivery final route=copy reason=no-target-or-auto-insert-off")
-            return copy(text)
+            return copy(text, deliveryID: deliveryID)
         }
         let bundle = target.bundleIdentifier ?? "unknown"
         let role = target.focusSignature?.role ?? "none"
-        rmDebug("📝 voice-delivery final begin app=\(bundle) role=\(role) "
+        rmDebug("📝 voice-delivery final begin id=\(deliveryID) app=\(bundle) role=\(role) "
                 + "axSelected=\(target.selectedTextSettable)")
 
         for method in Self.finalDeliveryOrder {
+            guard await beforeDispatch(), !Task.isCancelled else { return .unavailable }
             let outcome: VoiceTextDeliveryOutcome?
             switch method {
             case .clipboardPaste:
                 outcome = await pasteViaClipboard(
                     text, target: target,
-                    restore: settings.restoreClipboardAfterInsert
+                    restore: settings.restoreClipboardAfterInsert, deliveryID: deliveryID,
+                    beforeDispatch: beforeDispatch
                 )
             case .accessibilitySelectedText:
+                let before = await worker.insertionSnapshot(in: target)
                 outcome = await worker.insertSelectedText(text, into: target)
+                if outcome == .inserted, !(await confirms(text, target: target, before: before)) {
+                    guard !Task.isCancelled else { return .unavailable }
+                    return copy(text, deliveryID: deliveryID) == .copied ? .pasteSent : .unconfirmed
+                }
             case .unicodeEvents:
+                let before = await worker.insertionSnapshot(in: target)
                 outcome = await worker.insertUnicode(text, into: target)
+                if outcome == .inserted, !(await confirms(text, target: target, before: before)) {
+                    guard !Task.isCancelled else { return .unavailable }
+                    return copy(text, deliveryID: deliveryID) == .copied ? .pasteSent : .unconfirmed
+                }
             }
+            guard !Task.isCancelled else { return .unavailable }
             guard let outcome else {
                 rmDebug("📝 voice-delivery final route=\(method.rawValue) result=unsupported")
                 continue
             }
             rmDebug("📝 voice-delivery final route=\(method.rawValue) result=\(outcome)")
             switch outcome {
+            case .pasteSent, .unconfirmed:
+                // A second route could duplicate text after an unacknowledged successful paste.
+                return outcome
             case .inserted:
                 return .inserted
             case .secureField:
-                return copy(text)
+                return copy(text, deliveryID: deliveryID)
             case .focusChanged:
-                return copy(text)
+                return copy(text, deliveryID: deliveryID)
             case .copied:
                 return .copied
             case .unavailable:
                 continue
             }
         }
-        let fallback = copy(text)
+        guard !Task.isCancelled else { return .unavailable }
+        let fallback = copy(text, deliveryID: deliveryID)
         rmDebug("📝 voice-delivery final route=copy-fallback result=\(fallback)")
         return fallback
     }
 
     @MainActor
     @discardableResult
-    func copy(_ text: String) -> VoiceTextDeliveryOutcome {
+    func copy(_ text: String, deliveryID: UUID = UUID()) -> VoiceTextDeliveryOutcome {
         guard !text.isEmpty else { return .unavailable }
-        let pasteboard = NSPasteboard.general
+        clipboardOperation = UUID()
+        pendingRestore = nil
         pasteboard.clearContents()
-        return pasteboard.setString(text, forType: .string) ? .copied : .unavailable
+        let accepted = pasteboard.setString(text, forType: .string)
+        let verified = accepted && pasteboard.string(forType: .string) == text
+        rmDebug("📝 voice-clipboard copy id=\(deliveryID) verified=\(verified) "
+                + Self.diagnosticFingerprint(text) + " change=\(pasteboard.changeCount)")
+        if verified { monitorClipboard(deliveryID: deliveryID) }
+        return verified ? .copied : .unavailable
+    }
+
+    @MainActor
+    private func monitorClipboard(deliveryID: UUID) {
+        let operation = clipboardOperation, count = pasteboard.changeCount
+        Task { @MainActor [weak self] in
+            for delay: UInt64 in [250_000_000, 2_000_000_000] {
+                do { try await Task.sleep(nanoseconds: delay) } catch { return }
+                guard let self, self.clipboardOperation == operation else { return }
+                let retained = self.pasteboard.changeCount == count
+                rmDebug("📝 voice-clipboard retained id=\(deliveryID) owned=\(retained) "
+                        + "change=\(self.pasteboard.changeCount)")
+                if !retained { return }
+            }
+        }
     }
 
     func targetRejection(_ target: VoiceTextTarget) async -> VoiceTextDeliveryOutcome? {
@@ -754,8 +964,20 @@ final class VoiceTextDeliverer {
             return .replaced
         case .focusChanged: return .focusChanged
         case .secureField: return .secureField
+        case .pasteSent, .unconfirmed: return .unconfirmed
         case .copied, .unavailable: return .accessibilityUnavailable
         }
+    }
+
+    /// Run a scheduled clipboard restore now. Every clipboard transaction calls this before taking
+    /// its snapshot, so the snapshot is the user's real clipboard rather than the previous turn's
+    /// transcript that is still waiting to be swapped out. Without it, two turns inside the
+    /// restore window would leave the first transcript on the clipboard for good.
+    @MainActor
+    private func flushPendingRestore() {
+        guard let pending = pendingRestore else { return }
+        pendingRestore = nil
+        pending.restore()
     }
 
     /// Copy only as a selection probe. A unique marker distinguishes "Copy did nothing" from a
@@ -767,8 +989,11 @@ final class VoiceTextDeliverer {
             rmDebug("📝 voice-selection compatibility copy rejected=\(rejection)")
             return nil
         }
-        guard AXIsProcessTrusted() else { return nil }
-        let pasteboard = NSPasteboard.general
+        guard AXIsProcessTrusted(), !Task.isCancelled else { return nil }
+        flushPendingRestore()
+        let operation = UUID()
+        clipboardOperation = operation
+        rmDebug("📝 voice-clipboard probe begin id=\(operation) change=\(pasteboard.changeCount)")
         let snapshot = VoicePasteboardSnapshot(pasteboard)
         let marker = UUID().uuidString
         let item = NSPasteboardItem()
@@ -778,8 +1003,8 @@ final class VoiceTextDeliverer {
         let markerChangeCount = pasteboard.changeCount
 
         let shortcut = await worker.postCopyShortcut(into: target)
-        guard shortcut == .inserted else {
-            if pasteboard.changeCount == markerChangeCount,
+        guard shortcut == .sent, !Task.isCancelled, clipboardOperation == operation else {
+            if clipboardOperation == operation, pasteboard.changeCount == markerChangeCount,
                pasteboard.string(forType: Self.markerType) == marker {
                 snapshot.restore(to: pasteboard)
             }
@@ -791,53 +1016,124 @@ final class VoiceTextDeliverer {
         // Native and Chromium editors normally publish synchronously; the short bounded poll also
         // covers custom Electron bridges without adding latency to the physical 200 ms opener.
         for _ in 0..<8 {
-            try? await Task.sleep(nanoseconds: 12_000_000)
+            do { try await Task.sleep(nanoseconds: 12_000_000) } catch { break }
+            guard clipboardOperation == operation else { return nil }
             guard pasteboard.changeCount != markerChangeCount else { continue }
             capturedChangeCount = pasteboard.changeCount
             captured = pasteboard.string(forType: .string)
             break
         }
+        guard clipboardOperation == operation else { return nil }
         if pasteboard.changeCount == capturedChangeCount {
             snapshot.restore(to: pasteboard)
+            rmDebug("📝 voice-clipboard probe restored id=\(operation) change=\(pasteboard.changeCount)")
         }
-        guard let captured, !captured.isEmpty, captured != marker else { return nil }
+        guard !Task.isCancelled, let captured, !captured.isEmpty, captured != marker else { return nil }
         return captured
     }
 
     @MainActor
     private func pasteViaClipboard(_ text: String, target: VoiceTextTarget,
-                                   restore: Bool) async -> VoiceTextDeliveryOutcome {
+                                   restore: Bool, deliveryID: UUID = UUID(),
+                                   beforeDispatch: @MainActor () async -> Bool = { !Task.isCancelled }) async -> VoiceTextDeliveryOutcome {
         if let rejection = await targetRejection(target) { return rejection }
-        guard AXIsProcessTrusted() else { return .unavailable }
-        let pasteboard = NSPasteboard.general
+        guard AXIsProcessTrusted(), !Task.isCancelled else { return .unavailable }
+        let before = await worker.insertionSnapshot(in: target)
+        guard !Task.isCancelled else { return .unavailable }
+        return await performPasteTransaction(text, restore: restore, deliveryID: deliveryID,
+            admit: beforeDispatch,
+            dispatch: { await self.worker.postPasteShortcut(into: target) },
+            confirm: { await self.confirms(text, target: target, before: before) })
+    }
+
+    @MainActor
+    private func confirms(_ text: String, target: VoiceTextTarget,
+                          before: VoiceInsertionSnapshot?) async -> Bool {
+        guard let before else { return false }
+        let deadline = DispatchTime.now().uptimeNanoseconds + 350_000_000
+        for _ in 0..<6 {
+            guard DispatchTime.now().uptimeNanoseconds < deadline else { return false }
+            do { try await Task.sleep(nanoseconds: 35_000_000) } catch { return false }
+            if await worker.confirmsInsertion(text, in: target, before: before) { return true }
+            if Task.isCancelled { return false }
+        }
+        return false
+    }
+
+    /// Same transaction in production and isolated-pasteboard regression tests; test closures emit no keys.
+    @MainActor
+    func performPasteTransaction(_ text: String, restore: Bool, deliveryID: UUID = UUID(),
+                                 restoreDelay: UInt64 = clipboardRestoreDelayNanoseconds,
+                                 admit: @MainActor () async -> Bool = { !Task.isCancelled },
+                                 dispatch: () async -> VoiceShortcutDispatchOutcome,
+                                 confirm: () async -> Bool) async -> VoiceTextDeliveryOutcome {
+        guard !Task.isCancelled else { return .unavailable }
+        flushPendingRestore()
+        let operation = UUID()
+        clipboardOperation = operation
+        let pasteboard = self.pasteboard
         let snapshot = VoicePasteboardSnapshot(pasteboard)
         let marker = UUID().uuidString
         let item = NSPasteboardItem()
         item.setString(text, forType: .string)
         item.setString(marker, forType: Self.markerType)
         pasteboard.clearContents()
-        guard pasteboard.writeObjects([item]) else { return .unavailable }
+        guard pasteboard.writeObjects([item]), pasteboard.string(forType: .string) == text,
+              pasteboard.string(forType: Self.markerType) == marker else { return .unavailable }
         let transactionChangeCount = pasteboard.changeCount
-        let restoreIfOwned = {
-            let markerSurvived = pasteboard.changeCount == transactionChangeCount
+        rmDebug("📝 voice-clipboard staged id=\(deliveryID) " + Self.diagnosticFingerprint(text)
+                + " change=\(transactionChangeCount)")
+        let restoreIfOwned = { [weak self] in
+            guard let self else { return }
+            let markerSurvived = self.clipboardOperation == operation
+                && pasteboard.changeCount == transactionChangeCount
                 && pasteboard.string(forType: Self.markerType) == marker
             if markerSurvived { snapshot.restore(to: pasteboard) }
+            rmDebug("📝 voice-clipboard restore id=\(deliveryID) owned=\(markerSurvived)")
         }
 
         // Give Chromium/WebKit one event turn to observe the new pasteboard ownership.
-        try? await Task.sleep(nanoseconds: 25_000_000)
-        let pasteOutcome = await worker.postPasteShortcut(into: target)
-        guard pasteOutcome == .inserted else {
+        do { try await Task.sleep(nanoseconds: 25_000_000) } catch {
             restoreIfOwned()
-            return pasteOutcome
+            return .unavailable
+        }
+        guard await admit(), !Task.isCancelled else {
+            restoreIfOwned()
+            return .unavailable
+        }
+        guard clipboardOperation == operation,
+              pasteboard.changeCount == transactionChangeCount,
+              pasteboard.string(forType: .string) == text else { return .unavailable }
+        let pasteOutcome = await dispatch()
+        guard pasteOutcome == .sent else {
+            restoreIfOwned()
+            switch pasteOutcome {
+            case .focusChanged: return .focusChanged
+            case .secureField: return .secureField
+            case .cancelled, .unavailable, .sent: return .unavailable
+            }
+        }
+
+        let confirmed = await confirm()
+        guard clipboardOperation == operation, !Task.isCancelled else { return .unconfirmed }
+        let retained = pasteboard.changeCount == transactionChangeCount
+            && pasteboard.string(forType: .string) == text
+        rmDebug("📝 voice-delivery paste id=\(deliveryID) confirmed=\(confirmed) clipboard=\(retained)")
+        guard confirmed else {
+            if retained { monitorClipboard(deliveryID: deliveryID) }
+            return retained ? .pasteSent : .unconfirmed
         }
 
         // Do not charge the async web-editor consumption window to perceived insertion latency.
         // Restoration remains conditional on both the marker and changeCount, so a clipboard change
         // made by the user during this window always wins.
-        if restore {
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 180_000_000)
+        if restore, retained {
+            let id = UUID()
+            pendingRestore = (id, restoreIfOwned)
+            Task { @MainActor [weak self] in
+                do { try await Task.sleep(nanoseconds: restoreDelay) } catch { return }
+                guard let self, self.pendingRestore?.id == id else { return }
+                self.pendingRestore = nil
                 restoreIfOwned()
             }
         }

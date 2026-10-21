@@ -100,13 +100,14 @@
       "autoInsert": true,
       "copyOnFailure": true, // compatibility field; failed delivery is always copied
       "restoreClipboardAfterInsert": true,
-      "copyLastOnSideButtonDouble": true,
+      "pasteLastOnSideButtonDouble": true,
+      "keyboardShortcut": "",
       // One mirrored chime when native Voice begins and another after capture has stopped.
       "feedbackSoundsEnabled": true,
       "feedbackSoundVolume": 0.55,
       "pipelineOverlayEnabled": true,
       "minimumRecordingSeconds": 1, // discard accidental short turns before upload/output
-      "maxRecordingSeconds": 120,
+      "maxRecordingSeconds": 600,
       "dictionary": [
         { "term": "HyperVibe", "aliases": ["hyper vibe", "Hyper Vibe"] },
         { "term": "hypergraph", "aliases": ["hyper graph"] },
