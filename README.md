@@ -416,9 +416,14 @@ stage, turn ID, and process-salted content fingerprints, never transcript or cli
 
 JSONC (JSON + `//` comments). A default is written on first run. **Saving hot-reloads it live.**
 Three top-level keys: `settings`, `appProfiles`, `modes`. A complete, working example to crib from
-lives in [`examples/config.jsonc`](examples/config.jsonc), and the maintainer's actual daily-driver
+lives in [`examples/config.jsonc`](examples/config.jsonc), and the maintainer's reference
 setup — push-to-talk, per-app Music/browser/terminal modes, layers — is in
 [`examples/config.author.jsonc`](examples/config.author.jsonc).
+
+A separate snapshot of the configuration actually in use on **2026-10-30** is saved as
+[`examples/config.daily-2026-10-30.jsonc`](examples/config.daily-2026-10-30.jsonc).
+It preserves the active bindings, tuning and recognition dictionary without API credentials;
+this is a manual snapshot, not automatic synchronization with the maintainer's Mac.
 
 ```jsonc
 {

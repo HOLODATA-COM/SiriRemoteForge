@@ -1,0 +1,479 @@
+// Daily-driver configuration snapshot: 2026-10-30 (Australia/Sydney).
+// Copied from the active local configuration after a privacy review; no credentials included.
+// Manual snapshot, not automatically synchronized. Configure API credentials separately in the App.
+{
+  "appProfiles" : {
+    "com.apple.Music" : "music",
+    "com.apple.Safari" : "browser",
+    "com.apple.Terminal" : "terminal",
+    "com.google.Chrome" : "browser",
+    "default" : "global",
+    "dev.warp.Warp-Stable" : "terminal"
+  },
+  "modes" : {
+    "L1" : {
+      "inherits" : "global"
+    },
+    "L2" : {
+      "button.menu" : {
+        "action" : "keystroke",
+        "icon" : "delete.left",
+        "keys" : "delete",
+        "label" : "Delete"
+      },
+      "button.volumeDown" : {
+        "action" : "brightnessStep",
+        "icon" : "sun.min.fill",
+        "label" : "Brightness −",
+        "to" : "down"
+      },
+      "button.volumeUp" : {
+        "action" : "brightnessStep",
+        "icon" : "sun.max.fill",
+        "label" : "Brightness +",
+        "to" : "up"
+      },
+      "inherits" : "global",
+      "ring.down" : {
+        "action" : "keystroke",
+        "icon" : "arrow.down",
+        "keys" : "down",
+        "label" : "Down"
+      },
+      "ring.left" : {
+        "action" : "keystroke",
+        "icon" : "arrow.left",
+        "keys" : "left",
+        "label" : "Left"
+      },
+      "ring.right" : {
+        "action" : "keystroke",
+        "icon" : "arrow.right",
+        "keys" : "right",
+        "label" : "Right"
+      },
+      "ring.up" : {
+        "action" : "keystroke",
+        "icon" : "arrow.up",
+        "keys" : "up",
+        "label" : "Up"
+      }
+    },
+    "browser" : {
+      "button.menu" : {
+        "action" : "keystroke",
+        "icon" : "delete.left",
+        "keys" : "delete",
+        "label" : "Delete"
+      },
+      "button.menu.taphold" : {
+        "action" : "keystroke",
+        "after" : 0.5,
+        "icon" : "chevron.backward",
+        "keys" : "cmd+[",
+        "label" : "Back"
+      },
+      "button.menu.taphold2" : {
+        "action" : "closeWindow",
+        "after" : 1,
+        "icon" : "xmark.circle.fill",
+        "label" : "Close Window"
+      },
+      "button.menu.taphold3" : {
+        "action" : "applescript",
+        "after" : 1.7,
+        "icon" : "power",
+        "label" : "Quit App",
+        "script" : "tell application \"System Events\" to set n to name of first application process whose frontmost is true\nif n is not \"HyperVibe\" then tell application n to quit"
+      },
+      "inherits" : "global",
+      "ring.down.double" : {
+        "action" : "keystroke",
+        "keys" : "cmd+w"
+      },
+      "ring.left" : {
+        "action" : "keystroke",
+        "keys" : "cmd+opt+left"
+      },
+      "ring.right" : {
+        "action" : "keystroke",
+        "keys" : "cmd+opt+right"
+      },
+      "ring.up.double" : {
+        "action" : "keystroke",
+        "keys" : "cmd+shift+t"
+      }
+    },
+    "global" : {
+      "L1.button.mute" : {
+        "action" : "keystroke",
+        "icon" : "doc.on.clipboard",
+        "keys" : "cmd+v",
+        "label" : "Paste"
+      },
+      "L1.button.playPause" : {
+        "action" : "keystroke",
+        "icon" : "doc.on.doc",
+        "keys" : "cmd+c",
+        "label" : "Copy"
+      },
+      "L1.button.playPause.hold" : {
+        "action" : "keystroke",
+        "icon" : "scissors",
+        "keys" : "cmd+x",
+        "label" : "Cut"
+      },
+      "L1.button.volumeDown" : {
+        "action" : "keystroke",
+        "icon" : "minus.magnifyingglass",
+        "keys" : "cmd+-",
+        "label" : "Zoom Out"
+      },
+      "L1.button.volumeUp" : {
+        "action" : "keystroke",
+        "icon" : "plus.magnifyingglass",
+        "keys" : "cmd+=",
+        "label" : "Zoom In"
+      },
+      "L1.ring.left" : {
+        "action" : "space",
+        "icon" : "rectangle.split.3x1",
+        "label" : "Space ←",
+        "to" : "left"
+      },
+      "L1.ring.right" : {
+        "action" : "space",
+        "icon" : "rectangle.split.3x1",
+        "label" : "Space →",
+        "to" : "right"
+      },
+      "button.menu" : {
+        "action" : "keystroke",
+        "icon" : "delete.left",
+        "keys" : "delete",
+        "label" : "Delete"
+      },
+      "button.menu.taphold" : {
+        "action" : "closeWindow",
+        "after" : 0.5,
+        "icon" : "xmark.circle.fill",
+        "label" : "Close Window"
+      },
+      "button.menu.taphold2" : {
+        "action" : "applescript",
+        "after" : 1.2,
+        "icon" : "power",
+        "label" : "Quit App",
+        "script" : "tell application \"System Events\" to set n to name of first application process whose frontmost is true\nif n is not \"HyperVibe\" then tell application n to quit"
+      },
+      "button.mute" : {
+        "action" : "applescript",
+        "icon" : "speaker.slash.fill",
+        "label" : "Mute",
+        "script" : "set volume output muted (not (output muted of (get volume settings)))"
+      },
+      "button.mute.double" : {
+        "action" : "keystroke",
+        "icon" : "magnifyingglass",
+        "keys" : "cmd+space",
+        "label" : "Spotlight"
+      },
+      "button.playPause" : {
+        "action" : "applescript",
+        "icon" : "playpause.fill",
+        "label" : "Play / Pause",
+        "script" : "if application \"Music\" is running then tell application \"Music\" to playpause"
+      },
+      "button.playPause.double" : {
+        "action" : "fullscreen",
+        "icon" : "arrow.up.left.and.arrow.down.right",
+        "label" : "Full Screen"
+      },
+      "button.playPause.hold2" : {
+        "action" : "launch",
+        "after" : 0.3,
+        "app" : "Music"
+      },
+      "button.power" : {
+        "action" : "brightness",
+        "value" : 0
+      },
+      "button.power.hold" : {
+        "action" : "shell",
+        "command" : "pmset sleepnow",
+        "icon" : "moon.fill",
+        "label" : "Sleep"
+      },
+      "button.siri" : {
+        "action" : "pushToTalk",
+        "keys" : "rctrl+rcmd+ropt"
+      },
+      "button.siri.tap" : {
+        "action" : "keystroke",
+        "keys" : "enter"
+      },
+      "button.tv" : {
+        "action" : "layerCycle"
+      },
+      "button.tv.hold" : {
+        "action" : "appWheel",
+        "icon" : "circle.grid.3x3.fill",
+        "label" : "App 圆盘"
+      },
+      "button.volumeDown" : {
+        "action" : "media",
+        "key" : "voldown"
+      },
+      "button.volumeUp" : {
+        "action" : "media",
+        "key" : "volup"
+      },
+      "ring.down" : {
+        "action" : "keystroke",
+        "keys" : "down"
+      },
+      "ring.down.double" : {
+        "action" : "keystroke",
+        "keys" : "cmd+w"
+      },
+      "ring.down.hold" : {
+        "action" : "minimize",
+        "icon" : "arrow.down.right.and.arrow.up.left",
+        "label" : "Minimise"
+      },
+      "ring.left" : {
+        "action" : "keystroke",
+        "keys" : "cmd+shift+left"
+      },
+      "ring.right" : {
+        "action" : "keystroke",
+        "keys" : "cmd+shift+right"
+      },
+      "ring.up" : {
+        "action" : "keystroke",
+        "keys" : "up"
+      },
+      "ring.up.hold" : {
+        "action" : "shell",
+        "command" : "open -a 'Mission Control'"
+      }
+    },
+    "music" : {
+      "button.playPause" : {
+        "action" : "applescript",
+        "script" : "tell application \"Music\" to playpause"
+      },
+      "inherits" : "global",
+      "ring.left" : {
+        "action" : "applescript",
+        "icon" : "backward.end.fill",
+        "label" : "Previous",
+        "script" : "tell application \"Music\" to previous track"
+      },
+      "ring.right" : {
+        "action" : "applescript",
+        "icon" : "forward.end.fill",
+        "label" : "Next",
+        "script" : "tell application \"Music\" to next track"
+      }
+    },
+    "terminal" : {
+      "inherits" : "global",
+      "ring.down.double" : {
+        "action" : "keystroke",
+        "keys" : "cmd+w"
+      },
+      "ring.left" : {
+        "action" : "keystroke",
+        "keys" : "cmd+shift+left"
+      },
+      "ring.right" : {
+        "action" : "keystroke",
+        "keys" : "cmd+shift+right"
+      },
+      "ring.up.double" : {
+        "action" : "keystroke",
+        "keys" : "cmd+shift+t"
+      }
+    }
+  },
+  "settings" : {
+    "accelCurve" : 1,
+    "accelHighSpeed" : 0.06,
+    "accelLowSpeed" : 0.007,
+    "accelMax" : 6,
+    "accelMin" : 0.14,
+    "accelerationCurvesLinked" : false,
+    "appWheel" : [
+      "WeChat",
+      "Google Chrome",
+      "Music",
+      "Warp"
+    ],
+    "automaticUpdateChecksEnabled" : true,
+    "automaticallyDownloadUpdatesEnabled" : true,
+    "circularScroll" : {
+      "accelCurve" : 0.807559880239521,
+      "accelHighSpeed" : 0.07,
+      "accelLowSpeed" : 0.01,
+      "accelMax" : 5,
+      "accelMin" : 1.1161497549565607,
+      "enabled" : true,
+      "invert" : true,
+      "minRadius" : 0.35,
+      "pixelsPerRadian" : 428,
+      "scrollEase" : 0.3,
+      "startThreshold" : 0.1
+    },
+    "clickRiseThreshold" : 0.1,
+    "cursorDeadzone" : 0.006,
+    "cursorSpeed" : 1.8,
+    "defaultMode" : "global",
+    "demoRemoteEnabled" : false,
+    "dictation" : {
+      "activeMode" : "final",
+      "autoInsert" : true,
+      "cleanupProvider" : "deepseek",
+      "copyLastOnSideButtonDouble" : true,
+      "copyOnFailure" : true,
+      "deepSeekCleanupModel" : "deepseek-v4-flash",
+      "dictionary" : [
+        {
+          "aliases" : [
+            "hyper vibe",
+            "Hyper Vibe"
+          ],
+          "term" : "HyperVibe"
+        },
+        {
+          "aliases" : [
+            "Clique"
+          ],
+          "term" : "clique"
+        },
+        {
+          "aliases" : [
+            "sub agent",
+            "subagent"
+          ],
+          "term" : "sub-agent"
+        },
+        {
+          "aliases" : [
+
+          ],
+          "term" : "审稿人"
+        },
+        {
+          "aliases" : [
+            "sigmod",
+            "SIG MOD"
+          ],
+          "term" : "SIGMOD"
+        },
+        {
+          "aliases" : [
+            "vldb",
+            "V L D B"
+          ],
+          "term" : "VLDB"
+        },
+        {
+          "aliases" : [
+            "hyper graph"
+          ],
+          "term" : "hypergraph"
+        },
+        {
+          "aliases" : [
+
+          ],
+          "term" : "skill"
+        },
+        {
+          "aliases" : [
+
+          ],
+          "term" : "layer"
+        },
+        {
+          "aliases" : [
+
+          ],
+          "term" : "core"
+        }
+      ],
+      "enabled" : true,
+      "feedbackSoundVolume" : 0.55,
+      "feedbackSoundsEnabled" : true,
+      "finalModel" : "gpt-transcribe",
+      "keyboardShortcut" : "rctrl+rcmd+ropt",
+      "languageHints" : [
+        "zh",
+        "en"
+      ],
+      "layerModes" : {
+
+      },
+      "maxRecordingSeconds" : 600,
+      "minimumRecordingSeconds" : 1,
+      "openAICleanupModel" : "gpt-5.6-luna",
+      "outputMode" : "final",
+      "pipelineOverlayEnabled" : true,
+      "restoreClipboardAfterInsert" : true,
+      "selectionEditProvider" : "deepseek",
+      "selectionEditingEnabled" : true,
+      "streamingModel" : "gpt-live-transcribe"
+    },
+    "doubleTapWindow" : 0.2,
+    "dragIndicatorEnabled" : true,
+    "findCursorEnabled" : true,
+    "focusFollowsCursor" : true,
+    "holdCancelGrace" : 1,
+    "holdHUDEnabled" : true,
+    "holdThreshold" : 0.5,
+    "holdThreshold2" : 1,
+    "holdThreshold3" : 1.6,
+    "icons" : {
+      "fallback" : "command.circle.fill",
+      "layer.default" : "square.stack.3d.up.fill",
+      "remote.connected" : "appletvremote.gen4.fill",
+      "remote.disconnected" : "appletvremote.gen4",
+      "voice.copied" : "doc.on.doc.fill",
+      "voice.error" : "exclamationmark.triangle.fill",
+      "voice.inserted" : "checkmark.circle.fill",
+      "voice.inserting" : "text.cursor",
+      "voice.polishing" : "wand.and.stars",
+      "voice.transcribing" : "waveform.badge.magnifyingglass"
+    },
+    "interfaceLanguage" : "en",
+    "launchAtLoginEnabled" : true,
+    "layerHUDEnabled" : true,
+    "layers" : [
+      {
+        "color" : "green",
+        "icon" : "square.stack.3d.up.fill",
+        "id" : "BASE",
+        "name" : "Layer 1"
+      },
+      {
+        "color" : "blue",
+        "icon" : "square.stack.3d.up.fill",
+        "id" : "L1",
+        "name" : "Layer 2"
+      },
+      {
+        "color" : "purple",
+        "icon" : "square.stack.3d.up.fill",
+        "id" : "L2",
+        "name" : "Layer 3"
+      }
+    ],
+    "menuBarIconEnabled" : true,
+    "pressMoveMax" : 0.025,
+    "showSetupWizardOnFirstLaunch" : true,
+    "spacesModeWindow" : 5,
+    "statusWidgetEnabled" : true,
+    "swipeVelocity" : 0.5
+  }
+}
