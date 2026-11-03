@@ -513,10 +513,12 @@ class RemoteInputHandler {
             device, kIOHIDPrimaryUsageKey as CFString
         ) as? Int ?? -1
 
-        // Normal operation seizes every remote interface to prevent duplicate system handling. The
-        // direct-PTT diagnostic is narrower: seize only the audio interface whose raw reports we
+        // Normal operation seizes button interfaces to prevent duplicate system handling.
+        // Skip seizing digitizer (0x0D) and vendor (0xFF00) so MultitouchSupport continues
+        // receiving touch frames on 1st-gen Siri Remotes (A1513 / 0x026D).
+        // The direct-PTT diagnostic is narrower: seize only the audio interface whose raw reports we
         // need, and leave the management/button siblings non-exclusive while report 0x99 is tested.
-        let shouldSeize = usagePage != 0x20
+        let shouldSeize = usagePage != 0x20 && usagePage != 0x0D && usagePage != 0xFF00
             && (!directPushToTalk || (usagePage == 0x0C && usage == 0x04))
         let openOptions = IOOptionBits(
             shouldSeize ? kIOHIDOptionsTypeSeizeDevice : kIOHIDOptionsTypeNone
