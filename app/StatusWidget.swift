@@ -238,6 +238,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     private var currentControlState: ControlVisualState?
     private var currentFaceTint = NSColor.controlAccentColor
     private var isTransient = false
+    private var chatGPTDictationHUDSuppressed = false
     private var enabled = false
     private var idleGeneration = 0
     private var visibilityGeneration = 0
@@ -367,6 +368,20 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
 
     func setEnabled(_ wanted: Bool) {
         onMain { [weak self] in self?.setEnabledOnMain(wanted) }
+    }
+
+    /// Temporarily remove the persistent Layer card while ChatGPT owns the Siri hold gesture.
+    /// Keep the active layer state in memory; it is restored on release.
+    func setChatGPTDictationHUDSuppressed(_ suppressed: Bool) {
+        onMain { [weak self] in
+            guard let self, self.chatGPTDictationHUDSuppressed != suppressed else { return }
+            self.chatGPTDictationHUDSuppressed = suppressed
+            if suppressed {
+                self.hidePanel(animated: false)
+            } else if self.enabled, self.isConnected {
+                self.showPanel(entranceAnimated: false)
+            }
+        }
     }
 
     /// Re-render the resting face in the newly-selected language. Transient/hold faces relocalize
@@ -1019,6 +1034,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
     /// Bring the widget on screen and land on the current layer. Only called while `enabled &&
     /// isConnected`, so the entrance doubles as the connect animation.
     private func showPanel(entranceAnimated: Bool) {
+        guard !chatGPTDictationHUDSuppressed else { return }
         visibilityGeneration += 1
         idleGeneration += 1
         restorePosition()
@@ -1199,7 +1215,7 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
                          iconMotion: IconMotion? = nil, accentSweep: Bool = false,
                          playSymbolCue: Bool = true) {
         // Content updates never surface the panel while it is intentionally hidden (no remote).
-        guard enabled, isConnected else { return }
+        guard enabled, isConnected, !chatGPTDictationHUDSuppressed else { return }
         ensureReachable()
         surface.panel.orderFrontRegardless()
         voicePipelineAccentRoot?.removeFromSuperlayer()

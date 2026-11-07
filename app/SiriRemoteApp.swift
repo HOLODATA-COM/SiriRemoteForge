@@ -53,6 +53,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// disabling the larger release-to-select progress HUD (or vice versa).
     private var holdHUDEnabled = true
     private var layerHUDEnabled = true
+    private var chatGPTDictationHUDSuppressed = false
     private var dragIndicatorEnabled = true
     /// Avoid asking SMAppService to re-apply the same JSON request for every unrelated slider tick.
     private var lastLaunchAtLoginRequest: Bool?
@@ -1459,6 +1460,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         holdHUD = progress
         progress.prewarm()
         remoteInputHandler?.onHoldBegan = { [weak self, weak persistentStatus] startedAt, base, stages in
+            let hasChatGPTDictation = stages.contains {
+                if case .chatGPTDictation = $0.action { return true }
+                return false
+            }
+            let chatGPTIsTarget = stages.contains {
+                if case .chatGPTDictation = $0.action {
+                    return $0.presentation?.label != "ChatGPT not frontmost"
+                }
+                return false
+            }
+            if hasChatGPTDictation, chatGPTIsTarget {
+                self?.chatGPTDictationHUDSuppressed = true
+                persistentStatus?.setChatGPTDictationHUDSuppressed(true)
+                progress.hideImmediately()
+                return
+            }
             persistentStatus?.beginHold(startedAt: startedAt, base: base, stages: stages)
             guard self?.holdHUDEnabled == true else { return }
             func face(_ action: Action, _ p: Config.Presentation?) -> HoldProgressHUD.Face {
@@ -1474,7 +1491,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                return .init(threshold: $0.threshold, face: f)
                            })
         }
-        remoteInputHandler?.onHoldEnded = { [weak persistentStatus] firedIndex in
+        remoteInputHandler?.onHoldEnded = { [weak self, weak persistentStatus] firedIndex in
+            if self?.chatGPTDictationHUDSuppressed == true {
+                self?.chatGPTDictationHUDSuppressed = false
+                progress.hideImmediately()
+                persistentStatus?.setChatGPTDictationHUDSuppressed(false)
+                return
+            }
             // `end` is safe even when the large HUD was disabled; calling it unconditionally also
             // dismisses a HUD immediately if the user switches that preference off mid-hold.
             progress.end(firedIndex: firedIndex)
