@@ -60,7 +60,7 @@ final class MenuBarManager {
             title: L("Permissions: Checking…"), action: nil, keyEquivalent: ""
         )
         self.layerCardMenuItem = NSMenuItem(
-            title: L("Layer 1 status card"), action: #selector(toggleLayerCard), keyEquivalent: ""
+            title: L("Show layer"), action: #selector(toggleLayerCard), keyEquivalent: ""
         )
         self.layerCardMenuItem.target = self
         setupMenuBar()
@@ -135,7 +135,7 @@ final class MenuBarManager {
 
     private func rebuildMenu() {
         menu.removeAllItems()
-        layerCardMenuItem.title = L("Layer 1 status card")
+        layerCardMenuItem.title = L("Show layer")
 
         let titleItem = NSMenuItem(title: "siriRemote", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
