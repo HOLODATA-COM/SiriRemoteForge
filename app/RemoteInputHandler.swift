@@ -1422,8 +1422,15 @@ class RemoteInputHandler {
             }
         }
         // Escape hatch: keep holding past the deepest stage and releasing does nothing at all.
+        // ChatGPT dictation is an edge-paired hold: its matching release is the stop signal, so a
+        // timeout cancel would make ordinary speaking-length holds stop early and show a false
+        // Cancel card. Let this action remain armed until the physical release instead.
         var cancelAt: TimeInterval?
-        if holdCancelGrace > 0, let deepest = armed.last {
+        let containsChatGPTDictation = armed.contains {
+            if case .chatGPTDictation? = controller.resolvedAction(for: $0.key) { return true }
+            return false
+        }
+        if !containsChatGPTDictation, holdCancelGrace > 0, let deepest = armed.last {
             let threshold = deepest.delay + holdCancelGrace
             cancelAt = threshold
             hudStages.append((threshold, "\(tapKey).cancel", Action.mouse(op: "click"),
