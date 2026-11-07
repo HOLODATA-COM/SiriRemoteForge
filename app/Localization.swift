@@ -481,6 +481,7 @@ extension Loc {
         "Verified Full Setup updates download in the background. macOS asks for administrator approval only when an update installs system components.": "经过验证的完整安装更新会在后台下载。只有在更新安装系统组件时，macOS 才会请求管理员授权。",
         "Menu bar icon": "菜单栏图标",
         "Always-on status widget": "常驻状态浮窗",
+        "Layer 1 status card": "Layer 1 状态卡",
         "Layer and connection HUD": "层级与连接 HUD",
         "Long-press progress HUD": "长按进度 HUD",
         "Sticky-drag indicator": "持续拖动提示",
