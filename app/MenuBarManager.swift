@@ -30,8 +30,10 @@ final class MenuBarManager {
     private let menu: NSMenu
     private let statusMenuItem: NSMenuItem
     private let permissionMenuItem: NSMenuItem
+    private let layerCardMenuItem: NSMenuItem
     private var isConnected = false
     private var permissionsReady = false
+    private var layerCardVisible = true
     private var demoRemoteVisible = false
     private var availableUpdateVersion: String?
     private var localeObserver: NSObjectProtocol?
@@ -47,6 +49,8 @@ final class MenuBarManager {
     var onCheckForUpdates: (() -> Void)?
     /// Set by the AppDelegate to show/hide the live, presentation-oriented remote visualiser.
     var onToggleDemoMode: (() -> Void)?
+    /// Set by the AppDelegate to toggle the persistent Layer 1 status card.
+    var onToggleLayerCard: (() -> Void)?
 
     init(statusItem: NSStatusItem) {
         self.statusItem = statusItem
@@ -55,6 +59,10 @@ final class MenuBarManager {
         self.permissionMenuItem = NSMenuItem(
             title: L("Permissions: Checking…"), action: nil, keyEquivalent: ""
         )
+        self.layerCardMenuItem = NSMenuItem(
+            title: L("Show layer"), action: #selector(toggleLayerCard), keyEquivalent: ""
+        )
+        self.layerCardMenuItem.target = self
         setupMenuBar()
         localeObserver = NotificationCenter.default.addObserver(
             forName: Loc.didChange, object: nil, queue: .main
@@ -127,6 +135,7 @@ final class MenuBarManager {
 
     private func rebuildMenu() {
         menu.removeAllItems()
+        layerCardMenuItem.title = L("Show layer")
 
         let titleItem = NSMenuItem(title: "siriRemote", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
@@ -153,6 +162,11 @@ final class MenuBarManager {
         permissionMenuItem.target = permissionsReady ? nil : self
         permissionMenuItem.isEnabled = !permissionsReady
         menu.addItem(permissionMenuItem)
+
+        layerCardMenuItem.state = layerCardVisible ? .on : .off
+        layerCardMenuItem.image = NSImage(systemSymbolName: "rectangle.on.rectangle",
+                                          accessibilityDescription: nil)
+        menu.addItem(layerCardMenuItem)
 
         menu.addItem(.separator())
         let setupItem = NSMenuItem(
@@ -193,6 +207,16 @@ final class MenuBarManager {
     @objc private func checkForUpdates() { onCheckForUpdates?() }
 
     @objc private func toggleDemoMode() { onToggleDemoMode?() }
+
+    @objc private func toggleLayerCard() { onToggleLayerCard?() }
+
+    func updateLayerCardVisibility(_ visible: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.layerCardVisible = visible
+            self.layerCardMenuItem.state = visible ? .on : .off
+        }
+    }
 
     func updateDemoModeVisibility(_ visible: Bool) {
         DispatchQueue.main.async { [weak self] in

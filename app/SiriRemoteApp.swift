@@ -1306,6 +1306,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             automaticDownloads: model.tune.automaticallyDownloadUpdatesEnabled
         )
         settingsModel = model
+        menuBarManager?.updateLayerCardVisibility(model.tune.statusWidgetEnabled)
+        menuBarManager?.onToggleLayerCard = { [weak model] in
+            guard let model else { return }
+            var tune = model.tune
+            tune.statusWidgetEnabled.toggle()
+            model.tune = tune
+        }
         let settingsWin = SettingsWindowController(model: model)
         settingsWindow = settingsWin
         menuBarManager.onOpenSettings = { [weak settingsWin] in settingsWin?.show() }
@@ -1823,6 +1830,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         statusItem?.isVisible = t.menuBarIconEnabled
         statusWidget?.setEnabled(t.statusWidgetEnabled)
+        menuBarManager?.updateLayerCardVisibility(t.statusWidgetEnabled)
         voicePipelineHUD?.setEnabled(t.dictation.pipelineOverlayEnabled)
         demoModeWindow?.setVisible(t.demoRemoteEnabled)
         let wasShowingLayerHUD = layerHUDEnabled
