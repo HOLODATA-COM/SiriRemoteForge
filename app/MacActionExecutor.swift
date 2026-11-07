@@ -49,6 +49,9 @@ final class MacActionExecutor: ActionExecutor {
             // combo there and never reach the executor). This handles a stray dispatch — e.g. the
             // action bound to a swipe/tap, which has no release edge — as a single keystroke.
             Keys.synthesize(keys)
+        case .chatGPTDictation:
+            // This action is driven by RemoteInputHandler's timed hold/release path.
+            break
         case .repeatKey(let keys, _, _):
             // The auto-repeat cadence is driven by RemoteInputHandler (press starts the repeat,
             // release stops it). Here we just synthesize a single keystroke — this handles the
@@ -88,7 +91,7 @@ enum Keys {
     /// every tick is avoidable churn on a cadence meant to match the keyboard. Used by `holdRepeat`.
     private static let sharedSource = CGEventSource(stateID: .combinedSessionState)
 
-    static func synthesize(_ combo: String) {
+    static func synthesize(_ combo: String, to processID: pid_t? = nil) {
         guard let parsed = KeyMap.parse(combo) else {
             NSLog("[siriRemote] unknown keystroke '\(combo)'"); return
         }
@@ -101,7 +104,7 @@ enum Keys {
             f.insert(m.flag)
             let e = CGEvent(keyboardEventSource: src, virtualKey: m.keyCode, keyDown: true)
             e?.flags = f
-            e?.post(tap: .cghidEventTap)
+            post(e, to: processID)
         }
 
         if let mainKey = parsed.mainKey {
@@ -109,8 +112,8 @@ enum Keys {
             down?.flags = f
             let up = CGEvent(keyboardEventSource: src, virtualKey: mainKey, keyDown: false)
             up?.flags = f
-            down?.post(tap: .cghidEventTap)
-            up?.post(tap: .cghidEventTap)
+            post(down, to: processID)
+            post(up, to: processID)
         } else {
             // Modifier-only chord (e.g. "rctrl+rcmd+ropt"): hold briefly so a hyperkey tool sees it.
             usleep(30000)
@@ -121,7 +124,16 @@ enum Keys {
             f.remove(m.flag)
             let e = CGEvent(keyboardEventSource: src, virtualKey: m.keyCode, keyDown: false)
             e?.flags = f
-            e?.post(tap: .cghidEventTap)
+            post(e, to: processID)
+        }
+    }
+
+    private static func post(_ event: CGEvent?, to processID: pid_t?) {
+        guard let event else { return }
+        if let processID {
+            event.postToPid(processID)
+        } else {
+            event.post(tap: .cghidEventTap)
         }
     }
 

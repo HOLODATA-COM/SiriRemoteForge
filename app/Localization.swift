@@ -580,6 +580,8 @@ extension Loc {
         "None": "无",
         "Keystroke": "按键",
         "Push to talk": "按住说话",
+        "ChatGPT Dictation": "ChatGPT 听写",
+        "Hold to start ChatGPT dictation; release to stop. Uses the Siri tap shortcut.": "按住开始 ChatGPT 听写，松开结束；自动使用 Siri 轻点绑定的快捷键。",
         "Repeat key": "重复按键",
         "Media": "媒体",
         "Mouse": "鼠标",

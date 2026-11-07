@@ -732,7 +732,7 @@ private struct ActionSlotEditor: View {
              applescript = "AppleScript", space = "Switch space", brightness = "Brightness",
              brightnessStep = "Brightness step",
              layer = "Layer", layerCycle = "Layer cycle", mode = "Mode", repeatKey = "Repeat key",
-             fullscreen = "Full screen", minimize = "Minimise",
+             fullscreen = "Full screen", minimize = "Minimise", chatGPTDictation = "ChatGPT Dictation",
              closeWindow = "Close window", appWheel = "App wheel"
         var id: String { rawValue }
     }
@@ -765,6 +765,7 @@ private struct ActionSlotEditor: View {
                 Section(L("Keys & media")) {
                     Text(L(Kind.keystroke.rawValue)).tag(Kind.keystroke)
                     Text(L(Kind.pushToTalk.rawValue)).tag(Kind.pushToTalk)
+                    Text(L(Kind.chatGPTDictation.rawValue)).tag(Kind.chatGPTDictation)
                     Text(L(Kind.repeatKey.rawValue)).tag(Kind.repeatKey)
                     Text(L(Kind.media.rawValue)).tag(Kind.media)
                     Text(L(Kind.mouse.rawValue)).tag(Kind.mouse)
@@ -815,6 +816,8 @@ private struct ActionSlotEditor: View {
                 Text(L("fires on press AND on release"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
+        case .chatGPTDictation:
+            Text(L("Hold to start ChatGPT dictation; release to stop. Uses the Siri tap shortcut.")).foregroundStyle(.secondary).font(.system(size: 11))
         case .shell:
             TextField(L("shell command"), text: $text).textFieldStyle(.roundedBorder).frame(width: 240)
                 .focused($focused).onSubmit(commit)
@@ -865,6 +868,7 @@ private struct ActionSlotEditor: View {
         switch a {
         case .keystroke(let k):       kind = .keystroke; text = k
         case .pushToTalk(let k):      kind = .pushToTalk; text = k
+        case .chatGPTDictation:      kind = .chatGPTDictation
         case .media(let k):           kind = .media; pick = k
         case .mouse(let op):          kind = .mouse; pick = op
         case .launch(let app, let url):
@@ -926,6 +930,7 @@ private struct ActionSlotEditor: View {
         case .none:        return nil
         case .keystroke:   return text.isEmpty ? nil : .keystroke(keys: text)
         case .pushToTalk:  return text.isEmpty ? nil : .pushToTalk(keys: text)
+        case .chatGPTDictation: return .chatGPTDictation
         case .repeatKey:   return text.isEmpty ? nil : .repeatKey(keys: text, delay: repDelay, interval: repInterval)
         case .media:       return .media(key: pick.isEmpty ? "playpause" : pick)
         case .mouse:       return .mouse(op: pick.isEmpty ? "click" : pick)
