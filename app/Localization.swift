@@ -118,6 +118,8 @@ extension Loc {
         "Hold for %@": "按住 · %@",
         "Release to cancel": "松手取消",
         "Release to choose": "松手选择",
+        "Hold to start dictation": "按住开始听写",
+        "Dictating · release to stop": "听写中 · 松开结束",
         "Cancelled": "已取消",
         "Completed": "已完成",
         "Listening · speak now": "聆听中 · 请说话",

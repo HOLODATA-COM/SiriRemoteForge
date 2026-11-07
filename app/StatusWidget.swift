@@ -4185,14 +4185,22 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         let subtitle: String
         if stage == 0 {
             item = holdBase
-            let nextLabel = holdStages.first.map {
-                ActionVisual.resolve($0.item.action, $0.item.presentation,
-                                     prefersTargetAppIcon: false).label
+            if let next = holdStages.first, case .chatGPTDictation = next.item.action {
+                subtitle = L("Hold to start dictation")
+            } else {
+                let nextLabel = holdStages.first.map {
+                    ActionVisual.resolve($0.item.action, $0.item.presentation,
+                                         prefersTargetAppIcon: false).label
+                }
+                subtitle = nextLabel.map { L("Hold for %@", $0) } ?? L("Keep holding")
             }
-            subtitle = nextLabel.map { L("Hold for %@", $0) } ?? L("Keep holding")
         } else if holdStages.indices.contains(stage - 1) {
             item = holdStages[stage - 1].item
-            subtitle = item?.isCancel == true ? L("Release to cancel") : L("Release to choose")
+            if case .chatGPTDictation? = item?.action {
+                subtitle = L("Dictating · release to stop")
+            } else {
+                subtitle = item?.isCancel == true ? L("Release to cancel") : L("Release to choose")
+            }
         } else {
             item = nil
             subtitle = L("Keep holding")
