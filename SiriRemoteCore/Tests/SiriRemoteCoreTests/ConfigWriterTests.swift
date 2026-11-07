@@ -18,6 +18,7 @@ final class ConfigWriterTests: XCTestCase {
             .keystroke(keys: "rctrl+rcmd+ropt"),          // modifier-only hyperkey chord
             .pushToTalk(keys: "f17"),
             .pushToTalk(keys: "cmd+shift+d"),
+            .chatGPTDictation,
             .media(key: "playpause"),
             .mouse(op: "rightclick"),
             .launch(app: "Safari", url: nil),
