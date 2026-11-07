@@ -4197,7 +4197,9 @@ final class StatusWidgetController: NSObject, NSWindowDelegate {
         } else if holdStages.indices.contains(stage - 1) {
             item = holdStages[stage - 1].item
             if case .chatGPTDictation? = item?.action {
-                subtitle = L("Dictating · release to stop")
+                subtitle = item?.presentation?.label == "ChatGPT not frontmost"
+                    ? L("Bring ChatGPT to front")
+                    : L("Dictating · release to stop")
             } else {
                 subtitle = item?.isCancel == true ? L("Release to cancel") : L("Release to choose")
             }

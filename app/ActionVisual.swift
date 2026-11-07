@@ -266,7 +266,7 @@ enum ActionVisual {
         switch action {
         case .keystroke(let keys): return keystrokeSymbolName(keys)
         case .pushToTalk:  return "mic.fill"
-        case .chatGPTDictation: return "mic.badge.waveform"
+        case .chatGPTDictation: return "mic.fill"
         case .media(let key):
             switch key.lowercased() {
             case "next": return "forward.end.fill"

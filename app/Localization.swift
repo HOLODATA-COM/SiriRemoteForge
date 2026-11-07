@@ -120,6 +120,8 @@ extension Loc {
         "Release to choose": "松手选择",
         "Hold to start dictation": "按住开始听写",
         "Dictating · release to stop": "听写中 · 松开结束",
+        "ChatGPT not frontmost": "ChatGPT 未在前台",
+        "Bring ChatGPT to front": "请先切到 ChatGPT",
         "Cancelled": "已取消",
         "Completed": "已完成",
         "Listening · speak now": "聆听中 · 请说话",
