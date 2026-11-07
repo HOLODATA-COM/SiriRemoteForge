@@ -6,7 +6,7 @@
   //             button.menu button.tv button.siri button.playPause
   //             button.volumeUp button.volumeDown button.back
   //             button.nextTrack button.prevTrack button.mute button.power
-  // Actions: keystroke(keys) media(key) mouse(op) launch(app|url)
+  // Actions: keystroke(keys) pushToTalk(keys) chatGPTDictation media(key) mouse(op) launch(app|url)
   //          shell(command) applescript(script) mode(to) brightnessStep(to: up|down)
   // A binding OVERRIDES native behavior; unbound buttons stay native.
   "settings": {

@@ -184,6 +184,20 @@ class RemoteInputHandler {
     }
     private var armedHolds: [String: ArmedHold] = [:]
 
+    /// ChatGPT's hotkey is stored once on the same button's tap binding. A special long-hold action
+    /// captures that chord and sends it at the hold threshold and again at release. This keeps the
+    /// ChatGPT toggle pair independent of HyperVibe's own microphone/PTT routes.
+    private struct ChatGPTDictationHold {
+        let keys: String
+        let stageKey: String
+        let startedAt: CFTimeInterval
+        let threshold: TimeInterval
+        var pending: DispatchWorkItem?
+        var targetPID: pid_t?
+        var opened = false
+    }
+    private var chatGPTDictationHolds: [String: ChatGPTDictationHold] = [:]
+
     /// Layer key (Feature: LAYER). A `.layer` binding gives its button BOTH activation styles:
     ///   • HOLD it and press other keys → momentary (the layer is active only while held).
     ///   • TAP it (press+release with no other key in between) → TOGGLE a *sticky* layer that
@@ -969,6 +983,9 @@ class RemoteInputHandler {
     private func routeButton(_ buttonName: String, pressed: Bool) {
         guard let controller = controller else { return }
         let tapKey = RemoteInputHandler.configKey(for: buttonName)
+        // Capture the intended target before the hold-progress HUD is presented. A floating
+        // HyperVibe panel must not become the apparent target for a shortcut already aimed at ChatGPT.
+        let frontmostAppAtPress = pressed ? NSWorkspace.shared.frontmostApplication : nil
         // Capture release selection once. The layer branch and the hold-dispatch branch must make
         // the same decision even if this release lands exactly on a stage boundary.
         let releaseHoldSelection = pressed ? nil : currentHoldSelection(for: buttonName)
@@ -977,6 +994,12 @@ class RemoteInputHandler {
         // release reverts the layer instead of toggling it sticky). Mark this FIRST — before the
         // Spaces / repeatKey early-returns — so a repeat-bound or Spaces key still counts as a use.
         markLayerUsed(byButton: buttonName, pressed: pressed)
+
+        let hasChatGPTDictationHold = (1...3).contains { stage in
+            if case .chatGPTDictation? = controller.resolvedAction(
+                for: Self.holdStageKey(tapKey, stage, .hold)) { return true }
+            return false
+        }
 
         // 1) Spaces Mode: while armed, the ring becomes a desktop switcher. Intercept on press,
         //    BEFORE any config dispatch, and consume so the normal binding doesn't also fire.
@@ -1109,10 +1132,11 @@ class RemoteInputHandler {
         // resolves differently mid-hold (a layer/mode change, a config hot-reload).
         let resolvedBase = pressed ? controller.resolvedAction(for: tapKey) : nil
         let configuredPushToTalkKeys: String? = {
+            guard !hasChatGPTDictationHold else { return nil }
             if case let .pushToTalk(keys)? = resolvedBase { return keys }
             return nil
         }()
-        let nativeRequested = pressed && Self.nativeDictationClaims(
+        let nativeRequested = pressed && !hasChatGPTDictationHold && Self.nativeDictationClaims(
             tapKey, enabled: shouldUseNativeDictation?() == true
         )
         let configuredPushToTalk = configuredPushToTalkKeys != nil
@@ -1314,7 +1338,8 @@ class RemoteInputHandler {
             // key that has a `.taphold*` menu, is the "hold" half of tap-then-hold — arm THAT second
             // menu (identical machinery, `.taphold*` bindings) instead of counting another tap.
             if isTapholdCandidate(buttonName, tapKey: tapKey),
-               armHoldStages(buttonName: buttonName, tapKey: tapKey, family: .taphold) {
+               armHoldStages(buttonName: buttonName, tapKey: tapKey, family: .taphold,
+                             frontmostAppAtPress: frontmostAppAtPress) {
                 // This second press IS the hold half of tap-then-hold, so cancel the first tap's
                 // DEFERRED delete (armed in handleTapPress) — otherwise it lands right before the menu.
                 pendingTap.removeValue(forKey: buttonName)?.cancel()
@@ -1323,7 +1348,8 @@ class RemoteInputHandler {
                 return
             }
             // Plain long-press menu.
-            if armHoldStages(buttonName: buttonName, tapKey: tapKey, family: .hold) {
+            if armHoldStages(buttonName: buttonName, tapKey: tapKey, family: .hold,
+                             frontmostAppAtPress: frontmostAppAtPress) {
                 return
             }
             // No hold menu bound: this is the ordinary tap, and holding it now auto-repeats since
@@ -1347,14 +1373,19 @@ class RemoteInputHandler {
 
             switch selection {
             case .cancel:
+                cancelChatGPTDictationHold(buttonName, closeIfOpen: true)
                 onHoldEnded?(hold.stages.count + 1)
                 print("🔘 \(tapKey) hold cancelled")
             case .stage(let index):
                 onHoldEnded?(index + 1)
                 if index < hold.stages.count {
-                    fireHold(controller: controller, holdKey: hold.stages[index].key)
+                    fireHold(controller: controller, buttonName: buttonName,
+                             holdKey: hold.stages[index].key)
+                } else {
+                    cancelChatGPTDictationHold(buttonName, closeIfOpen: true)
                 }
             case .tap:
+                cancelChatGPTDictationHold(buttonName, closeIfOpen: false)
                 onHoldEnded?(0)
                 // Released before the first stage → it was a tap: fire the single (or a `.double`).
                 fireTapOrDouble(buttonName, tapKey: tapKey)
@@ -1368,7 +1399,8 @@ class RemoteInputHandler {
     /// machinery behind both the plain long-press and the tap-then-hold menu; only the binding
     /// suffix differs. The release branch above is family-agnostic: it reads whichever `ArmedHold`
     /// the press populated.
-    private func armHoldStages(buttonName: String, tapKey: String, family: HoldFamily) -> Bool {
+    private func armHoldStages(buttonName: String, tapKey: String, family: HoldFamily,
+                               frontmostAppAtPress: NSRunningApplication?) -> Bool {
         guard let controller = controller else { return false }
 
         // Resolve every bound stage with its EFFECTIVE delay first (the binding's own `after` wins;
@@ -1387,17 +1419,32 @@ class RemoteInputHandler {
             $0.delay == $1.delay ? $0.ordinal < $1.ordinal : $0.delay < $1.delay
         }
 
+        let chatGPTTargetPID = frontmostAppAtPress.flatMap {
+            Self.isChatGPT(bundleID: $0.bundleIdentifier, name: $0.localizedName)
+                ? $0.processIdentifier : nil
+        }
         var hudStages: [(threshold: TimeInterval, key: String, action: Action,
                          presentation: Config.Presentation?, isCancel: Bool)] = []
         for stage in armed {
             if let stageAction = controller.resolvedAction(for: stage.key) {
+                var presentation = controller.resolvedPresentation(for: stage.key)
+                if case .chatGPTDictation = stageAction, chatGPTTargetPID == nil {
+                    presentation = Config.Presentation(label: "ChatGPT not frontmost", icon: "mic.fill")
+                }
                 hudStages.append((stage.delay, stage.key, stageAction,
-                                  controller.resolvedPresentation(for: stage.key), false))
+                                  presentation, false))
             }
         }
         // Escape hatch: keep holding past the deepest stage and releasing does nothing at all.
+        // ChatGPT dictation is an edge-paired hold: its matching release is the stop signal, so a
+        // timeout cancel would make ordinary speaking-length holds stop early and show a false
+        // Cancel card. Let this action remain armed until the physical release instead.
         var cancelAt: TimeInterval?
-        if holdCancelGrace > 0, let deepest = armed.last {
+        let containsChatGPTDictation = armed.contains {
+            if case .chatGPTDictation? = controller.resolvedAction(for: $0.key) { return true }
+            return false
+        }
+        if !containsChatGPTDictation, holdCancelGrace > 0, let deepest = armed.last {
             let threshold = deepest.delay + holdCancelGrace
             cancelAt = threshold
             hudStages.append((threshold, "\(tapKey).cancel", Action.mouse(op: "click"),
@@ -1410,6 +1457,19 @@ class RemoteInputHandler {
             (key: tapKey, action: $0, presentation: controller.resolvedPresentation(for: tapKey))
         }
         onHoldBegan?(startedAt, base, hudStages)
+        if let shortcut = base.flatMap({ item -> String? in
+            guard case let .keystroke(keys) = item.action else { return nil }
+            return keys
+        }), let dictationStage = armed.first(where: {
+            if case .chatGPTDictation? = controller.resolvedAction(for: $0.key) { return true }
+            return false
+        }) {
+            armChatGPTDictationHold(buttonName: buttonName, keys: shortcut,
+                                    stageKey: dictationStage.key,
+                                    threshold: dictationStage.delay,
+                                    startedAt: startedAt,
+                                    targetPID: chatGPTTargetPID)
+        }
         return true
     }
 
@@ -1458,11 +1518,107 @@ class RemoteInputHandler {
         }
     }
 
+    private func armChatGPTDictationHold(buttonName: String, keys: String,
+                                         stageKey: String, threshold: TimeInterval,
+                                         startedAt: CFTimeInterval, targetPID: pid_t?) {
+        chatGPTDictationHolds[buttonName]?.pending?.cancel()
+        var hold = ChatGPTDictationHold(keys: keys, stageKey: stageKey,
+                                        startedAt: startedAt, threshold: threshold,
+                                        pending: nil, targetPID: targetPID, opened: false)
+        let work = DispatchWorkItem { [weak self] in
+            self?.beginChatGPTDictationHold(buttonName)
+        }
+        hold.pending = work
+        chatGPTDictationHolds[buttonName] = hold
+        DispatchQueue.main.asyncAfter(deadline: .now() + threshold, execute: work)
+    }
+
+    private func beginChatGPTDictationHold(_ buttonName: String) {
+        guard var hold = chatGPTDictationHolds[buttonName], !hold.opened else { return }
+        guard let controller,
+              case .chatGPTDictation? = controller.resolvedAction(for: hold.stageKey) else {
+            cancelChatGPTDictationHold(buttonName, closeIfOpen: false)
+            return
+        }
+        guard let processID = hold.targetPID,
+              let app = NSRunningApplication(processIdentifier: processID),
+              !app.isTerminated,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == processID,
+              Self.isChatGPT(bundleID: app.bundleIdentifier, name: app.localizedName) else {
+            rmDebug("🎙 ChatGPT dictation hold ignored: ChatGPT is not frontmost")
+            return
+        }
+        // The shortcut is sent through the normal session event tap while ChatGPT is active.
+        // Posting directly to a background PID can bypass the app's keyboard shortcut handling.
+        Keys.synthesize(hold.keys)
+        hold.opened = true
+        hold.pending = nil
+        chatGPTDictationHolds[buttonName] = hold
+        controller.reportResolvedAction(for: hold.stageKey)
+        rmDebug("🎙 ChatGPT dictation shortcut sent to foreground ChatGPT")
+    }
+
+    private func finishChatGPTDictationHold(_ buttonName: String, holdKey: String) {
+        guard var hold = chatGPTDictationHolds[buttonName], hold.stageKey == holdKey else {
+            return
+        }
+        hold.pending?.cancel()
+        hold.pending = nil
+        chatGPTDictationHolds[buttonName] = hold
+        // A busy main queue can delay the threshold callback until after the physical release.
+        // Preserve the edge pair by opening first, then closing, only when the gesture qualified.
+        if !hold.opened,
+           CACurrentMediaTime() - hold.startedAt >= hold.threshold {
+            beginChatGPTDictationHold(buttonName)
+            hold = chatGPTDictationHolds[buttonName] ?? hold
+        }
+        chatGPTDictationHolds.removeValue(forKey: buttonName)
+        guard hold.opened else { return }
+        guard let processID = hold.targetPID,
+              let app = NSRunningApplication(processIdentifier: processID),
+              !app.isTerminated,
+              Self.isChatGPT(bundleID: app.bundleIdentifier, name: app.localizedName) else {
+            NSLog("[siriRemote] ChatGPT dictation release skipped because its process exited")
+            return
+        }
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == processID {
+            Keys.synthesize(hold.keys)
+            rmDebug("🎙 ChatGPT dictation release shortcut sent to foreground ChatGPT")
+        } else {
+            Keys.synthesize(hold.keys, to: processID)
+            rmDebug("🎙 ChatGPT dictation release shortcut sent to captured ChatGPT process")
+        }
+    }
+
+    private func cancelChatGPTDictationHold(_ buttonName: String, closeIfOpen: Bool) {
+        guard let hold = chatGPTDictationHolds.removeValue(forKey: buttonName) else { return }
+        hold.pending?.cancel()
+        guard closeIfOpen, hold.opened,
+              let processID = hold.targetPID,
+              let app = NSRunningApplication(processIdentifier: processID),
+              !app.isTerminated,
+              Self.isChatGPT(bundleID: app.bundleIdentifier, name: app.localizedName) else {
+            return
+        }
+        Keys.synthesize(hold.keys, to: processID)
+    }
+
+    private static func isChatGPT(bundleID: String?, name: String?) -> Bool {
+        let knownBundleIDs: Set<String> = ["com.openai.chatgpt", "com.openai.chat", "com.openai.codex"]
+        if let bundleID, knownBundleIDs.contains(bundleID.lowercased()) { return true }
+        return name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "chatgpt"
+    }
+
     /// Run a long-press (`<key>.hold*`) action, fired on release by the hold path. `ring.up.hold`
     /// additionally toggles Spaces Mode: the first long-press runs its config action (open Mission
     /// Control) and arms; a second long-press while armed closes Mission Control (Escape) and
     /// disarms instead of re-opening. (Arming now happens on release — see the release-to-select model.)
-    private func fireHold(controller: Controller, holdKey: String) {
+    private func fireHold(controller: Controller, buttonName: String, holdKey: String) {
+        if case .chatGPTDictation? = controller.resolvedAction(for: holdKey) {
+            finishChatGPTDictationHold(buttonName, holdKey: holdKey)
+            return
+        }
+        cancelChatGPTDictationHold(buttonName, closeIfOpen: true)
         if holdKey == "ring.up.hold" {
             if spacesModeActive {
                 sendKey(kVK_Escape)              // close Mission Control
@@ -2075,6 +2231,7 @@ class RemoteInputHandler {
 
     private func endPressScopedWork(_ buttonName: String) {
         stopKeyRepeat(buttonName)
+        cancelChatGPTDictationHold(buttonName, closeIfOpen: true)
 
         // An open push-to-talk pair holds a toggle hotkey "on" between its edges the way a held
         // repeat key holds a key down — and like the key-up inside `stopKeyRepeat` above, the

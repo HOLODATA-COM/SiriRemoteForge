@@ -72,7 +72,7 @@ enum ActionSymbolStyle {
         switch action {
         case .keystroke(let keys), .repeatKey(let keys, _, _):
             return tint(forKeystroke: keys)
-        case .pushToTalk:
+        case .pushToTalk, .chatGPTDictation:
             return .systemRed
         case .media(let raw):
             switch raw.lowercased() {
@@ -136,7 +136,7 @@ enum ActionSymbolStyle {
         case .repeatKey(let keys, _, _):
             let underlying = cue(forKeystroke: keys)
             return underlying == .generic ? .repeatAction : underlying
-        case .pushToTalk:
+        case .pushToTalk, .chatGPTDictation:
             return .voice
         case .media(let raw):
             switch raw.lowercased() {

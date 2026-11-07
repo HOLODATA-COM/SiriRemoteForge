@@ -90,7 +90,7 @@ enum ConfigStore {
       //   Multi-tap: add ".double" or ".triple". Only the deepest count reached fires. Binding a
       //     ".triple" delays THAT key's double by one doubleTapWindow (a 3rd tap may still be
       //     coming); nothing else is affected and the plain tap is never delayed.
-      // Actions: keystroke(keys) media(key) mouse(op) launch(app|url)
+      // Actions: keystroke(keys) pushToTalk(keys) chatGPTDictation media(key) mouse(op) launch(app|url)
       //          shell(command) applescript(script) mode(to) layer(to) layerCycle
       //          brightnessStep(to: up|down)
       //   layer(to): the bound key becomes a layer key — TAP it to toggle that mode sticky
