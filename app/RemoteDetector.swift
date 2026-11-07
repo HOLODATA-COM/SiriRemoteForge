@@ -97,13 +97,23 @@ class RemoteDetector {
         // The Siri Remote A1513 exposes 3 HID interfaces (consumer, game controls, vendor),
         // and the singular variant with vendor-only matching does not enumerate them on
         // recent macOS BLE HID stacks.
-        let matchingDicts: [[String: Any]] = [
-            [kIOHIDVendorIDKey: appleVendorID, kIOHIDPrimaryUsagePageKey: 0x0C],   // Consumer Page
-            [kIOHIDVendorIDKey: appleVendorID, kIOHIDPrimaryUsagePageKey: 0x0D],   // Digitizer / Game Controls
-            [kIOHIDVendorIDKey: appleVendorID, kIOHIDPrimaryUsagePageKey: 0xFF00], // Apple vendor-defined
-            [kIOHIDVendorIDKey: appleVendorID, kIOHIDPrimaryUsagePageKey: 0x01],   // Generic Desktop (kept for keyboards/trackpads)
-            [kIOHIDVendorIDKey: appleVendorID, kIOHIDPrimaryUsagePageKey: 0x20],   // Gen-3 IR/radio + mic enable
+        let usagePages = [
+            0x0C,   // Consumer Page
+            0x0D,   // Digitizer / Game Controls
+            0xFF00, // Apple vendor-defined
+            0x01,   // Generic Desktop
+            0x20,   // Gen-3 IR/radio + mic enable
         ]
+        // Match only known Siri Remote products. Matching every Apple HID device by vendor alone
+        // also opens unrelated system, keyboard, and pointer interfaces; on newer macOS those can
+        // make IOHIDManagerOpen fail with kIOReturnUnsupported before the remote is enumerated.
+        let matchingDicts: [[String: Any]] = knownProductIDs.flatMap { productID in
+            usagePages.map { usagePage in
+                [kIOHIDVendorIDKey: appleVendorID,
+                 kIOHIDProductIDKey: productID,
+                 kIOHIDPrimaryUsagePageKey: usagePage]
+            }
+        }
         // Gen-3 exposes two additional HID-over-GATT report characteristics as usage-page 0x20
         // interfaces (AppleEmbeddedBluetoothInfrared / AppleEmbeddedBluetoothRadio). Native Voice
         // needs to retain them in normal operation because the gen-3 protocol requires the 0xAF
@@ -130,14 +140,20 @@ class RemoteDetector {
             guard granted else { return }
         }
 
+        // Associate the manager with its run loop before opening it. This ordering works across
+        // the older BLE HID stack and newer macOS releases that reject an unscheduled manager.
+        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
         let openResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
         guard openResult == kIOReturnSuccess else {
-            rmDebug(String(format: "⚠️ IOHIDManagerOpen failed (IOReturn=0x%X) — likely Input Monitoring not granted", openResult))
+            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+            self.manager = nil
+            let reason = openResult == kIOReturnUnsupported ? "unsupported" :
+                (openResult == kIOReturnNotPermitted ? "not permitted" : "unknown")
+            rmDebug(String(format: "⚠️ IOHIDManagerOpen failed (IOReturn=0x%X, %@)", openResult, reason))
             return
         }
         rmDebug("🛰 IOHIDManagerOpen success")
-
-        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.enumerateAllDevices()
