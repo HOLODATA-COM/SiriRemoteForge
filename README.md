@@ -197,6 +197,16 @@ instant you touch the trackpad. `create_app_bundle.sh` prefers a stable local se
 (`siriRemote Local Signing`) for local builds, so permissions survive rebuilds. It refuses to fall
 back silently; ad-hoc signing is available only when a public Release build requests it explicitly.
 
+To reuse an existing signing identity, run `security find-identity -v -p codesigning` and select
+the certificate for your team. From `app/`, pass its SHA-1 hash to the packaging script:
+
+```sh
+HYPERVIBE_SIGN_IDENTITY="<certificate SHA-1>" ./create_app_bundle.sh
+```
+
+Use the same identity for later local builds to retain macOS privacy grants. macOS may ask for
+permission again when you switch from a differently signed build.
+
 ### Software updates
 
 HyperVibe checks its release feed daily by default. It can download a newer **app-only** archive in

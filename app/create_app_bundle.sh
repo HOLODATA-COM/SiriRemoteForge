@@ -208,29 +208,32 @@ chmod +x "${APP_BUNDLE}/Contents/XPCServices/HyperVibeCredentialBroker.xpc/Conte
 # but only matter under hardened runtime, so they're harmless here.
 [ -f "HyperVibe.entitlements" ] || { echo "Error: HyperVibe.entitlements not found"; exit 1; }
 
-# Development builds MUST use the stable self-signed identity so TCC grants (Accessibility /
-# Input Monitoring) survive rebuilds. Ad-hoc signing remains available only as an explicit public
-# release-build choice. There is deliberately no automatic fallback between the two modes.
+# Development builds use a stable signing identity so macOS privacy grants survive rebuilds.
+# The dedicated local identity remains the default. Developers can select an existing identity
+# from their keychain search list without creating a new certificate.
 SIGN_ID="siriRemote Local Signing"
 SIGN_KC="$HOME/Library/Keychains/siriremote-signing.keychain-db"
 CODESIGN_KEYCHAIN_ARGS=()
 if [ "$SIGN_MODE" = "stable" ]; then
-    if [ ! -f "$SIGN_KC" ]; then
-        echo "Error: stable signing keychain not found: $SIGN_KC"
-        echo "Refusing to ad-hoc sign a development build because that would reset macOS permissions."
-        exit 1
+    if [ -n "${HYPERVIBE_SIGN_IDENTITY:-}" ]; then
+        SIGN_ID="$HYPERVIBE_SIGN_IDENTITY"
+        if [ "$SIGN_ID" = "-" ]; then
+            echo "Error: HYPERVIBE_SIGN_IDENTITY must name a certificate or its SHA-1 hash." >&2
+            exit 1
+        fi
+    else
+        if [ ! -f "$SIGN_KC" ]; then
+            echo "Error: stable signing keychain not found: $SIGN_KC"
+            exit 1
+        fi
+        if ! security find-certificate -c "$SIGN_ID" "$SIGN_KC" >/dev/null 2>&1; then
+            echo "Error: stable signing certificate '$SIGN_ID' is unavailable."
+            exit 1
+        fi
+        # The dedicated self-signed identity can be usable even when find-identity reports zero.
+        # Unlock its keychain in Keychain Access before building, then let codesign verify access.
+        CODESIGN_KEYCHAIN_ARGS=(--keychain "$SIGN_KC")
     fi
-    if ! security find-certificate -c "$SIGN_ID" "$SIGN_KC" >/dev/null 2>&1; then
-        echo "Error: stable signing certificate '$SIGN_ID' is unavailable."
-        echo "Refusing to ad-hoc sign a development build because that would reset macOS permissions."
-        exit 1
-    fi
-    # Never put a keychain password in argv: process inspection and build logs must not expose it.
-    # Unlock the dedicated keychain through Keychain Access / Security.framework's native secure
-    # prompt before a non-interactive build. `security find-identity` incorrectly reports zero for
-    # this self-signed identity on current macOS even when its private key is usable, so the named
-    # certificate check above plus the real `codesign` operations below are the authoritative gate.
-    CODESIGN_KEYCHAIN_ARGS=(--keychain "$SIGN_KC")
     echo "Signing with stable local identity ($SIGN_ID)..."
 elif [ "$SIGN_MODE" = "adhoc" ]; then
     SIGN_ID="-"
