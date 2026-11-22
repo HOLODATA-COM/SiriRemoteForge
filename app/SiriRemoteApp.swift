@@ -1417,12 +1417,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Start touch handler for trackpad (before remote detection so we can wire the callback)
         let touch = TouchHandler(cursorController: cursorController)
         touchHandler = touch
+        remoteInputHandler?.touchHandler = touch
         touch.scrollScale = menuBarManager.scrollSpeed.scale
         // The outer-ring gesture is vertical in the base layer and horizontal in Layer 1. Listen to
         // Controller rather than only the sticky-layer HUD callback so momentary L1 holds work too.
         engineController.onLayerChanged = {
             [weak touch, weak persistentStatus, weak pipelineHUD] layer in
-            touch?.circularScrollAxis = layer == "L1" ? .horizontal : .vertical
+            touch?.setCircularScrollAxis(layer == "L1" ? .horizontal : .vertical)
             persistentStatus?.setLayer(layer)
             pipelineHUD?.setLayer(layer)
         }

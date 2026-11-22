@@ -206,6 +206,8 @@ class RemoteInputHandler {
         }
         var displayID: String { target ?? "BASE" }
     }
+    weak var touchHandler: TouchHandler?
+    private var ringRevisionAtPress: UInt64?
     private var layerButton: String?     // HID button currently held as a layer key
     private var layerGesture: LayerGesture?
     private var layerUsed = false        // another key was pressed during this hold → momentary use
@@ -1240,6 +1242,7 @@ class RemoteInputHandler {
                 gesture = .direct(s)
             }
             if let gesture = gesture {
+                ringRevisionAtPress = touchHandler?.circularMotionRevision
                 if let name = gesture.target { controller.pushLayer(name) }
                 else { controller.popLayer() }
                 layerButton = buttonName
@@ -1266,7 +1269,8 @@ class RemoteInputHandler {
                     return
                 }
                 let name = gesture.displayID
-                if layerUsed {
+                // Read synchronously: the HID release may precede the queued scroll output.
+                if layerUsed || touchHandler?.circularMotionRevision != ringRevisionAtPress {
                     if let s = stickyLayer { controller.pushLayer(s) } else { controller.popLayer() }
                     print("🔘 \(tapKey) → layer '\(name)' (momentary release)")
                 } else {

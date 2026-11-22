@@ -95,7 +95,15 @@ class TouchHandler {
     
     private var lastTouchPosition: CGPoint?
     private var lastTouchCount = 0
-    private var lastTouchTime: UInt64 = 0
+    // Only registered handles may deliver a frame. A retired handle can share the new device ID.
+    private var lastFrameByHandle: [ObjectIdentifier: UInt64] = [:]
+    private var lastSingleTouch: (finger: Int32, path: Int32, wasMake: Bool)?
+    private var ringRevision: UInt64 = 0
+    var circularMotionRevision: UInt64 {
+        touchStateLock.lock()
+        defer { touchStateLock.unlock() }
+        return ringRevision
+    }
     private var touchStartTime: UInt64 = 0
     private var touchStartPosition: CGPoint = .zero
     
@@ -124,7 +132,12 @@ class TouchHandler {
         didSet { circularDetector.update(config: circularConfig) }
     }
     /// The base layer scrolls vertically. AppDelegate switches this to horizontal while L1 is active.
-    var circularScrollAxis: CircularScrollAxis = .vertical
+    private var scrollAxis: CircularScrollAxis = .vertical
+    func setCircularScrollAxis(_ axis: CircularScrollAxis) {
+        touchStateLock.lock()
+        defer { touchStateLock.unlock() }
+        scrollAxis = axis
+    }
     private let circularDetector = CircularScrollDetector(config: .default)
     private var circularActive = false
     /// Whether THIS contact is allowed to become a circular scroll at all, decided once when the
@@ -209,7 +222,6 @@ class TouchHandler {
     /// Highest finger count seen this touch session (to classify two-finger gestures on lift).
     private var sessionMaxFingers = 0
     private let reconnectInterval: TimeInterval = 2.0
-    private let idleTimeout: TimeInterval = 90.0
     private let touchStarvationThreshold: TimeInterval = 15.0
 
     init(cursorController: CursorController) {
@@ -308,7 +320,7 @@ class TouchHandler {
         return maxDim > 0 && maxDim < 6000
     }
 
-    private func findAndReconcileDevices(logInventory: Bool) {
+    private func findAndReconcileDevices(logInventory: Bool, recoverSilent: Bool = false) {
         guard let cfArray = MTDeviceCreateList()?.takeRetainedValue() else { return }
         let deviceList = cfArray as [MTDevice]
         if logInventory {
@@ -327,33 +339,50 @@ class TouchHandler {
             stopDevice(id: id)
         }
         for (id, remote) in liveByID {
-            if let current = devices[id], MTDeviceIsRunning(current) { continue }
-            if devices[id] != nil { stopDevice(id: id) }
+            if let current = devices[id] {
+                // Each scan can return a fresh MT wrapper for a healthy surface. Its underlying
+                // IOKit service survives scans but changes when the remote re-enumerates.
+                let liveService = MTDeviceGetService(remote)
+                let sameService = liveService == 0 || IOObjectIsEqualTo(MTDeviceGetService(current), liveService) != 0
+                touchStateLock.lock()
+                let lastFrame = lastFrameByHandle[ObjectIdentifier(current)] ?? 0
+                touchStateLock.unlock()
+                let silent = recoverSilent && Self.machDeltaToSeconds(from: lastFrame) > touchStarvationThreshold
+                if sameService && MTDeviceIsRunning(current) && !silent { continue }
+                stopDevice(id: id)
+            }
             startDevice(remote, id: id)
         }
-        if remotes.isEmpty {
+        if remotes.isEmpty && logInventory {
             rmDebug("📱 no remote-sized multitouch device found; not attaching")
         }
     }
     
     private func startDevice(_ dev: MTDevice, id: UInt64) {
         let refcon = Unmanaged.passUnretained(self).toOpaque()
-        MTRegisterContactFrameCallbackWithRefcon(dev, touchCallback, refcon)
-        MTDeviceStart(dev, 0)
         devices[id] = dev
-        // Reset so we don't immediately re-enter starvation and restart every 2s when no touches yet.
-        lastTouchTime = mach_absolute_time()
+        touchStateLock.lock()
+        lastFrameByHandle[ObjectIdentifier(dev)] = mach_absolute_time()
+        touchStateLock.unlock()
+        MTRegisterContactFrameCallbackWithRefcon(dev, touchCallback, refcon)
+        let status = MTDeviceStart(dev, 0)
+        guard status == 0 else {
+            rmDebug("📱 remote touch surface start failed id=\(id) status=\(status)")
+            stopDevice(id: id)
+            return
+        }
         rmDebug("📱 remote touch surface started id=\(id) activeSurfaces=\(devices.count)")
         print("📱 Trackpad device connected and started (\(devices.count) active)")
     }
     
     private func stopDevice(id: UInt64) {
         guard let dev = devices.removeValue(forKey: id) else { return }
-        MTUnregisterContactFrameCallback(dev, touchCallback)
-        MTDeviceStop(dev)
         touchStateLock.lock()
+        lastFrameByHandle.removeValue(forKey: ObjectIdentifier(dev))
         if activeTouchDevice.endIfActive(id) { resetTouchSessionWithoutAction() }
         touchStateLock.unlock()
+        MTUnregisterContactFrameCallback(dev, touchCallback)
+        MTDeviceStop(dev)
         rmDebug("📱 remote touch surface stopped id=\(id) activeSurfaces=\(devices.count)")
         print("📱 Trackpad device disconnected (\(devices.count) active)")
     }
@@ -364,33 +393,11 @@ class TouchHandler {
     
     private func startReconnectTimer() {
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: reconnectInterval, repeats: true) { [weak self] _ in
-            self?.checkAndReconnect()
+            self?.findAndReconcileDevices(logInventory: false, recoverSilent: true)
         }
         // Fire when app is in background (menu bar only); otherwise timer may not run.
         if let timer = reconnectTimer {
             RunLoop.main.add(timer, forMode: .common)
-        }
-    }
-    
-    private func checkAndReconnect() {
-        let timeSinceLastTouch = lastTouchTime == 0 ? 0 : Self.machDeltaToSeconds(from: lastTouchTime)
-
-        guard let cfArray = MTDeviceCreateList()?.takeRetainedValue() else { return }
-        let listed = cfArray as [MTDevice]
-        let liveRemoteIDs = Set(listed.filter {
-            !MTDeviceIsBuiltIn($0) && isRemoteSurface($0)
-        }.map(deviceID))
-        let knownIDs = Set(devices.keys)
-        let hasStoppedDevice = devices.values.contains { !MTDeviceIsRunning($0) }
-
-        // Reconcile immediately when a second surface appears or one disappears. If all known
-        // surfaces have been silent long enough, restart the set to recover from remote sleep.
-        if liveRemoteIDs != knownIDs || hasStoppedDevice || devices.isEmpty {
-            findAndReconcileDevices(logInventory: true)
-        } else if timeSinceLastTouch > touchStarvationThreshold
-                    || (timeSinceLastTouch > idleTimeout && listed.count > 1) {
-            stopAllDevices()
-            findAndReconcileDevices(logInventory: true)
         }
     }
     
@@ -431,17 +438,33 @@ class TouchHandler {
     func handleTouches(device: MTDevice?, touches: UnsafeMutablePointer<MTTouch>?,
                        count: Int, timestamp: Double) {
         guard let device else { return }
-        let sourceID = deviceID(device)
         touchStateLock.lock()
         defer { touchStateLock.unlock() }
 
-        if count > 0 {
+        let handle = ObjectIdentifier(device)
+        guard lastFrameByHandle[handle] != nil else { return }
+        lastFrameByHandle[handle] = mach_absolute_time()
+
+        let sourceID = deviceID(device)
+        var avgX: Float = 0
+        var avgY: Float = 0
+        var contactSize: Float = 0
+        var activeTouchCount = 0
+        var singleTouch: MTTouch?
+        if let touches {
+            for i in 0..<count {
+                let touch = touches[i]
+                guard touch.state == MTTouchStateTouching || touch.state == MTTouchStateMakeTouch else { continue }
+                avgX += touch.normalizedVector.position.x
+                avgY += touch.normalizedVector.position.y
+                contactSize += touch.zTotal
+                activeTouchCount += 1
+                singleTouch = touch
+            }
+        }
+        if activeTouchCount > 0 {
             if activeTouchDevice.beginOrContinue(sourceID) {
-                // Switching surfaces is ownership transfer, not a lift from the prior surface.
-                // Cancel its partial tap/swipe/scroll without firing an action, then let this frame
-                // establish the new remote's clean anchor immediately.
                 resetTouchSessionWithoutAction()
-                rmDebug("📱 active touch surface switched to id=\(sourceID)")
             }
         } else if !activeTouchDevice.endIfActive(sourceID) {
             return
@@ -495,7 +518,6 @@ class TouchHandler {
                     t.field9, t.field14, t.field15))
             }
         }
-        lastTouchTime = mach_absolute_time()
         countFrame(timestamp: timestamp)
 
         // The Power button is right beside the glass, so pressing it nearly always brushes the
@@ -510,44 +532,29 @@ class TouchHandler {
         //     THROUGH the glass, so the same press also arrives here as a touch. Only the trackpad
         //     is muted; every other button keeps working.
         if RemoteInputHandler.isInputGuarded || RemoteInputHandler.isTouchGuarded {
-            lastTouchPosition = nil
-            lastTouchCount = 0
+            if lastTouchPosition != nil { resetTouchSessionWithoutAction() }
             return
         }
-
-        guard count > 0, let touchPtr = touches else {
-            // Touch ended
-            handleTouchEnd()
-            lastTouchPosition = nil
-            lastTouchCount = 0
-            return
-        }
-        
-        // Calculate average position of all active touches
-        var avgX: Float = 0
-        var avgY: Float = 0
-        var activeTouchCount = 0
-        var contactSize: Float = 0   // total contact "quality"/pressure — grows when you press to click
-
-        for i in 0..<count {
-            let touch = touchPtr[i]
-
-            // Only process active touches
-            if touch.state == MTTouchStateTouching || touch.state == MTTouchStateMakeTouch {
-                avgX += touch.normalizedVector.position.x
-                avgY += touch.normalizedVector.position.y
-                contactSize += touch.zTotal
-                activeTouchCount += 1
-            }
-        }
-        
         guard activeTouchCount > 0 else {
             handleTouchEnd()
+            lastSingleTouch = nil
             lastTouchPosition = nil
             lastTouchCount = 0
             return
         }
-        
+
+        // A new physical contact can arrive without a break/zero frame. Re-anchor it without
+        // turning the interrupted contact into a click or carrying over its ring eligibility.
+        if activeTouchCount == 1, let touch = singleTouch {
+            let isMake = touch.state == MTTouchStateMakeTouch
+            if let previous = lastSingleTouch,
+               previous.finger != touch.fingerID || previous.path != touch.pathIndex || (isMake && !previous.wasMake) {
+                resetTouchSessionWithoutAction()
+            }
+            lastSingleTouch = (touch.fingerID, touch.pathIndex, isMake)
+        } else {
+            lastSingleTouch = nil
+        }
         if activeTouchCount >= 2 {
             hadMultipleFingersInSession = true
         }
@@ -595,7 +602,11 @@ class TouchHandler {
             // Circular scroll (outer ring) preempts the cursor once rotation passes threshold.
             if circularConfig.enabled && circularEligible {
                 let radians = circularDetector.feed(x: Double(currentPos.x), y: Double(currentPos.y))
-                if radians != 0 { circularActive = true; didScroll = true }
+                if radians != 0 {
+                    circularActive = true
+                    didScroll = true
+                    ringRevision &+= 1
+                }
                 if circularActive {
                     // Velocity-based gain, the same idea as the cursor's pointer acceleration:
                     // circle slowly and the wheel stays slow and precise, circle fast and it covers
@@ -689,6 +700,7 @@ class TouchHandler {
     /// Caller owns `touchStateLock`.
     private func resetTouchSessionWithoutAction() {
         endCircularScrollGestureIfNeeded()
+        lastSingleTouch = nil
         lastTouchPosition = nil
         lastTouchCount = 0
         lastContact = 0
@@ -831,7 +843,7 @@ class TouchHandler {
     /// Emit smooth circular scroll: carry the sub-pixel remainder so a steady rotation scrolls
     /// evenly instead of stepping between whole pixels.
     private func emitCircularScroll(pixels: Double) {
-        let axis = activeCircularScrollAxis ?? circularScrollAxis
+        let axis = activeCircularScrollAxis ?? scrollAxis
         let outputScale = axis == .horizontal ? layer1HorizontalSpeedScale : 1.0
         scrollRemainder += pixels * outputScale
         let whole = scrollRemainder.rounded(.towardZero)

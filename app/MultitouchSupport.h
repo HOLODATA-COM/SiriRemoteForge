@@ -71,6 +71,7 @@ OSStatus MTDeviceStop(MTDeviceRef device);
 bool MTDeviceIsRunning(MTDeviceRef device);
 
 // Device properties
+io_service_t MTDeviceGetService(MTDeviceRef device);
 bool MTDeviceIsValid(MTDeviceRef device);
 bool MTDeviceIsBuiltIn(MTDeviceRef device) __attribute__((weak_import));
 bool MTDeviceIsOpaqueSurface(MTDeviceRef device);

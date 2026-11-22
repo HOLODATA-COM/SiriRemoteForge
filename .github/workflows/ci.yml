@@ -34,3 +34,5 @@ jobs:
       - name: Build app
         working-directory: app
         run: ./build.sh
+      - name: Replay remote ring and reconnect regressions
+        run: bash app/tests/ring/run.sh
