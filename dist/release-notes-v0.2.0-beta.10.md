@@ -8,7 +8,7 @@ This macOS update fixes three cases where the Siri Remote’s outer ring could a
 
 ## Updating from beta.9
 
-On Apple silicon running macOS 13 or later, select the beta update channel and choose **Check for Updates…**. The App update contains all three fixes.
+On Apple silicon running macOS 13 or later, open HyperVibe’s menu and choose **Check for Updates…**. The App update contains all three fixes.
 
 For a manual update, download `HyperVibe-0.2.0-beta.10-macOS-arm64.zip`. For a first installation including the microphone services, use `HyperVibe-Full-Setup-0.2.0-beta.10-arm64.pkg`. The legacy Full Setup ZIP is also available. Public App bundles are ad-hoc signed. The Installer is unsigned and the downloads are unnotarized.
 
